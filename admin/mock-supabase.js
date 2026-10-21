@@ -184,11 +184,17 @@
        operation, which is why they are registered here and then never seeded: a non-owner persona must read EMPTY
        (not "hidden but present"), and the owner's first-run state — no rate card, no statement, both panels saying
        so in words — is the state most worth exercising. … */
-    proc_rates: [], commission_statements: [], commission_lines: []
+    proc_rates: [], commission_statements: [], commission_lines: [],
+    /* R93 · A: the Website page (db/r93/01_site_tables.sql). is_admin_or_owner() on all four; no delete on
+       site_publishes / seo_snapshots; site_posts approve/publish is is_owner() (trigger site_posts_status_guard). */
+    site_pages: [], site_posts: [], site_publishes: [], seo_snapshots: []
   };
   /* R44: production makes all three `id bigint generated always as identity`. Serial-style counters rather
      than nid()'s zero-padded strings, so `.order("id")` sorts the way the real table does at any row count… */
   var procRateSeq = 0, commissionStatementSeq = 0, commissionLineSeq = 0;
+  var seoSnapshotSeq = 0;   /* R93 · A: seo_snapshots.id is bigserial */
+  var SITE_TABLES = ["site_pages", "site_posts", "site_publishes", "seo_snapshots"];
+  var SITE_POST_STATUSES = ["draft", "approved", "published", "archived"];
   var R44_TABLES = ["proc_rates", "commission_statements", "commission_lines"];
   var R44_MATCH_STATUSES = ["unmatched", "suggested", "confirmed", "dismissed", "na"];
   /* R30: feature-gate toggle (default true). __setErrorEventsSupported with false makes any op on
@@ -201,7 +207,7 @@
   var savedViewsSupported = true;
   /* R43: a PK may now be a LIST of columns: saved_views' key is the triple (user_id, scope, name). pkOf()
      keeps returning what is registered… */
-  var PK = { settings: "key", saved_views: ["user_id", "scope", "name"] };
+  var PK = { settings: "key", saved_views: ["user_id", "scope", "name"], site_pages: "slug" };
   function pkOf(t) { return PK[t] || "id"; }
   function pkCols(t) { var p = pkOf(t); return Array.isArray(p) ? p : [p]; }
 
@@ -485,7 +491,8 @@
   }
 
   /* ------------------------------------------------------ policy (RLS parity) */
-  var SENSITIVE_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_account_number", "cron_key", "resend_api_key"];
+  var SENSITIVE_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_account_number", "cron_key", "resend_api_key",
+    "vercel_deploy_hook_secret"];   /* R93 · fixer: matches the live regex's "secret" */
   var AUDIT_OWNER_ONLY_TABLES = ["settings", "profiles"];
   function pgError(message, code) {
     return { message: message, code: code || "42501", details: null, hint: null };
@@ -652,6 +659,38 @@
       }
       return null;
     }
+    /* R93 · A: db/r93/01 — admin/owner on all four, no DELETE on site_publishes / seo_snapshots, the
+       site_posts CHECKs + unique slug, and site_posts_status_guard (approve/publish = owner only). */
+    if (SITE_TABLES.indexOf(table) >= 0) {
+      if (!isAdminOrOwner()) {
+        return pgError('new row violates row-level security policy for table "' + table + '"', "42501");
+      }
+      /* R93 · fixer: SELECT-only for authenticated — the edge functions write these as service_role */
+      if (table === "site_publishes" || table === "seo_snapshots") {
+        return pgError("permission denied for table " + table, "42501");
+      }
+      var spay = payload || {};
+      if (table === "site_pages" && op !== "delete" && Object.prototype.hasOwnProperty.call(spay, "slug") && !/^[a-z0-9-]*$/.test(String(spay.slug == null ? "" : spay.slug))) {
+        return pgError('new row for relation "site_pages" violates check constraint "site_pages_slug_check"', "23514");
+      }
+      if (table === "site_posts" && op !== "delete") {
+        if (spay.status != null && SITE_POST_STATUSES.indexOf(spay.status) === -1) {
+          return pgError('new row for relation "site_posts" violates check constraint "site_posts_status_check"', "23514");
+        }
+        if (Object.prototype.hasOwnProperty.call(spay, "slug") && !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(String(spay.slug == null ? "" : spay.slug))) {
+          return pgError('new row for relation "site_posts" violates check constraint "site_posts_slug_check"', "23514");
+        }
+        if (spay.slug != null) {
+          var slugClash = DB.site_posts.some(function (r) { return r.slug === spay.slug && (targets || []).indexOf(r) === -1; });
+          if (slugClash) return pgError('duplicate key value violates unique constraint "site_posts_slug_key"', "23505");
+        }
+        if (spay.status === "approved" || spay.status === "published") {
+          var moving = op === "insert" || (targets || []).some(function (t) { return t.status !== spay.status; });
+          if (moving && !isOwner()) return pgError("Only the owner can approve", "42501");
+        }
+      }
+      return null;
+    }
     /* R44: proc_rates / commission_statements / commission_lines: is_owner() for EVERY operation, mirroring
        the migration exactly. There is no adviser or administrator half to this feature… */
     if (R44_TABLES.indexOf(table) >= 0) {
@@ -759,6 +798,7 @@
     /* R14: "vault select": is_staff() AND (visible_to is null/empty OR the signed-in user's role =
        any(visible_to)). An introducer (never staff) sees nothing… */
     if (R44_TABLES.indexOf(table) >= 0 && !isOwner()) return [];
+    if (SITE_TABLES.indexOf(table) >= 0 && !isAdminOrOwner()) return [];   /* R93 · A */
     if (table === "vault_entries") {
       if (!isStaff()) return [];
       var myR = myRole();
@@ -955,7 +995,8 @@
     watch_alerts: "wa", audit_log: "au", duplicate_dismissals: "dd",
     case_documents: "cd",
     staff_absences: "sa", case_files: "cf",
-    vault_entries: "ve", referrals: "rf"
+    vault_entries: "ve", referrals: "rf",
+    site_posts: "post", site_publishes: "pub"   /* R93 · A */
   };
   function applyInsertDefaults(table, row) {
     var r = clone(row);
@@ -1005,8 +1046,34 @@
       if (!r.updated_at) r.updated_at = iso(NOW);
       ["client_id", "referred_to", "notes", "created_by"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
     }
+    /* R93 · A: column defaults from db/r93/01; site_pages / site_publishes have no created_at. */
+    if (table === "site_pages") {
+      ["title", "meta_description", "og_title", "og_description", "og_image", "h1", "notes", "updated_by"]
+        .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+      if (r.faq == null) r.faq = [];
+      r.updated_at = iso(new Date());
+    }
+    if (table === "site_posts") {
+      if (r.status == null) r.status = "draft";
+      if (r.body_md == null) r.body_md = "";
+      ["excerpt", "cover_image", "approved_by", "approved_at", "published_at", "author_id"]
+        .forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+      if (!r.created_at) r.created_at = iso(new Date());
+      r.updated_at = iso(new Date());
+    }
+    if (table === "site_publishes") {
+      if (!r.requested_at) r.requested_at = iso(new Date());
+      if (r.status == null) r.status = "requested";
+      ["requested_by", "detail", "pages", "posts"].forEach(function (f) { if (r[f] === undefined) r[f] = null; });
+    }
+    if (table === "seo_snapshots") {
+      if (r.id == null) r.id = ++seoSnapshotSeq;
+      if (!r.day) r.day = iso(new Date()).slice(0, 10);
+      if (r.page == null) r.page = "";
+      if (r.data == null) r.data = {};
+    }
     if (pk === "id" && !r.id) r.id = nid(PREFIX[table] || "row");
-    if (!r.created_at && table !== "settings" && table !== "saved_views") r.created_at = iso(NOW);
+    if (!r.created_at && table !== "settings" && table !== "saved_views" && table !== "site_pages" && table !== "site_publishes") r.created_at = iso(NOW);
     /* R85 · A4: updated_at defaults to THE INSERT MOMENT (`default now()` in prod), not the fixture's
        load-time NOW: the session book syncs `updated_at >= syncedAt - 2s`… */
     if (table === "cases" || table === "clients" || table === "vault_entries") { if (!r.updated_at) r.updated_at = iso(new Date()); }
@@ -1289,7 +1356,11 @@
     email_hold: "on",
     /* R86: WHICH ROLES MUST HAVE A SECOND FACTOR. A comma list session_ok() reads on every RLS helper call:
        an owner/admin session at aal1 reads nothing until it verifies. */
-    mfa_enforced_roles: "owner,admin"
+    mfa_enforced_roles: "owner,admin",
+    /* R93 · A: db/r93/01's three rows, seeded as the migration seeds them (no deploy hook yet). */
+    vercel_deploy_hook_secret: "",
+    gsc_property: "sc-domain:nexmoney.co.uk",
+    seo_audit_enabled: "on"
   };
   Object.keys(SETTINGS_SEED).forEach(function (k) {
     /* R82: production's `settings` table is (key, value) and nothing else; seeding an updated_at here put a
@@ -4014,6 +4085,156 @@
     a.snoozed_by = "p2";
   })();
 
+  /* =========================================================================
+     R93 · A — WEBSITE FIXTURES (site_pages / site_posts / site_publishes / seo_snapshots).
+     Shapes are R93-CONTRACT.md's, frozen. Deterministic (no rnd(): the PRNG sequence the fixtures
+     above depend on is left untouched). seo_snapshots holds ONE audit day, yesterday (UTC):
+     summary + audit×14 (the sitemap paths) + psi×3 + gsc×3 + gsc_query×5. The seo-snapshot edge
+     stub below re-generates the same set for today, so "Run audit now" has something to re-read.
+     ======================================================================= */
+  var SITE_SITEMAP_PATHS = ["/", "/mortgages", "/first-time-buyer-mortgages-bournemouth", "/remortgage-bournemouth",
+    "/buy-to-let-mortgages-dorset", "/services", "/calculators", "/contact", "/about", "/faq", "/testimonials",
+    "/privacy", "/cookies", "/share-the-love-terms"];
+  /* The edge function's rules (edge/seo-snapshot-v1.ts auditHtml), so a fixture's issues agree with its numbers. */
+  function siteAuditIssues(a) {
+    var out = [];
+    if (a.status !== 200) out.push({ code: "http_error", level: "error", msg: "HTTP " + a.status });
+    if (!a.title) out.push({ code: "missing_title", level: "error", msg: "No <title>" });
+    else if (a.title_len > 60) out.push({ code: "title_long", level: "warn", msg: "Title is " + a.title_len + " characters (over 60)" });
+    else if (a.title_len < 30) out.push({ code: "title_short", level: "warn", msg: "Title is " + a.title_len + " characters (under 30)" });
+    if (!a.meta) out.push({ code: "missing_meta", level: "error", msg: "No meta description" });
+    else if (a.meta_len > 160) out.push({ code: "meta_long", level: "warn", msg: "Description is " + a.meta_len + " characters (over 160)" });
+    else if (a.meta_len < 70) out.push({ code: "meta_short", level: "warn", msg: "Description is " + a.meta_len + " characters (under 70)" });
+    if (a.h1_count === 0) out.push({ code: "no_h1", level: "error", msg: "No <h1>" });
+    else if (a.h1_count > 1) out.push({ code: "multi_h1", level: "warn", msg: a.h1_count + " <h1> elements" });
+    if (!a.canonical_ok) out.push({ code: "canonical_mismatch", level: "warn", msg: a.canonical ? "Canonical points to " + a.canonical : "No canonical link" });
+    if (a.images_no_alt > 0) out.push({ code: "img_no_alt", level: "warn", msg: a.images_no_alt + " image" + (a.images_no_alt === 1 ? "" : "s") + " without alt" });
+    if (a.status === 200 && a.words < 250) out.push({ code: "thin_content", level: "warn", msg: a.words + " words (under 250)" });
+    if (a.broken_links.length) out.push({ code: "broken_link", level: "error", msg: a.broken_links.length + " broken internal link" + (a.broken_links.length === 1 ? "" : "s") });
+    return out;
+  }
+  function siteSeoFixtureRows(day, ranAt) {
+    var pad = function (base, n) { var t = base; while (t.length < n) t += " and more"; return t.slice(0, n); };
+    /* page, title length, meta length (0 = none), h1 count, words, broken links, images without alt, canonical ok */
+    var spec = [
+      ["/", 52, 148, 1, 1240, [], 0, true],
+      ["/mortgages", 48, 152, 1, 980, [], 0, true],
+      ["/first-time-buyer-mortgages-bournemouth", 66, 158, 1, 1410, [], 1, true],
+      ["/remortgage-bournemouth", 44, 171, 1, 1320, [], 0, true],
+      ["/buy-to-let-mortgages-dorset", 58, 140, 1, 1505, [{ href: "/mortgages/hmo", status: 404 }], 0, true],
+      ["/services", 38, 120, 2, 860, [], 0, true],
+      ["/calculators", 41, 132, 1, 420, [], 0, true],
+      ["/contact", 36, 96, 1, 310, [], 0, true],
+      ["/about", 24, 110, 1, 640, [], 0, true],
+      ["/faq", 47, 188, 1, 2310, [], 0, true],
+      ["/testimonials", 39, 64, 1, 520, [], 2, true],
+      ["/privacy", 33, 0, 1, 3100, [], 0, true],
+      ["/cookies", 32, 101, 1, 1420, [], 0, false],
+      ["/share-the-love-terms", 54, 126, 1, 180, [{ href: "/refer", status: 404 }], 0, true],
+      /* R93 · fixer — one page the crawler could not fetch, so the SEO tab's HTTP-error row has a fixture (r93_seo A11). */
+      ["/guides", 0, 0, 0, 0, [], 0, false, 404]
+    ];
+    var rows = [], errs = 0, warns = 0;
+    spec.forEach(function (x) {
+      var path = x[0];
+      var a = {
+        status: x[8] || 200,
+        title: x[8] ? null : pad("Mortgage advice " + (path === "/" ? "Bournemouth" : path.slice(1).replace(/-/g, " ")) + " | NexMoney", x[1]),
+        title_len: x[1],
+        meta: x[2] ? pad("Whole-of-market mortgage advice from NexMoney's advisers", x[2]) : null,
+        meta_len: x[2],
+        h1: path === "/" ? "Whole-of-Market Mortgage Advice" : path.slice(1).replace(/-/g, " "),
+        h1_count: x[3],
+        canonical: x[7] ? "https://www.nexmoney.co.uk" + (path === "/" ? "/" : path) : "https://www.nexmoney.co.uk/cookie-policy",
+        canonical_ok: x[7],
+        words: x[4],
+        internal_links: 18 + path.length % 7,
+        broken_links: x[5],
+        images_no_alt: x[6],
+        has_jsonld: path !== "/privacy" && path !== "/cookies",
+        issues: []
+      };
+      a.issues = siteAuditIssues(a);
+      a.issues.forEach(function (i) { if (i.level === "error") errs++; else warns++; });
+      rows.push({ day: day, kind: "audit", page: path, data: a });
+    });
+    var psi = [["/", 72, 2810, 0.04, 180, 1620], ["/mortgages", 81, 2240, 0.02, 150, 1380], ["/faq", 64, 3420, 0.11, 240, 1910]];
+    psi.forEach(function (x) {
+      rows.push({ day: day, kind: "psi", page: x[0], data: { strategy: "mobile", performance: x[1], lcp_ms: x[2], cls: x[3], inp_ms: x[4], fcp_ms: x[5], fetched_at: ranAt } });
+    });
+    var gsc = [["/", 41, 2310, 0.0177, 11.4], ["/remortgage-bournemouth", 17, 980, 0.0173, 14.2], ["/buy-to-let-mortgages-dorset", 9, 1120, 0.008, 19.6]];
+    gsc.forEach(function (x) { rows.push({ day: day, kind: "gsc", page: x[0], data: { clicks: x[1], impressions: x[2], ctr: x[3], position: x[4] } }); });
+    var q = [["mortgage broker bournemouth", 22, 610, 0.0361, 6.3], ["remortgage bournemouth", 9, 340, 0.0265, 8.9],
+      ["buy to let mortgage dorset", 5, 410, 0.0122, 12.8], ["nexmoney", 14, 60, 0.2333, 1.2], ["first time buyer mortgage poole", 2, 290, 0.0069, 21.4]];
+    q.forEach(function (x) { rows.push({ day: day, kind: "gsc_query", page: x[0], data: { clicks: x[1], impressions: x[2], ctr: x[3], position: x[4] } }); });
+    rows.push({ day: day, kind: "summary", page: "", data: {
+      pages: spec.length, errors: errs, warnings: warns,
+      psi_avg: Math.round(psi.reduce(function (t, x) { return t + x[1]; }, 0) / psi.length),
+      gsc: { clicks: 67, impressions: 4410, ctr: 0.0152, position: 14.1 },
+      gsc_connected: true, psi_connected: true, duration_ms: 31840, ran_at: ranAt,
+      run_errors: []   /* R93 · fixer: the edge's step failures (redacted, ≤20) */
+    } });
+    return rows;
+  }
+  function siteSeoUpsertRows(rows, createdAt) {
+    rows.forEach(function (r) {
+      var hit = DB.seo_snapshots.filter(function (x) { return x.day === r.day && x.kind === r.kind && x.page === r.page; })[0];
+      if (hit) { hit.data = r.data; return; }
+      DB.seo_snapshots.push({ id: ++seoSnapshotSeq, day: r.day, kind: r.kind, page: r.page, data: r.data, created_at: createdAt });
+    });
+  }
+  (function roundNinetyThreeFixtures() {
+    var P = function (o) {
+      DB.site_pages.push({
+        slug: o.slug, title: o.title || null, meta_description: o.meta_description || null,
+        og_title: o.og_title || null, og_description: o.og_description || null, og_image: o.og_image || null,
+        h1: o.h1 || null, faq: o.faq || [], notes: o.notes || null,
+        updated_at: iso(shift(-o.daysAgo)), updated_by: o.updated_by || null
+      });
+    };
+    P({ slug: "mortgages", title: "Mortgage Advice in Bournemouth & Poole | NexMoney",
+      meta_description: "Whole-of-market mortgage advice from NexMoney's Bournemouth advisers — first-time buyers, remortgages, movers and buy-to-let.",
+      h1: "Mortgage advice you can trust", daysAgo: 12, updated_by: "p4" });
+    P({ slug: "faq", faq: [
+      { q: "How long does a remortgage take?", a: "Usually four to eight weeks from application to completion." },
+      { q: "Do you charge a fee?", a: "Typically £375, depending on your circumstances." }],
+      notes: "Keep in step with the FAQ page copy.", daysAgo: 6, updated_by: "p1" });
+    P({ slug: "remortgage-bournemouth", og_title: "Remortgage in Bournemouth | NexMoney",
+      og_description: "Start six months before your fix ends.", og_image: "https://www.nexmoney.co.uk/og-image.jpg",
+      daysAgo: 3, updated_by: "p4" });
+
+    var G = function (o) {
+      var row = {
+        id: nid("post"), slug: o.slug, title: o.title, excerpt: o.excerpt || null, body_md: o.body_md || "",
+        cover_image: o.cover_image || null, status: o.status,
+        approved_by: o.status === "draft" ? null : "p4",
+        approved_at: o.status === "draft" ? null : iso(shift(-o.approvedDaysAgo)),
+        published_at: o.status === "published" ? iso(shift(-o.publishedDaysAgo)) : null,
+        author_id: o.author_id,
+        created_at: iso(shift(-o.createdDaysAgo)), updated_at: iso(shift(-o.updatedDaysAgo))
+      };
+      DB.site_posts.push(row);
+    };
+    G({ slug: "first-time-buyer-checklist", title: "First-time buyer checklist", status: "published",
+      excerpt: "What to have ready before you apply for your first mortgage.",
+      body_md: "## Before you apply\n\nHave **three months of payslips** and *bank statements* ready.\n\n- Photo ID\n- Proof of deposit\n- [Speak to an adviser](/contact)\n\n> Start early — it saves weeks.",
+      cover_image: "https://www.nexmoney.co.uk/og-image.jpg", author_id: "p1",
+      createdDaysAgo: 30, approvedDaysAgo: 22, publishedDaysAgo: 21, updatedDaysAgo: 21 });
+    G({ slug: "remortgage-timing", title: "When should I remortgage?", status: "approved",
+      excerpt: "Why six months before your fix ends is the sweet spot.",
+      body_md: "## The six-month window\n\nMost lenders let you secure a rate up to six months ahead.", author_id: "p1",
+      createdDaysAgo: 9, approvedDaysAgo: 2, updatedDaysAgo: 2 });
+    G({ slug: "buy-to-let-stress-tests", title: "Buy-to-let stress tests explained", status: "draft",
+      excerpt: null, body_md: "Draft — ICR at 125% vs 145%.", author_id: "p4",
+      createdDaysAgo: 1, updatedDaysAgo: 1 });
+
+    DB.site_publishes.push({ id: nid("pub"), requested_by: "p4", requested_at: iso(shift(-21)), status: "sent", detail: "201 {\"job\":{\"state\":\"PENDING\"}}", pages: 2, posts: 1 });
+    DB.site_publishes.push({ id: nid("pub"), requested_by: "p1", requested_at: iso(shift(-2)), status: "failed", detail: "no deploy hook set", pages: 3, posts: 1 });
+
+    var yday = iso(shift(-1)).slice(0, 10);
+    siteSeoUpsertRows(siteSeoFixtureRows(yday, iso(shift(-1))), iso(shift(-1)));
+  })();
+
   /* v_alerts — a computed view over cases + clients */
   function vAlerts() {
     return DB.cases.filter(function (c) { return !!c.rate_end_date; }).map(function (c) {
@@ -4244,7 +4465,8 @@
     queue_automated_emails: [], queue_comms_extras: [], mark_tour_seen: [],
     get_dashboard_counts: [],   /* R85 · A4 — no arguments (see rpc_get_dashboard_counts) */
     get_team_mfa: [],   /* R86 — no arguments (see rpc_get_team_mfa) */
-    session_ok: []   /* R86 · V4 */
+    session_ok: [],   /* R86 · V4 */
+    site_hook_is_set: []   /* R93 · fixer */
   };
   function assertRpcArgs(name, args) {
     if (!strictEnabled()) return;
@@ -4430,6 +4652,23 @@
      `raw[pk]` was the whole story. saved_views' key is the triple (user_id, scope, name), and its user_id arrives
      DEFAULTED rather than sent — so the probe row must carry that default too, or the second upsert of the same
      view would land as a duplicate row instead of an update. … */
+  /* R93 · A: site_touch_updated_at (site_pages / site_posts) + the stamping half of site_posts_status_guard. */
+  function siteRowTrigger(table, row, before) {
+    if (table !== "site_pages" && table !== "site_posts") return;
+    if (before) row.updated_at = iso(new Date());
+    if (table === "site_pages") { row.updated_by = CURRENT_UID; return; }   /* site_pages_stamp_author */
+    if (!before && row.author_id == null) row.author_id = CURRENT_UID;     /* site_posts_stamp_author */
+    /* R93 · fixer: a non-owner edit of approved/published words demotes the post (no exception) */
+    if (before && !isOwner() && (before.status === "approved" || before.status === "published") &&
+        ["title", "slug", "excerpt", "body_md", "cover_image"].some(function (k) { return !sameValue(before[k] == null ? null : before[k], row[k] == null ? null : row[k]); })) {
+      row.status = "draft"; row.approved_by = null; row.approved_at = null; row.published_at = null;
+    }
+    if (row.status === "approved" && (!before || before.status !== "approved")) {
+      row.approved_by = CURRENT_UID;
+      row.approved_at = iso(new Date());
+    }
+    if (row.status === "published" && !row.published_at) row.published_at = iso(new Date());
+  }
   function conflictCols(table, opts) {
     var oc = opts && opts.onConflict;
     if (oc) return String(oc).split(",").map(function (s) { return s.trim(); }).filter(Boolean);
@@ -4465,6 +4704,7 @@
           diff[k] = { old: before[k] === undefined ? null : before[k], new: raw[k] };
           existing[k] = raw[k];
         });
+        siteRowTrigger(table, existing, before);   /* R93 · A */
         if (Object.keys(diff).length) {
           if (table === "cases" || table === "clients" || table === "vault_entries") existing.updated_at = iso(new Date());
           auditRow(table, "update", existing, diff);
@@ -4480,6 +4720,7 @@
       } else {
         var row = applyInsertDefaults(table, raw);
         if (!DB[table]) return { data: null, error: pgError('relation "' + table + '" does not exist', "42P01"), count: null, status: 404, statusText: "Not Found" };
+        siteRowTrigger(table, row, null);   /* R93 · A */
         DB[table].push(row);
         auditRow(table, "insert", row, clone(row));
         if (table === "cases") caseEvent(row.id, "case_created", "Stage: " + row.stage);
@@ -4512,6 +4753,7 @@
         row[k] = b;
       });
       if (table === "cases" || table === "clients" || table === "vault_entries") row.updated_at = iso(new Date());
+      siteRowTrigger(table, row, before);   /* R93 · A */
       if (Object.keys(diff).length) {
         auditRow(table, "update", row, diff);
         if (table === "cases") caseEventsForUpdate(before, row);
@@ -5021,7 +5263,9 @@
     /* r12b — first-run tour ack. See rpc_mark_tour_seen() for the guard. */
     mark_tour_seen: function () { return rpc_mark_tour_seen(); },
     /* R85 · A4 — the Today chrome's nine scalars in one call (see rpc_get_dashboard_counts) */
-    get_dashboard_counts: rpc_get_dashboard_counts
+    get_dashboard_counts: rpc_get_dashboard_counts,
+    /* R93 · fixer — db/r93/01: session_ok() and is_admin_or_owner() and the hook row non-empty */
+    site_hook_is_set: function () { return isAdminOrOwner() && setting("vercel_deploy_hook_secret", "") !== ""; }
   };
 
   function rpcCall(name, args) {
@@ -6611,6 +6855,40 @@
       out.task_title = title;
       return out;
     },
+    /* R93 · A — edge/site-publish-v1.ts, mirrored: owner/admin (session_ok via MFA_GATED_EDGE), a
+       site_publishes row per click, 400 + a 'failed' row when no hook is set. No network: a set hook is
+       answered as Vercel answers ("201 … PENDING"). */
+    "site-publish": function () {
+      if (!isAdminOrOwner()) return { __status: 401, error: "unauthorized" };
+      var hook = setting("vercel_deploy_hook_secret", "");
+      var row = {
+        id: nid("pub"), requested_by: CURRENT_UID, requested_at: iso(new Date()), status: "requested", detail: null,
+        pages: DB.site_pages.length, posts: DB.site_posts.filter(function (p) { return p.status === "published"; }).length
+      };
+      DB.site_publishes.push(row);
+      if (!hook) {
+        row.status = "failed"; row.detail = "no deploy hook set";
+        return { __status: 400, error: "no deploy hook set", ok: false, id: row.id, status: "failed", detail: row.detail };
+      }
+      if (!/^https:\/\//i.test(hook)) {
+        row.status = "failed"; row.detail = "deploy hook is not an https URL";
+        return { __status: 400, error: row.detail, ok: false, id: row.id, status: "failed", detail: row.detail };
+      }
+      row.status = "sent"; row.detail = "201 {\"job\":{\"state\":\"PENDING\"}}";
+      return { ok: true, id: row.id, status: "sent", detail: row.detail };
+    },
+    /* R93 · A — edge/seo-snapshot-v1.ts, mirrored for the JWT path: owner/admin; writes today's (UTC) rows in
+       the fixture shapes and answers { ok, summary, errors }. seo_audit_enabled 'off' without force = skipped. */
+    "seo-snapshot": function (body) {
+      if (!isAdminOrOwner()) return { __status: 401, ok: false, error: "unauthorized" };
+      var force = !!(body && body.force === true);
+      if (setting("seo_audit_enabled", "on") === "off" && !force) return { ok: true, skipped: "disabled", summary: null, errors: [] };
+      var now = iso(new Date());
+      var rows = siteSeoFixtureRows(now.slice(0, 10), now);
+      siteSeoUpsertRows(rows, now);
+      var summary = rows.filter(function (r) { return r.kind === "summary"; })[0].data;
+      return { ok: true, summary: summary, rows: rows.length, errors: [] };
+    },
     "assistant": function (body) {
       var last = "";
       try { var ms = (body && body.messages) || []; last = (ms[ms.length - 1] || {}).content || ""; } catch (e) { }
@@ -6647,7 +6925,8 @@
     b.forEach(function (v, k) { if (!(k in form)) form[k] = v; });
     return form;
   }
-  var MFA_GATED_EDGE = ["invite-user", "send-sms", "owner-digest", "outlook-sync", "assistant", "parse-offer", "ai-import"];   /* R86 · V1 */
+  var MFA_GATED_EDGE = ["invite-user", "send-sms", "owner-digest", "outlook-sync", "assistant", "parse-offer", "ai-import",
+    "site-publish", "seo-snapshot"];   /* R86 · V1; R93 · A: the two Website functions carry the same gate */
   var realFetch = window.fetch ? window.fetch.bind(window) : null;
   window.fetch = function (input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";
@@ -6710,6 +6989,9 @@
       getChannels: function () { return []; },
       functions: {
         invoke: function (name, o) {
+          /* R93 · A: every invoke is recorded for the suites ({ name, body, at }). */
+          if (!Array.isArray(window.__mockInvokes)) window.__mockInvokes = [];
+          window.__mockInvokes.push({ name: name, body: clone((o && o.body) || {}), at: iso(new Date()) });
           return window.fetch("https://mock.supabase.co/functions/v1/" + name, {
             method: "POST", body: JSON.stringify((o && o.body) || {})
           }).then(function (r) { return r.json(); }).then(function (j) { return { data: j, error: null }; });

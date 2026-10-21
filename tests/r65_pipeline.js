@@ -169,13 +169,28 @@ const mailsOf = (page, id) => page.evaluate(async (i) =>
 
 /* Kick off an opt-in stage move and let its overlay paint. The promise is NOT awaited here — it
    only resolves once the dialog is answered, which is the point. */
+/* R93 · CI: the move's outcome is parked on window.__r65Move by the PAGE and read back afterwards, instead of
+   one page.evaluate held open across the whole overlay interaction. That long-lived evaluate was severed
+   ("Execution context was destroyed") on every GitHub runner since R92 while passing locally — the result
+   was lost even though the move itself completed. A genuine navigation still fails visibly here: the readback
+   comes back empty and the check reports "REJECTED: no result". */
 function startMove(page, caseId, stage) {
-  const p = page.evaluate(({ id, s }) => window.moveCaseToStage(id, s, { promptStageEntry: true }), { id: caseId, s: stage });
-  /* R91 · CI: the promise is deliberately left un-awaited while the overlay is inspected. If the page's
-     execution context goes away in that window (seen once on a GitHub runner: "Execution context was
-     destroyed"), an unobserved rejection kills the whole process before a single ✗ is printed. Resolve it
-     to a tagged string instead, so the check that awaits it fails visibly and the suite runs on. */
-  return p.catch((e) => "REJECTED: " + (e && e.message || e));
+  const kick = page.evaluate(({ id, s }) => {
+    window.__r65Move = undefined;
+    Promise.resolve().then(() => window.moveCaseToStage(id, s, { promptStageEntry: true }))
+      .then((v) => { window.__r65Move = { v }; }, (e) => { window.__r65Move = { err: String(e && e.message || e) }; });
+    return true;
+  }, { id: caseId, s: stage }).catch((e) => "REJECTED: " + (e && e.message || e));
+  return (async () => {
+    const k = await kick;
+    if (k !== true) return k;
+    for (let i = 0; i < 600; i++) {
+      const r = await page.evaluate(() => window.__r65Move).catch(() => null);
+      if (r) return r.err != null ? "REJECTED: " + r.err : r.v;
+      await page.waitForTimeout(100);
+    }
+    return "REJECTED: no result from moveCaseToStage within 60s";
+  })();
 }
 /* R87 · slice B (panel 03 #8): the stage-entry overlays have TWO exits now — "Don't advance"
    (#se-cancel) and "Save & advance" (#se-ok). "Skip — advance anyway" (#se-skip) is gone because an

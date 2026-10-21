@@ -3856,6 +3856,54 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .team-contact > .team-signoff { flex: 2; min-width: 220px; resize: vertical; }
 .team-contact-self > .team-contact-ro { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 
+/* ===== R93 · B CSS ===== */
+.site-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 16px; padding: 10px 14px; background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); }
+.site-pub-last { flex: 1 1 auto; font-size: 13.5px; color: var(--muted); }
+.site-pub-last strong { color: var(--dark); }
+.site-h { margin: 0 0 8px; font-size: 15px; }
+.site-h-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 22px 0 8px; }
+.site-h-row > .site-h { margin: 0; }
+.site-list { padding: 4px 12px; }
+.site-row { cursor: pointer; }
+.site-row .row-fact-t { color: var(--muted); }
+.overlay-modal:has(> .site-editor) { width: 640px; max-width: calc(100vw - 24px); max-height: calc(100vh - 40px); overflow-y: auto; }
+.site-editor h3 { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
+.site-editor label { display: block; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+.site-editor label > input, .site-editor label > textarea, .site-editor .site-md { display: block; width: 100%; margin-top: 4px; }
+.site-editor [hidden] { display: none !important; }
+.site-editor .site-count { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.site-path { font-size: 12px; font-weight: 500; color: var(--muted); }
+.site-row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 14px; }
+.site-sub-h { font-size: 12px; font-weight: 600; color: var(--text); margin: 4px 0 6px; }
+.site-gap { margin-top: 12px; }
+.site-md-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 4px; }
+.site-md-head > .site-sub-h { margin: 0; }
+.site-md { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.site-md-preview { min-height: 200px; max-height: 420px; overflow-y: auto; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: #fbfcfe; font-size: 14px; line-height: 1.55; }
+.site-md-preview blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+.site-status-acts { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+/* ===== END R93 · B CSS ===== */
+/* ===== R93 · C CSS ===== */
+/* Website › SEO: the run strip, issue chips that open their row, the Connect steps. */
+.seo-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+.seo-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.seo-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -2px; animation: seo-spin .8s linear infinite; }
+@keyframes seo-spin { to { transform: rotate(360deg); } }
+.seo-table { margin-bottom: 20px; }
+.seo-table tr.seo-row { cursor: pointer; }
+.seo-table tr.seo-row > td { vertical-align: top; }
+.seo-table td.seo-iss-cell { white-space: normal; }
+.seo-iss > summary { list-style: none; cursor: pointer; display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.seo-iss > summary::-webkit-details-marker { display: none; }
+.seo-iss > summary::after { content: "▸"; color: var(--muted); font-size: 11px; align-self: center; }
+.seo-iss[open] > summary::after { content: "▾"; }
+.seo-chip { cursor: help; }
+.seo-iss-body { margin-top: 6px; max-width: 46ch; font-size: 12.5px; }
+.seo-iss-body ul { margin: 0 0 4px; padding-left: 0; list-style: none; }
+.seo-iss-body li { margin: 3px 0; overflow-wrap: anywhere; }
+.seo-steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.7; }
+/* ===== END R93 · C CSS ===== */
+
 /* R90 · C utilities — what the fixed inline style="…" values became. !important on purpose: an
    inline style beat every stylesheet rule, so the class that replaces one must too (else a more
    specific rule would silently win and the page would move). Dynamic values stay inline. */

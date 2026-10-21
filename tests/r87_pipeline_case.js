@@ -427,7 +427,7 @@ const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
       });
       /* R89 · F — was [13, 9, [data, emails, import, money]]: the four are tabs now (Operations; Reports ›
          Money), so the sidebar holds 10 entries and the one an adviser loses is Operations. */
-      eq("G1 · an adviser's sidebar hides Operations: 10 → 9 visible", [adv.total, adv.visible.length, adv.hidden.sort()], [10, 9, ["operations"]]);
+      eq("G1 · an adviser's sidebar hides Operations and Website: 11 → 9 visible (R93)", [adv.total, adv.visible.length, adv.hidden.sort()], [11, 9, ["operations", "site"]]);
       ok("G1b · Settings stays (slice D shrinks it)", adv.visible.includes("settings"));
       const bounce = await p2.evaluate(() => {
         const out = {};
@@ -437,7 +437,7 @@ const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
       ok("G2 · nav() to any gated page lands an adviser on Today with the hash rewritten", Object.values(bounce).every((b) => b.page === "dashboard" && b.hash === "#today" && b.shown), JSON.stringify(bounce));
       const gate = await p2.evaluate(() => Object.keys(PAGE_ROLE_GATE).sort());
       // R89 · F — + operations (the page that holds import · emails · data; their own gates stay for the aliases)
-      eq("G3 · PAGE_ROLE_GATE names exactly money · import · emails · data · operations", gate, ["data", "emails", "import", "money", "operations"]);
+      eq("G3 · PAGE_ROLE_GATE names exactly money · import · emails · data · operations · site (R93 · F)", gate, ["data", "emails", "import", "money", "operations", "site"]);
       ok("§G · p2 · no console errors", realErrs(p2).length === errBefore, JSON.stringify(realErrs(p2)));
       await p2.context().close();
       const p1 = await boot(browser, "p1");

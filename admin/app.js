@@ -212,7 +212,7 @@ const SETTING_FIRM_KEYS = ["company_name", "from_email", "reply_to_email", "mont
 // Friendly labels for the light save-time validation (email-shaped / URL-shaped fields
 // that live outside SETTING_FIELDS, e.g. rendered inline further down in renderSettings()).
 const SETTING_EMAIL_FIELDS = { from_email: "From email", reply_to_email: "Reply-to email", owner_digest_email: "Owner digest email address" };
-const SETTING_URL_FIELDS = { review_platform_link: "Review platform link", site_url: "Site URL" };   // R89 · C — google_review_link is no longer a field
+const SETTING_URL_FIELDS = { review_platform_link: "Review platform link", site_url: "Site URL", vercel_deploy_hook_secret: "Vercel deploy hook" };   // R89 · C — google_review_link is no longer a field
 /* T1-10: these two categories BLOCK the save: a bad number here corrupts a live metric, and a bad bank field
    is the one setting with direct misdirected-payment risk once queueEmail lets a fee-request email through… */
 const SETTING_NUMERIC_FIELDS = { rate_reminder_months: "Rate reminder lead time", client_quiet_months: "Gone-quiet window", review_delay_days: "Review request delay", review_reminder_days: "Review reminder delay", referral_delay_days: "Referral nudge delay", solicitor_chase_days: "Solicitor chase task delay", monthly_fee_target: "Monthly fee target", protection_avg_commission: "Average protection commission", doc_chase_days: "Document chase interval" };
@@ -3592,7 +3592,7 @@ function renderLoadError(containerSelector, error, retryFn) {
    the reload leg without actually navigating; production always reloads. */
 function nxCheckBuildTags() {
   // R90 · F — seven places now: the carve added diary.js / import.js / vault.js, each with its own stamp.
-  const vals = [window.NX_BUILD_TAG, window.__nxTag_core, window.__nxTag_reportsmoney, window.__nxTag_diary, window.__nxTag_import, window.__nxTag_vault, window.__nxTag_app];
+  const vals = [window.NX_BUILD_TAG, window.__nxTag_core, window.__nxTag_reportsmoney, window.__nxTag_diary, window.__nxTag_import, window.__nxTag_vault, window.__nxTag_site, window.__nxTag_app];   // R93 · F — eight: + site.js
   const match = vals.every((v) => v != null && v === vals[0]);
   let strip = document.getElementById("nx-tag-strip");
   if (match) {
@@ -4091,7 +4091,7 @@ $("#forgot-btn").addEventListener("click", async () => {
    Back CLOSES THE MODAL instead of leaving the app — the single most valuable Back behaviour. Everything is
    hash-only (no pathname routing) so file:// and the https edge review-gate behave identically; hash changes never
    hit the PWA service worker. … */
-const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", retention: "retention", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", operations: "operations", vault: "vault", settings: "settings" };
+const PAGE_HASH = { dashboard: "today", pipeline: "pipeline", protection: "protection", diary: "diary", clients: "clients", retention: "retention", import: "import", reports: "reports", money: "money", data: "data", emails: "emails", operations: "operations", vault: "vault", site: "website", settings: "settings" };   // R93 · F — Website page, hash #website
 /* R89 · F: FEWER ROOMS. Emails, Import and Data health are tabs of Operations; Monday money is the owner's
    Money tab of Reports. Their names stay routable: nav("emails"), #emails… */
 const PAGE_ALIAS = { emails: ["operations", "emails"], import: ["operations", "import"], data: ["operations", "data"], money: ["reports", "money"] };
@@ -4105,6 +4105,13 @@ PAGE_TABS.operations = [
 PAGE_TABS.reports = REPORT_SECTIONS.map(([key, label, , , when]) => ({ key, label, when }))
   .concat([{ key: "money", label: "Money", when: () => isOwner() }]);   // R7-4 — Owner-only, now as a tab
 PAGE_TAB_LOADERS.operations = { emails: () => loadEmails(), import: () => renderRevLastSync(), data: () => loadDataHealth() };
+/* R93 · F — Website: Content (site.js · B) and SEO (site.js · C). Loaders live in site.js (an EARLIER script), so
+   these are call-time references — the definition-time rule is untouched. */
+PAGE_TABS.site = [
+  { key: "content", label: "Content" },
+  { key: "seo", label: "SEO" },
+];
+PAGE_TAB_LOADERS.site = { content: (o) => loadSiteContent(o), seo: (o) => loadSiteSeo(o) };
 PAGE_TAB_LOADERS.reports = Object.fromEntries(REPORT_SECTIONS.map(([key]) => [key, (o) => repTabLoader(key, o)])   // R89 · fixer — `o` = { refresh } from activatePageTab
   .concat([["money", () => loadMoneyPage()]]));   // R89 · B — one shared read, painted per tab (repTabLoader)
 /* Is this page (or aliased tab) the one on screen? pageIsShown("money") is true only on Reports ›
@@ -4122,6 +4129,7 @@ const PAGE_ROLE_GATE = {
   emails: () => isAdminOrOwner(),
   data: () => isAdminOrOwner(),
   operations: () => isAdminOrOwner(),   // R89 · F — the page that now holds the three above
+  site: () => isAdminOrOwner(),         // R93 · F — Website (content + SEO)
 };
 /* R87 · B7: the sidebar hides what the gate refuses, the way #nav-money always has (showApp), so an adviser's
    first sidebar is the pages they can act on: 13 → 10 entries. */
@@ -4578,7 +4586,7 @@ function runFirstRunTour(opts) {
    never signed in. Dismissing it is a browser preference exactly like the import rules fold (nx_import_blurb) and
    the Retention month chip (nx_ret_month) — which is also why a suite that asserts on this band must clear the key
    first, the same standing rule every stored choice in this app carries. … */
-const WHATSNEW_RELEASE = 91;   // R91 · 6: was 89 — one all-roles R91 entry, so an adviser no longer reads the R79 line
+const WHATSNEW_RELEASE = 93;   // R93: was 91 — the Website page is owner/admin news; R91 · 6: was 89 — one all-roles R91 entry, so an adviser no longer reads the R79 line
 const WHATSNEW_LEGACY_KEY = "nx_whatsnew_r72";
 const whatsNewKey = () => "nx_whatsnew_last_" + ((ME && ME.id) || "anon");
 /* Short clauses, in the words the screens themselves use — the band must stay ONE line on a
@@ -4590,6 +4598,7 @@ const WHATSNEW_ENTRIES = [
   { rel: 79, roles: ["owner"], text: "firm exports withhold client link tokens" },
   { rel: 89, roles: ["owner", "admin"], text: "fewer rooms: Emails, Import and Data health are tabs of one Operations page, and Reports and Settings open in tabs" },
   { rel: 91, roles: null, text: "one worklist on Today, clients named on every list, records in the address bar" },
+  { rel: 93, roles: ["owner", "admin"], text: "a Website page: edit page titles and descriptions, write guides, see the nightly SEO audit" },
 ];
 function whatsNewStamp() { lsSet(whatsNewKey(), String(WHATSNEW_RELEASE)); }
 function dismissWhatsNew() {
@@ -5323,7 +5332,10 @@ async function renderSettings() {
     <label>SMS sender (number / sender ID)
       <input name="sms_from" value="${esc(settings.sms_from ?? "")}" placeholder="e.g. +447700900123 or NexMoney">
     </label>
-    ${setNoteHtml("set-sms-note", `Nothing sends until SMS is on <em>and</em> the provider's credentials are set server-side.`, `<p>SMS also needs provider credentials set as Supabase secrets (Twilio: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; ClickSend: CLICKSEND_USERNAME / CLICKSEND_API_KEY). Nothing sends until SMS enabled is on and the credentials are set.</p>`, true)}`;
+    ${setNoteHtml("set-sms-note", `Nothing sends until SMS is on <em>and</em> the provider's credentials are set server-side.`, `<p>SMS also needs provider credentials set as Supabase secrets (Twilio: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN; ClickSend: CLICKSEND_USERNAME / CLICKSEND_API_KEY). Nothing sends until SMS enabled is on and the credentials are set.</p>`, true)}
+    <label>Vercel deploy hook
+      <input name="vercel_deploy_hook_secret" type="url" value="${esc(settings.vercel_deploy_hook_secret ?? "")}" placeholder="https://api.vercel.com/v1/integrations/deploy/…" autocomplete="off">
+    </label>`;
   /* R5-24: Admin now has a read-only view of the roster below, so the blanket "team logins are also
      Owner-only and are not shown" line no longer holds for that tier… */
   const firmFormShown = isAdminOrOwner();
@@ -26074,6 +26086,7 @@ const PALETTE_VERBS = [
   /* R89 · A: Emails, Import and Data health are the three tabs of Operations: one "Go to Operations" (the tab
      you last had) and a verb per tab, named the way the tab title names it. */
   { id: "goto-operations", icon: "🧰", title: "Go to Operations", sub: "Emails & SMS, Import and Data health", when: () => isAdminOrOwner(), run: () => nav("operations") },
+  { id: "goto-site", icon: "🌐", title: "Go to Website", sub: "Content and SEO of nexmoney.co.uk", when: () => isAdminOrOwner(), run: () => nav("site") },   // R93 · F
   { id: "goto-emails", icon: "✉️", title: opsTabName("emails"), sub: "The send queue and what has failed", when: () => isAdminOrOwner(), run: () => nav("operations/emails") },
   { id: "goto-import", icon: "📥", title: opsTabName("import"), sub: "The weekly Revolution export, or bring in a spreadsheet", when: () => isAdminOrOwner(), run: () => nav("operations/import") },
   { id: "goto-data", icon: "🩺", title: opsTabName("data"), sub: "Data-quality checks and their fix lists", when: () => isAdminOrOwner(), run: () => nav("operations/data") },
@@ -26431,6 +26444,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r91";   // R89
+window.__nxTag_app = "r93";   // R89
 
 init();

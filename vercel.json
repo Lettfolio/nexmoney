@@ -6,11 +6,6 @@
   "trailingSlash": false,
   "redirects": [
     {
-      "source": "/guides",
-      "destination": "/faq",
-      "statusCode": 301
-    },
-    {
       "source": "/forum",
       "destination": "/faq",
       "statusCode": 301

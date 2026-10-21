@@ -7,6 +7,7 @@
   },
   "devDependencies": {
     "esbuild": "0.24.2",
+    "marked": "15.0.12",
     "xlsx": "0.18.5"
   }
 }
