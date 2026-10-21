@@ -1,13 +1,15 @@
 -- 20260828075304_advisor_fixes_security_hardening — exported from the live Supabase project sclghkmvzpwtmnzbkaoe on 2026-10-21 (R94 · D).
 -- Source: supabase_migrations.schema_migrations.statements, verbatim, joined with ";\n\n".
 -- This is the rebuild record of what was applied; do not edit — new DDL gets a new file.
+-- R94 · fixer: statement 2 made `if exists` so a data-less Preview Branch (which never had the
+-- hand-pasted backup_* tables) can replay the chain; production already has this version and skips it.
 
 -- 1) ERROR: v_alerts bypassed caller RLS (any signed-in user could read all client cases).
 --    Make it run with the caller's permissions; staff keep access via their RLS policies.
 alter view public.v_alerts set (security_invoker = true);
 
 -- 2) ERROR: backup table exposed via PostgREST with no RLS. Enable (deny-all like its sibling backup tables).
-alter table public.backup_r70_retention_link enable row level security;
+alter table if exists public.backup_r70_retention_link enable row level security;
 
 -- 3) WARN: audit_vault_row is a trigger function — API roles never need to call it directly.
 revoke execute on function public.audit_vault_row() from anon, authenticated;
