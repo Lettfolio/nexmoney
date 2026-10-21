@@ -9,6 +9,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# R94 · A5: the battery only reads the repo; a pull_request job gets a read-only token whatever the repo default is.
+permissions:
+  contents: read
+
 concurrency:
   group: battery-${{ github.ref }}
   cancel-in-progress: true
@@ -24,8 +28,9 @@ jobs:
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: npm ci
+      - run: npm run lint
       - run: npm i --no-save playwright@1.56.0
       - run: node build.js --hash
       - run: node db/check-schema-drift.js
@@ -45,9 +50,9 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       BATTERY_LOGDIR: /tmp/battery-logs
     steps:
-      - name: Tools the suites shell out to (git for r90_case_split's base read, python3 for the static server)
+      - name: Tools the suites shell out to (git for r90_case_split's and r82_correct's base reads, python3 for the static server)
         run: apt-get update -qq && apt-get install -y -qq git python3 curl >/dev/null
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: Link the checkout to /root/nx
@@ -60,7 +65,7 @@ jobs:
         run: bash tests/run-battery.sh ${{ matrix.shard }} 4
       - name: Upload suite logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: battery-logs-shard-${{ matrix.shard }}
           path: /tmp/battery-logs/*.out
