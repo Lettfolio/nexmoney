@@ -10,7 +10,7 @@ vercel_out.txt
 # OS / editor cruft
 .DS_Store
 Thumbs.db
-node_modules/
+node_modules
 git-setup.bat
 deploy-trigger.bat
 _cleanup.bat
