@@ -342,9 +342,54 @@
   "updated_at",
   "user_id"
  ],
+ "seo_snapshots": [
+  "created_at",
+  "data",
+  "day",
+  "id",
+  "kind",
+  "page"
+ ],
  "settings": [
   "key",
   "value"
+ ],
+ "site_pages": [
+  "faq",
+  "h1",
+  "meta_description",
+  "notes",
+  "og_description",
+  "og_image",
+  "og_title",
+  "slug",
+  "title",
+  "updated_at",
+  "updated_by"
+ ],
+ "site_posts": [
+  "approved_at",
+  "approved_by",
+  "author_id",
+  "body_md",
+  "cover_image",
+  "created_at",
+  "excerpt",
+  "id",
+  "published_at",
+  "slug",
+  "status",
+  "title",
+  "updated_at"
+ ],
+ "site_publishes": [
+  "detail",
+  "id",
+  "pages",
+  "posts",
+  "requested_at",
+  "requested_by",
+  "status"
  ],
  "sms_queue": [
   "body",

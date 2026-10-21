@@ -119,6 +119,8 @@
         <!-- R89 · F — Emails, Import and Data health are the three tabs of Operations. Hidden in
              the markup like every gated item (applyPageRoleGateNav reveals it for Owner/Administrator). -->
         <button data-page="operations" class="hidden"><span class="si">🧰</span>Operations</button>
+        <!-- R93 · F — Website: the public site's content and search performance, two tabs. Owner/Administrator (applyPageRoleGateNav). -->
+        <button data-page="site" class="hidden"><span class="si">🌐</span>Website</button>
         <button data-page="settings"><span class="si">⚙️</span>Settings</button>
       </div>
     </nav>
@@ -1390,6 +1392,22 @@
       </div>
     </section>
 
+    <!-- R93 · F — WEBSITE. Two tabs: Content (pages' titles/descriptions + guides, published by a one-click
+         deploy) and SEO (nightly audit + Search Console when connected). Both panels are painted by site.js
+         (loadSiteContent / loadSiteSeo); app.js registers the page (PAGE_TABS.site). Owner/Administrator only. -->
+    <section id="page-site" class="page hidden">
+      <div class="page-head">
+        <h2>Website</h2>
+      </div>
+      <div class="page-tabs-slot"></div>
+      <!-- ===== R93 · B CONTENT PANEL ===== -->
+      <section id="page-site-content" class="page hidden" data-tabpanel="content"></section>
+      <!-- ===== END R93 · B CONTENT PANEL ===== -->
+      <!-- ===== R93 · C SEO PANEL ===== -->
+      <section id="page-site-seo" class="page hidden" data-tabpanel="seo"></section>
+      <!-- ===== END R93 · C SEO PANEL ===== -->
+    </section>
+
     <!-- Vault (R14) — the company password safe. All staff can see every entry; a single entry can be
          restricted with "Who can see this" (visible_to), which the DB's SELECT policy enforces. The
          search box, the category chips and the list are all painted by loadVault()/renderVault(); the
@@ -1478,15 +1496,16 @@
      bindings on the drop-zone inputs app.js CREATES at eval run at DOMContentLoaded (R81 · A1's
      recipe). app.js stays LAST.
      R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
-     window.__nxTag_*, and app.js's boot compares all SEVEN (R90 · F). EVERY round that edits ANY
-     of index.html / core.js / reports-money.js / diary.js / import.js / vault.js / app.js bumps
-     the tag IN ALL SEVEN PLACES. -->
-<script>window.NX_BUILD_TAG = "r91";</script>
+     window.__nxTag_*, and app.js's boot compares all EIGHT (R93 · F added site.js). EVERY round that edits ANY
+     of index.html / core.js / reports-money.js / diary.js / import.js / vault.js / site.js / app.js bumps
+     the tag IN ALL EIGHT PLACES. -->
+<script>window.NX_BUILD_TAG = "r93";</script>
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/diary.js"></script>
 <script src="/admin/import.js"></script>
 <script src="/admin/vault.js"></script>
+<script src="/admin/site.js"></script>
 <script src="/admin/app.js"></script>
 <script>
   // PWA install support. Register only over https (never file:// or the sandbox http harness).

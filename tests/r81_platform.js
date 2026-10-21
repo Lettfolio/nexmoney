@@ -164,11 +164,12 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
         const di = html.indexOf('<script src="/admin/diary.js">');
         const im = html.indexOf('<script src="/admin/import.js">');
         const va = html.indexOf('<script src="/admin/vault.js">');
-        ok(`A1 (R90 · F) · ${label} order is core → reports-money → diary → import → vault → app`,
-          core >= 0 && rm > core && di > rm && im > di && va > im && app > va, `core@${core} rm@${rm} diary@${di} import@${im} vault@${va} app@${app}`);
+        const si = html.indexOf('<script src="/admin/site.js">');   // R93 · F — site.js between vault.js and app.js
+        ok(`A1 (R90 · F / R93 · F) · ${label} order is core → reports-money → diary → import → vault → site → app`,
+          core >= 0 && rm > core && di > rm && im > di && va > im && si > va && app > si, `core@${core} rm@${rm} diary@${di} import@${im} vault@${va} site@${si} app@${app}`);
       }
       // The served set is the repo's set — md5 over HTTP vs md5 on disk, all six files (R90 · F: was three).
-      for (const f of ["core.js", "reports-money.js", "diary.js", "import.js", "vault.js", "app.js"]) {
+      for (const f of ["core.js", "reports-money.js", "diary.js", "import.js", "vault.js", "site.js", "app.js"]) {   // R93 · F — seven files
         const disk = md5(fs.readFileSync(path.join(REPO, "admin", f)));
         const got = await fetchBytes(`/admin/${f}`);
         ok(`A1 · served /admin/${f} is byte-identical to the repo copy (md5 ${disk.slice(0, 8)}…)`,
@@ -263,6 +264,7 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
         "diary.js": /window\.__nxTag_diary\s*=\s*"([^"]+)"/,
         "import.js": /window\.__nxTag_import\s*=\s*"([^"]+)"/,
         "vault.js": /window\.__nxTag_vault\s*=\s*"([^"]+)"/,
+        "site.js": /window\.__nxTag_site\s*=\s*"([^"]+)"/,   // R93 · F
         "app.js": /window\.__nxTag_app\s*=\s*"([^"]+)"/,
       };
       const found = {};
@@ -271,17 +273,17 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
         found[f] = m ? m[1] : "(MISSING)";
       }
       const tagVals = Object.values(found);
-      ok(`C · all seven source files carry the SAME tag literal (${tagVals[0]}) — a partial bump fails here at merge time (R90 · F: was four)`,
+      ok(`C · all eight source files carry the SAME tag literal (${tagVals[0]}) — a partial bump fails here at merge time (R90 · F: was four)`,
         tagVals.every((v) => v !== "(MISSING)" && v === tagVals[0]), JSON.stringify(found));
 
       const page = await boot(browser, "p1");
       const clean = await page.evaluate(() => ({
-        tags: [window.NX_BUILD_TAG, window.__nxTag_core, window.__nxTag_reportsmoney, window.__nxTag_diary, window.__nxTag_import, window.__nxTag_vault, window.__nxTag_app],   // R90 · F — seven
+        tags: [window.NX_BUILD_TAG, window.__nxTag_core, window.__nxTag_reportsmoney, window.__nxTag_diary, window.__nxTag_import, window.__nxTag_vault, window.__nxTag_site, window.__nxTag_app],   // R93 · F — eight
         verdict: window.__nxCheckBuildTags(),
         strip: !!document.getElementById("nx-tag-strip"),
         guard: (() => { try { return sessionStorage.getItem("nx_tag_reloaded"); } catch (_) { return "n/a"; } })(),
       }));
-      ok("C · clean load: all seven in-page tags equal and non-null (R90 · F: was four)", clean.tags.length === 7 && clean.tags.every((t) => t != null && t === clean.tags[0]), JSON.stringify(clean.tags));
+      ok("C · clean load: all eight in-page tags equal and non-null (R93 · F: was seven)", clean.tags.length === 8 && clean.tags.every((t) => t != null && t === clean.tags[0]), JSON.stringify(clean.tags));
       eq("C · clean load: compare says match", clean.verdict, "match");
       ok("C · clean load: no strip, no reload guard", !clean.strip && !clean.guard, JSON.stringify(clean));
 

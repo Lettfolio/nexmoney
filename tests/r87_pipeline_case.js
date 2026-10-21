@@ -427,7 +427,7 @@ const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
       });
       /* R89 · F — was [13, 9, [data, emails, import, money]]: the four are tabs now (Operations; Reports ›
          Money), so the sidebar holds 10 entries and the one an adviser loses is Operations. */
-      eq("G1 · an adviser's sidebar hides Operations: 10 → 9 visible", [adv.total, adv.visible.length, adv.hidden.sort()], [10, 9, ["operations"]]);
+      eq("G1 · an adviser's sidebar hides Operations and Website: 11 → 9 visible (R93)", [adv.total, adv.visible.length, adv.hidden.sort()], [11, 9, ["operations", "site"]]);
       ok("G1b · Settings stays (slice D shrinks it)", adv.visible.includes("settings"));
       const bounce = await p2.evaluate(() => {
         const out = {};

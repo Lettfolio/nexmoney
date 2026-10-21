@@ -119,7 +119,7 @@ const pressed = (strip) => strip.filter((b) => b.pressed === "true").map((b) => 
     ok("A1 · the sidebar has no Emails / Import / Data health / Monday money entries", !side.pages.some((p) => ["emails", "import", "data", "money"].includes(p)), side.pages.join());
     ok("A2 · Operations is in the FIRM group and visible to the owner", side.opsInFirm && side.opsVisible, JSON.stringify(side));
     ok("A3 · #nav-money is gone", !side.navMoney);
-    eq("A4 · the owner's sidebar is 10 entries", side.pages.length, 10);
+    eq("A4 · the owner's sidebar is 11 entries (R93 · F added Website)", side.pages.length, 11);
 
     await go(p4, "emails");
     let w = await where(p4);

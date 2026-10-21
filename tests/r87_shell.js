@@ -248,7 +248,7 @@ const ringOf = (page, token) => page.evaluate((t) => {
     {
       const lines = css.split("\n");
       const commentOnly = lines.filter((l) => /^\s*\/\*.*\*\/\s*$/.test(l)).length;
-      ok(`D1 · admin.css is ${lines.length} lines (target ≤ 3,900 after the five R87 slices merged; was 5,592)`, lines.length <= 3900, String(lines.length));
+      ok(`D1 · admin.css is ${lines.length} lines (target ≤ 3,950: R87 set 3,900, R93 · Website added its two fences; was 5,592)`, lines.length <= 3950, String(lines.length));
       ok(`D2 · comment-only lines are ${Math.round(100 * commentOnly / lines.length)}% (were 37%)`, commentOnly / lines.length <= 0.15);
       const multi = (css.match(/\/\*[^*]*\n[\s\S]*?\*\//g) || []).filter((c) => c.split("\n").length > 6);
       ok("D3 · no multi-line changelog essays remain (every comment > 6 lines is gone)", multi.length === 0, multi.slice(0, 2).map((m) => m.slice(0, 60)).join(" | "));
@@ -277,7 +277,7 @@ const ringOf = (page, token) => page.evaluate((t) => {
       /* R90 · F: was index.html + app.js + reports-money.js + core.js; now + diary.js / import.js / vault.js,
          because the carve moved the Diary, Import/Revolution and Vault markup there (verbatim) — the
          "app" this check means is every script index.html loads. */
-      const src = fs.readFileSync(path.join(REPO, "admin", "index.html"), "utf8") + appJs + ["reports-money.js", "core.js", "diary.js", "import.js", "vault.js"].map((f) => fs.readFileSync(path.join(REPO, "admin", f), "utf8")).join("\n");
+      const src = fs.readFileSync(path.join(REPO, "admin", "index.html"), "utf8") + appJs + ["reports-money.js", "core.js", "diary.js", "import.js", "vault.js", "site.js"].map((f) => fs.readFileSync(path.join(REPO, "admin", f), "utf8")).join("\n");
       const cssNoComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
       const classes = [...new Set((cssNoComments.replace(/\{[^{}]*\}/g, "{}").match(/\.(-?[_a-zA-Z][-\w]*)/g) || []).map((c) => c.slice(1)))];
       const dead = classes.filter((c) => !src.includes(c) && !/^(age-|ao-|appt-outcome-|audit-|brief-sec-|brief-side-|doc-chase-|pc-h\d|qrow-|ret-g-|rev-|wt-group-)/.test(c));   // R88 · E: + brief-side- (R88 · A's `brief-side-${sev}`); R88 · fixer: − prot-band (deleted)
