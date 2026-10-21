@@ -674,7 +674,7 @@ the flag around that probe and flips it back.** `window.__mock.columnRegistry()`
 whole registry (or one table's) for assertions — 28 entries (27 tables + `v_alerts`), 334
 columns; §A2 asserts every `__mock.db` table has a non-empty entry, so a table added later
 can't arrive with no schema behind it.
-  Findings from running the FULL battery under strict (detail in `R81-strict-findings.md`):
+  Findings from running the FULL battery under strict (detail in `docs/rounds/R81-strict-findings.md`):
   smoke 152/0 and all 84 pre-existing suites 0 failed (7,597 checks) + r81_strict 40/0 —
   **zero `MOCK STRICT` throws anywhere in the logs**. (`r12b`/`r14`/`r63_docs` hit the
   runner's 900 s wall on the first pass, stalled on a `page.evaluate` with the box idle and
@@ -5592,12 +5592,31 @@ test scripts to reach into the mock without going through the UI:
   `shots/`) are listed in `.vercelignore` so none of the harness ships to the
   real site. If you add a new harness file, add it to `.vercelignore` too.
 
-## Recovery rule
+## Deploy — every change is a PR (R94)
 
-**`origin/main` is the only durable store for this harness.** This sandbox is
-ephemeral — nothing here survives except what's pushed. As soon as the full
-battery above is green, deploy/push immediately. Do not sit on a green run;
-treat "battery passed" and "pushed to origin/main" as one atomic step.
+**`origin/main` is the only durable store; nobody pushes main.** The sandbox is ephemeral, so a
+green local run is pushed as a BRANCH straight away — but it reaches main only through a PR:
+  1. Claude pushes `r<nn>-<slice>` (or `r<nn>-<name>`) through its GitHub route (the session's
+     attached repo, push access) and opens a PR against main. Commits carry the round prefix.
+  2. The ruleset on main requires the four `battery` shards (and `build-check`, which gates them)
+     to pass on the PR; there is no bypass. A red shard in the 23:00–00:00 UTC hour: re-run first.
+  3. Daniel reviews and merges. Claude never merges its own PR.
+  4. Vercel builds main (`build.js` → `dist/`) and deploys production.
+  5. Live-verify on the deployed host: every file `node build.js --hash` lists serves that SHA-256,
+     the eight build tags agree (no tag-mismatch strip), and `window.__errorLog` is empty (0).
+     Edge functions and SQL are separate: the CTO deploys edge via MCP, Daniel pastes SQL.
+**RETIRED for code (do not use):** `device_commit_files` into Daniel's folder, GitHub web upload
+through Chrome, `git` / `deploy.bat` in Daniel's Windows tree. They skipped the battery and caused
+the R52 stale-tree clobber. Daniel's folder is a reader's copy; refresh it with `git pull`.
+
+**Repository layout.** Root: the public site (`*.html`, `style.css`, `enhance.js`, `assets/`),
+`build.js`, `smoke.js`, `vercel.json`, `README.md`, this file and `GO-LIVE-RUNBOOK.md`.
+`admin/` the back office (seven classic scripts, `index.html`, `sw.js`, `mock*`); `tests/` the
+battery; `db/` hand-applied SQL by round + `check-schema-drift.js`; `supabase/migrations/` the
+exported migration record; `edge/` edge-function SOURCE, highest `-vN` per function only (older
+versions are in git history); `docs/` audits and reference papers; `docs/rounds/` closed rounds'
+contracts, slice reports and verifier notes (a round's own `R<nn>-*.md` sit at the root until it
+merges, then move there). Nothing under `docs/`, `tests/`, `db/`, `edge/` or `supabase/` ships.
 
 **R64-HF1 (2026-08-26) — chunked `.in()` reads.** PostgREST answers 400 when an `.in()` list
 runs past ~500 UUIDs (the list is in the URL). Production hit it silently on the Retention feed
