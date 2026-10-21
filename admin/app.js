@@ -365,19 +365,11 @@ const postcodeOf = (s) => {
   const m = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})?\b/i.exec(String(s == null ? "" : s).toUpperCase());
   return m ? (m[1] + (m[2] || "")) : "";
 };
-/* R85 · B1: TWO DOORS TO THE MATCH ROWS, ONE SHAPE. fetchMatchClients() — FRESH (a paged walk of `clients`). … */
+/* R85 · B1: the match rows. fetchMatchClients() — FRESH (a paged walk of `clients`). … */
 async function fetchMatchClients() {
   const { data, error } = await readAll(db.from("clients").select("id,first_name,last_name,email,phone,address").order("id"));
   if (error) { console.error(error); return []; }
   return data || [];
-}
-const MATCH_CLIENT_COLS = ["id", "first_name", "last_name", "email", "phone", "address"];
-async function fetchMatchClientsFromBook() {
-  try {
-    const snap = await bookLoad();
-    if (snap.error) { console.error(snap.error); return []; }
-    return sortRows(snap.clients, "id").map((c) => pickCols(c, MATCH_CLIENT_COLS));
-  } catch (e) { console.error(e); return []; }
 }
 /* R85 · B0: the column pick every Book consumer in this file uses: a NEW object carrying only the columns the
    replaced select named, and only those the row actually CARRIES. */
@@ -3430,20 +3422,6 @@ window.toggleDrawer = function (ev, key) {
      retention drawer must stay open, across reloads and across sessions. */
   lsSet(drawerStoreKey(key), panel.classList.contains("collapsed") ? "closed" : "open");
 };
-// Auto-open/close a drawer based on whether it currently holds anything attention-worthy —
-// unless the user has already manually toggled it this session, in which case leave it alone.
-function autoDrawer(key, shouldOpen) {
-  if (dashDrawerTouched[key]) return;
-  /* R34 · L5 — a stored choice outranks the automation permanently, not just for the session that
-     made it. With no stored choice the behaviour is exactly what it was. */
-  if (storedDrawerPref(key)) return;
-  const panel = drawerPanelEl(key);
-  if (!panel) return;
-  const was = panel.classList.contains("collapsed");
-  panel.classList.toggle("collapsed", !shouldOpen);
-  // R73 · A1 — same reason as toggleDrawer's: a list only has a height once its drawer is open.
-  if (was !== panel.classList.contains("collapsed") && typeof recageDashLists === "function") recageDashLists();
-}
 // The Protection/Fees drawer combines two independently-loading tabs — recompute its header
 // count from whichever of the two tab counts have rendered so far (called from both loaders).
 function updateRevenueDrawerCount() {
@@ -4116,6 +4094,7 @@ PAGE_TAB_LOADERS.reports = Object.fromEntries(REPORT_SECTIONS.map(([key]) => [ke
   .concat([["money", () => loadMoneyPage()]]));   // R89 · B — one shared read, painted per tab (repTabLoader)
 /* Is this page (or aliased tab) the one on screen? pageIsShown("money") is true only on Reports ›
    Money. Use it instead of `currentPage === "<old page>"`, which is never true for the four. */
+// eslint-disable-next-line no-unused-vars -- R94 · B3: test hook, called by tests/r89_tabs.js via page.evaluate.
 function pageIsShown(name) {
   const a = PAGE_ALIAS[name];
   if (a) return currentPage === a[0] && pageTabActive[a[0]] === a[1];
@@ -4878,7 +4857,6 @@ const emailHoldOn = () => String(settings.email_hold ?? "on").trim().toLowerCase
    can explain itself to the person pressing the button; the server gate is the
    one that is actually a control. Neither is the other's substitute.
    ========================================================================== */
-const FIN_PROMO_TYPES = ["referral_request", "protection_offer", "gi_exchange"];
 const finPromosApproved = () => String(settings.financial_promotions_approved ?? "off").trim().toLowerCase() === "on";
 /* One sentence, two call sites, so the two protection paths can never explain the same refusal in
    two different ways. `what` names the thing that was refused in the reader's own words. */
@@ -5627,54 +5605,6 @@ window.settingsGotoMyDetails = function () {
   const f = $("#my-phone");
   if (f) { try { f.focus({ preventScroll: true }); } catch (_) { f.focus(); } }
 };
-/* R78 · A4: ONE BUILDER FOR THE TWO CHIP JUMP NAVS. buildSettingsJumpNav and buildReportsJumpNav were structural
-   twins: resolve [key,label,selector] triples against the live page, drop the invisible, hide the whole bar when
-   there is under two of anything to navigate, paint one seg-btn chip per section, jump + mark active on click. … */
-function buildJumpNav(barId, wrapId, sections, visibleFn, opts) {
-  const o = opts || {};
-  const bar = document.getElementById(barId), wrap = document.getElementById(wrapId);
-  if (!bar || !wrap) return null;
-  /* R87 · owner-admin: a section may name several candidate anchors ("#a, #b"): the first VISIBLE one is the
-     chip's target, so a group whose leading panel is Owner-only still has a chip for an Administrator. */
-  const allItems = sections
-    .map(([key, label, sel]) => ({ key, label, el: String(sel).split(",").map((x) => $(x.trim())).find((el) => el && visibleFn(el)) || null }))
-    .filter((s) => s.el);
-  let items = o.filterItems ? o.filterItems(allItems) : allItems;
-  /* Belt and braces (Reports' rule, a no-op for Settings): a scope whose panels somehow map
-     elsewhere must not leave an empty strip. */
-  if (!items.length) items = allItems;
-  // One chip is not navigation, it is decoration — the guard both twins carried.
-  if ((o.guardOn === "all" ? allItems : items).length < 2) { wrap.innerHTML = ""; bar.hidden = true; return null; }
-  wrap.innerHTML = items.map((s) =>
-    `<button type="button" class="seg-btn" id="${o.chipIdPrefix}${esc(s.key)}" aria-pressed="false" ${o.attr}="${esc(s.key)}" title="Jump to ${esc(s.label)}">${esc(s.label)}</button>`).join("");
-  wrap.querySelectorAll(`[${o.attr}]`).forEach((b) => (b.onclick = () => {
-    const it = items.find((s) => s.key === b.getAttribute(o.attr));
-    if (!it || !it.el) return;
-    if (o.beforeJump) o.beforeJump(it);
-    it.el.scrollIntoView({ behavior: "smooth", block: "start" });
-    o.setActive(it.key);
-  }));
-  bar.hidden = false;
-  return { items, allItems };
-}
-/* The active-chip paint + keep-it-inside-the-scroller nudge, shared the same way (the twins'
-   setActive bodies, minus each one's own early-return state var, which stays with its caller). */
-function jumpNavActivePaint(wrapId, attr, chipIdPrefix, key) {
-  document.querySelectorAll(`#${wrapId} [${attr}]`).forEach((b) => {
-    const on = b.getAttribute(attr) === key;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-pressed", on ? "true" : "false");
-  });
-  /* Keep the active chip inside the horizontal scroller by hand. scrollIntoView() on the chip
-     would also scroll the PAGE, which would fight the scroll that just triggered this. */
-  const act = key ? document.getElementById(chipIdPrefix + key) : null;
-  const wrap = document.getElementById(wrapId);
-  if (act && wrap && wrap.scrollWidth > wrap.clientWidth) {
-    const l = act.offsetLeft, r = l + act.offsetWidth;
-    if (l < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, l - 12);
-    else if (r > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = r - wrap.clientWidth + 12;
-  }
-}
 /* R13 · M-42: THE FIRM EXPORT ("would not go live without it") The firm's data belongs to the firm. FOUR RULES, all
    of them load-bearing: 1. RLS refusing one table (or a table that does not exist on this deployment yet) must not
    cost the Owner the other seventeen. The failure is recorded IN the file, under `failed`, and named in the toast —
@@ -7467,6 +7397,7 @@ function rateErcDedupeNote(collapsed) {
 
 /* R38: THE RETENTION PIPELINE, COMPUTED ONCE (drawer + page). Same extraction, same reason: the Today drawer
    shows the first twelve, the Retention page shows the lot… */
+// eslint-disable-next-line no-unused-vars -- R94 · B3: column contract the Book reader below mirrors by hand (kept as the record).
 const RETENTION_PIPE_COLS = "id,stage,lender,rate_end_date,rate_end_estimated,assigned_to,clients!client_id(first_name,last_name)";
 /* R85 · C1: served from the Book. Same predicate, same order, same `{ data, error }` shape and the same
    narrow rows: RETENTION_PIPE_COLS is picked out of each book row so the render code (and r38's shape pins)… */
@@ -8348,18 +8279,6 @@ async function protRowPhones(rows) {
     ids.forEach((id) => { const r = clientById.get(id); if (r && r.phone) out[r.id] = { phone: r.phone, first: r.first_name || "", smsOptOut: !!r.sms_opt_out }; });
   } catch (_) { /* no numbers — the rows render exactly as they did before */ }
   return out;
-}
-/* The one place the protection surfaces turn a row into its phone affordance, so the table, the
-   call list and the GI band can never present a number three different ways. */
-function protPhoneHtml(phones, r, opts) {
-  const p = phones && r && phones[r.client_id];
-  if (!p) return "";
-  return phoneActionsHtml(p.phone, {
-    sms: true,
-    name: p.first || String(r.client_name || "").split(/\s+/)[0] || "",
-    smsOptOut: p.smsOptOut,
-    compact: !!(opts && opts.compact),
-  });
 }
 /* §2 — the pipeline those buttons feed. Same rows and same figures as Today's drawer; this one is
    scoped, and capped at a hundred rather than twelve. */
@@ -11036,6 +10955,7 @@ window.boardShowMore = function (stage) {
 /* R24: the board is the app's fattest read (every column of up to OWNER_ROW_CAP cases, on the screen brokers keep
    open all day). The constant STAYS as the board's column CONTRACT — r24 §D asserts every column here is in the
    book's select — so a column the cards need can never quietly fall out of the book. … */
+// eslint-disable-next-line no-unused-vars -- R94 · B3: column contract pinned by tests/r24.js and r65_pipeline.js via page.evaluate.
 const BOARD_CASE_COLS ="id,client_id,stage,case_kind,lender,product_name,loan_amount,rate_percent,rate_end_date,rate_end_estimated,erc_end_date,broker_fee,fee_status,protection_status,submitted_at,completed_at,created_at,updated_at,expected_completion_date,retention_source_case_id,lead_source,introducer_id,assigned_to";
 /* R31-B · SAVED FILTER VIEWS (Clients + Pipeline) Per-BROWSER only. Every saved view lives in localStorage
    under one key, shaped { clients: [ {name, filters} ], pipeline: [ {name, filters} ] }. */
@@ -11909,6 +11829,7 @@ function updateBoardScrollHint() {
 }
 /* R73 · A5 (panel D#6): THE TAB STRIPS SAY THEY SCROLL. Reports has 22 jump chips and Settings 14, in a strip
    that is a horizontal scroller with `scrollbar-width: thin` — which on a trackpad is no scrollbar at all. */
+// eslint-disable-next-line no-unused-vars -- R94 · B3: no caller left, but its classes keep admin.css rules live (r87_shell D12); delete both in R95.
 function wireChipStripOverflow(barId, wrapId) {
   const bar = document.getElementById(barId), wrap = document.getElementById(wrapId);
   if (!bar || !wrap) return;
@@ -15905,7 +15826,6 @@ async function bulkSetProtStatus(status) {
   loadProtectionPage();
 }
 /* R7-3: the protection quote clock Two writes that used to lose the two facts the protection book is judged on. … */
-const PROT_STAMP_COLS = ["protection_quoted_at", "protection_quoted_by"];
 function protQuotedStamp() {
   return { protection_quoted_at: new Date().toISOString(), protection_quoted_by: (ME && ME.id) || null };
 }
@@ -18096,7 +18016,7 @@ async function saveCase(k) {
   } finally { saveBtn.disabled = false; }
 }
 function wireCaseHistory(k) {
-  const { id, c, tlItems } = k;
+  const { id, tlItems } = k;
   /* R40 · the case History timeline: filter chips, Show more, and the add-note hook Every lookup below goes
      through `histBox` (#case-history) rather than the document. */
   const histBox = $("#case-history");
@@ -18121,9 +18041,6 @@ function wireCaseHistory(k) {
     caseTlCap = CASE_TL_CAP;   // a filter change is a new view, not a continuation of the old one
     rerenderCaseTl();
   });
-  /* R40: the property chip the builder would have stamped on this case's rows, reproduced for the optimistic
-     inserts below. A single-case build can never have two cases on one building… */
-  const caseTlChip = propAddress(c) ? propChip(c, { cls: "tl-prop" }) : "";
   /* R40: a note used to be prepended to #notes-list; that list is gone, so it is prepended to the timeline's
      items and the list is repainted. Inserted rather than rebuilt: rebuilding means eight more reads and a… */
   const prependCaseTlNote = (body, createdBy) => {
@@ -18136,7 +18053,7 @@ function wireCaseHistory(k) {
       ts: new Date().toISOString(), cat: nt.type, icon: rev ? "⭐" : nt.icon,
       title: text + authorChipHtml(createdBy),
       /* R40 (CTO): chip and label empty to match the loaded rows: the modal strips the per-row case tag, so
-         the optimistic insert must not be the one row wearing one. caseTlChip is left computed above in… */
+         the optimistic insert must not be the one row wearing one. */
       caseId: id, caseLabel: null, caseChip: "",
     });
     /* No filter reset: a note is not a system row, so it is visible under BOTH of this modal's
@@ -19743,10 +19660,12 @@ $("#new-client-btn").addEventListener("click", () => openClient(null));
 
 /* R88 · B (panel 03 #6, 04 #10): the Clients saved-views trio is REMOVED: the eight chips already express
    every starter, and the page remembers its own scope. */
+// eslint-disable-next-line no-unused-vars -- R94 · B3: dormant saved-view path pinned by tests/r31.js via page.evaluate.
 function clientsFilterState() {
   const s = $("#client-search");
   return { search: s ? s.value : "", adviser: clientAdviser, segment: clientSegment, sort: clientSort };
 }
+// eslint-disable-next-line no-unused-vars -- R94 · B3: dormant saved-view path pinned by tests/r31.js via page.evaluate.
 function applyClientsFilterState(f) {
   if (!f) return;
   const s = $("#client-search"); if (s) s.value = f.search || "";
@@ -21334,7 +21253,6 @@ function isMissingContactError(e) {
   return /no email|no recipient|missing client|no address/i.test(e.error || "");
 }
 /* R11-5: EMAIL / SMS STATUS FILTERS. The page was one "Failed only" checkbox over a hundred flat rows. … */
-const EMAIL_STATUSES = ["queued", "sent", "failed", "cancelled"];
 // The SMS queue has one state the email queue does not: a row handed to the sender and not yet
 // confirmed. It gets its own list rather than sharing one that would be wrong for both.
 const SMS_STATUSES = ["queued", "sending", "sent", "failed", "cancelled"];
@@ -22915,7 +22833,7 @@ window.acceptLead = async function (id, ev) {
      joint enquiry used to be filed as first "Deborah" / last "Deborah & Michael Ashworth"… */
   const rawName = (l.name || "").trim().replace(/\s+/g, " ");
   let firstName = "", lastName = rawName, jointNote = "";
-  let client = null, createdClient = false;
+  let client = null;
   if (rawName && isJointName(rawName)) {
     /* ======================================================================
        R76 · B3 — THE JOINT ACCEPT IS ONE OVERLAY, NOT A CHAIN.

@@ -1,3 +1,4 @@
+// @ts-check
 /* ==========================================================================
    NexMoney Back Office — admin/site.js  (R93 · F)
    The WEBSITE page: the public site's content (page titles/descriptions, guides) and its search
@@ -204,7 +205,7 @@ async function siteCtRefreshStrip() {
   if (strip) strip.innerHTML = siteCtStripHtml();
 }
 async function sitePublish() {
-  const btn = document.getElementById("site-publish-btn");
+  const btn = /** @type {HTMLButtonElement | null} */ (document.getElementById("site-publish-btn"));
   if (!btn || btn.disabled || !siteHookSet()) return;
   btn.disabled = true; btn.textContent = "Publishing…";
   let data = null, error = null;
@@ -341,6 +342,7 @@ async function siteSaveGuide(g, form, status) {
   if (r && r.error) { dbFail("siteSaveGuide", r.error, String(r.error.message || r.error)); return false; }
   return true;
 }
+// eslint-disable-next-line no-unused-vars -- R94 · B3: test hook, called by tests/r93_content.js via page.evaluate.
 async function siteGuideSetStatus(id, status) {
   const g = siteCtState.posts.find((x) => String(x.id) === String(id));
   if (!g) return false;
@@ -646,4 +648,5 @@ async function seoRunAudit() {
 
 /* R93 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / site.js / app.js bumps the tag IN ALL EIGHT PLACES. */
+// @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
 window.__nxTag_site = "r93";   // bumped to r93 at the gate with the other seven

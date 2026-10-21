@@ -3,11 +3,15 @@
   "private": true,
   "description": "NexMoney website + back office. `npm run build` writes the served copy to dist/ (see build.js); the repo stays readable.",
   "scripts": {
-    "build": "node build.js"
+    "build": "node build.js",
+    "lint": "eslint ."
   },
   "devDependencies": {
     "esbuild": "0.24.2",
+    "eslint": "9.39.5",
+    "globals": "17.13.0",
     "marked": "15.0.12",
+    "typescript": "5.9.3",
     "xlsx": "0.18.5"
   }
 }
