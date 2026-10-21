@@ -59,8 +59,8 @@ const HASH_ONLY = process.argv.includes("--hash");
 // Never shipped: the harness, versioned sources that deploy elsewhere, docs, secrets — and
 // middleware.js / vercel.json, which Vercel reads from the PROJECT ROOT (a copy in dist/ would
 // be served as a static file and expose the gate credential hash).
-const SKIP_DIRS = new Set(["dist", "node_modules", ".git", ".vercel", ".claude", "tests", "shots", "edge", "db", "adv", "_to_delete", "compliance", "Claude outputs"]);
-const SKIP_FILES = new Set(["build.js", "package.json", "package-lock.json", "smoke.js", "middleware.js", "vercel.json", "deploy.bat", "vercel_out.txt", "_push-log.txt", ".vercelignore", ".gitignore", "admin/mock.html", "admin/mock-supabase.js", "guides.template.html"]);
+const SKIP_DIRS = new Set(["dist", "node_modules", ".git", ".vercel", ".claude", "tests", "shots", "edge", "db", "adv", "_to_delete", "compliance", "Claude outputs", "docs", "supabase", ".github"]);
+const SKIP_FILES = new Set(["build.js", "package.json", "package-lock.json", "smoke.js", "middleware.js", "vercel.json", "deploy.bat", "vercel_out.txt", "_push-log.txt", ".vercelignore", ".gitignore", "admin/mock.html", "admin/mock-supabase.js", "guides.template.html", "eslint.config.js", "jsconfig.json"]);
 const SKIP_EXT = new Set([".md", ".pdf", ".docx", ".bat", ".log", ".zip"]);
 
 // Served admin assets that get minified (path → esbuild loader).
@@ -100,6 +100,7 @@ function walk(dir, rel = "") {
     const st = fs.statSync(abs);
     if (st.isDirectory()) { if (!SKIP_DIRS.has(name)) out.push(...walk(abs, r)); continue; }
     if (SKIP_FILES.has(r) || SKIP_EXT.has(path.extname(name).toLowerCase())) continue;
+    if (/^tsconfig.*\.json$/.test(name)) continue;   // R94 · B2: editor/type-check config, never served
     if (name.startsWith(".") && name !== ".well-known") continue;
     out.push(r);
   }
@@ -152,11 +153,19 @@ function jsonForScript(obj) {
 function ldScript(obj) { return `<script type="application/ld+json">${jsonForScript(obj)}</script>`; }
 function nonEmpty(v) { return typeof v === "string" && v.trim() !== ""; }
 
+// R94 · B1: env first (CI / Vercel can supply them), app.js regex as the fallback. Logs the source, never the key.
+let credsLogged = false;
+function credsSource(src) { if (!credsLogged) { credsLogged = true; console.log("build: Supabase credentials from " + src); } }
 function supabaseCreds() {
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+    credsSource("process.env");
+    return { url: process.env.SUPABASE_URL, key: process.env.SUPABASE_ANON_KEY };
+  }
   const app = fs.readFileSync(path.join(ROOT, "admin", "app.js"), "utf8").split("\n").slice(0, 10).join("\n");
   const url = /SUPABASE_URL\s*=\s*["']([^"']+)["']/.exec(app);
   const key = /SUPABASE_KEY\s*=\s*["']([^"']+)["']/.exec(app);
   if (!url || !key) throw new Error("SUPABASE_URL/SUPABASE_KEY not found in admin/app.js");
+  credsSource("admin/app.js");
   return { url: url[1], key: key[1] };
 }
 
