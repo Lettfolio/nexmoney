@@ -6,8 +6,8 @@ one file per row of `supabase_migrations.schema_migrations`, exported 2026-10-21
 Statements are verbatim except one redaction: the `cron_key` literal in
 `20260718165010_add_settings_promo_gate_and_cron_key.sql` (secrets never enter git).
 
-Files pasted in the SQL editor (`db/r84`…`db/r94`, R93 site tables) are NOT in that table — the
-editor does not record a migration row. `db/` is their record; see `db/README.md`.
+SQL pasted in the SQL editor records no row, so `db/r85/02_clients_updated_at_idx.sql`,
+`db/r93/*` and `db/r94/*` are NOT in this folder — `db/` is their record (see `db/README.md`).
 
 Re-fetch: once the CLI is linked (`supabase link --project-ref sclghkmvzpwtmnzbkaoe`),
 `supabase migration fetch` rewrites this folder from the live table; diff before committing.
