@@ -60,5 +60,11 @@ echo "shard $SHARD/$OF: ${#FAILED[@]} failing suite(s); logs in $LOGDIR"
 for n in "${FAILED[@]}"; do
   echo "===== $n (last 40 lines) ====="
   tail -40 "$LOGDIR/$n.out"
+  # R94: on GitHub the job log needs a sign-in but annotations don't — name the suite and its
+  # failing lines there (workflow command; a no-op when run locally).
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    msg=$(grep -aE "✗|✘|FAIL|Error|failed" "$LOGDIR/$n.out" | grep -v " 0 failed" | tail -6 | tr -d '\r' | sed 's/%/%25/g; s/\r/%0D/g' | paste -sd '|' -)
+    echo "::error title=battery $SHARD/$OF: $n failed::${msg:-see job log}"
+  fi
 done
 [ "${#FAILED[@]}" -eq 0 ]
