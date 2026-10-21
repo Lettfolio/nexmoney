@@ -16,6 +16,8 @@ queries with their expected answers. Function rewrites copy the live body verbat
 the changed lines. New RPC guards include `public.session_ok()` (R86 rule). Never a secret value:
 read it at run time (Vault / settings) or copy it from the live object inside the script.
 
-Paste order inside a round is the file number order. Nobody applies DDL from a chat or a
-branch that is not merged: the PR carries the file, Daniel pastes it, the verify queries go in
-the PR thread. From R95, new DDL also goes in `supabase/migrations/` (see `supabase/README.md`).
+Paste order inside a round is the file number order. Nobody applies SQL from a chat or a
+branch that is not merged: the PR carries the file; after the merge Daniel pastes the `db/`
+scripts and the verify queries go in the PR thread. From R95, plain DDL goes in
+`supabase/migrations/` instead and ships on the merge itself (see `supabase/README.md`); `db/`
+keeps the one-off operational scripts (secrets, cron, data fixes) that are pasted by hand.
