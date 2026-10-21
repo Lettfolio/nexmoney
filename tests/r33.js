@@ -164,7 +164,7 @@ Duncan Armitage,duncan.armitage@example.com,07700 900102,offer,Halifax,4.29,495`
       ok("A1b · the fold toggle steps aside for a plain 'Firm' label", lone.toggleHidden && lone.head === "Firm", JSON.stringify(lone));
       const pages = state.btns.map((b) => b.page).sort();
       // R89 · F — was emails/import/data/settings: the three are tabs of ONE Operations entry now.
-      eq("A1c · the group's buttons are operations/settings", pages, ["operations", "settings"]);
+      eq("A1c · the group's buttons are operations/settings/site (sorted; R93 · F added Website)", pages, ["operations", "settings", "site"]);
       ok("A1d · Settings is visible and Operations (gated) is not", state.btns.every((b) => b.visible === (b.page === "settings")), JSON.stringify(state.btns));
       eq("A1e · the group-head labels read Work/Book/Money/Firm, in order", state.heads, ["Work", "Book", "Money", "Firm"]);
 

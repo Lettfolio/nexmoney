@@ -284,9 +284,10 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       ok("C2 · the standing line is ≤ 20 words and still says what it is", band.lineWords != null && band.lineWords <= 20 && /New since you were last here/.test(band.lineText), JSON.stringify({ n: band.lineWords, t: band.lineText }));
       ok("C3 · the whole rendered band is ≤ 25 words (line + Details + Got it) and one line tall", band.rendered <= 25 && band.h <= 40, JSON.stringify({ rendered: band.rendered, h: band.h }));
       /* R89 · D: was /30 days/ (R79's all-roles clause). R91 · 6: was /Operations page/ (R89's owner/admin entry) — the
-         owner's newest release is R91 now, its one all-roles entry. */
+         owner's newest release is R91 now, its one all-roles entry. R93: the owner's newest release is R93 — the
+         Website page entry (owner/admin). */
       ok("C4 · the release's clauses are inside a CLOSED “Details” howFold, one bullet per entry",
-        !!band.fold && band.fold.tag === "DETAILS" && band.fold.open === false && /Details/.test(band.fold.summary) && band.fold.items >= 1 && /one worklist on Today/i.test(band.fold.text), JSON.stringify(band.fold && { open: band.fold.open, items: band.fold.items }));
+        !!band.fold && band.fold.tag === "DETAILS" && band.fold.open === false && /Details/.test(band.fold.summary) && band.fold.items >= 1 && /Website page/i.test(band.fold.text), JSON.stringify(band.fold && { open: band.fold.open, items: band.fold.items }));
       const n = await page.evaluate(() => WHATSNEW_ENTRIES.filter((e) => e.rel === WHATSNEW_RELEASE && (!e.roles || e.roles.includes("owner"))).length);
       ok("C5 · …and the line's count is the number of entries the owner is shown", new RegExp(`${n} change`).test(band.lineText || "") && band.fold.items === n, JSON.stringify({ n, line: band.lineText }));
       await page.click("#whatsnew-dismiss");
