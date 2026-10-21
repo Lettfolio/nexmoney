@@ -31,6 +31,12 @@ const withCors = (req: Request, res: Response): Response => {
 // R94 · D: refuse an oversized body from its Content-Length before buffering it (the 200,000-char data cap is ≤ 600 KB UTF-8).
 const MAX_BODY = 640 * 1024;
 const tooBig = (req: Request) => Number(req.headers.get("content-length") ?? 0) > MAX_BODY;
+// R94 · fixer: Content-Length is advisory (absent on chunked bodies) — read the text and cap the real length too.
+async function readJsonCapped(req: Request): Promise<unknown> {
+  const t = await req.text();
+  if (t.length > MAX_BODY) throw new Error("too large");
+  return JSON.parse(t);
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": ORIGINS[0],   // R94 · D: withCors() sets the per-request value
@@ -94,7 +100,7 @@ const handle = async (req: Request): Promise<Response> => {   // R94 · D: serve
   // ---- Save / submit -------------------------------------------------------
   if (req.method === "POST") {
     let b: any;
-    try { b = await req.json(); } catch { return json({ error: "bad body" }, 400); }
+    try { b = await readJsonCapped(req); } catch { return json({ error: "bad body" }, 400); }
     const token = String(b.token ?? "");
     if (!uuidRe.test(token)) return json({ error: "invalid link" }, 400);
     if (typeof b.data !== "object" || b.data === null || Array.isArray(b.data)) return json({ error: "data must be an object" }, 400);

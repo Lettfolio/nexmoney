@@ -649,4 +649,4 @@ async function seoRunAudit() {
 /* R93 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / site.js / app.js bumps the tag IN ALL EIGHT PLACES. */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_site = "r93";   // bumped to r93 at the gate with the other seven
+window.__nxTag_site = "r94";   // bumped to r93 at the gate with the other seven

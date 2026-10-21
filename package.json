@@ -9,6 +9,7 @@
   "devDependencies": {
     "esbuild": "0.24.2",
     "eslint": "9.39.5",
+    "espree": "10.4.0",
     "globals": "17.13.0",
     "marked": "15.0.12",
     "typescript": "5.9.3",

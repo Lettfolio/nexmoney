@@ -86,10 +86,11 @@ async function ensureServer() {
   const vj = JSON.parse(read("vercel.json"));
   const cspEntries = vj.headers.map((h, i) => ({ i, source: h.source, v: (h.headers.find((x) => x.key.toLowerCase() === "content-security-policy") || {}).value }))
     .filter((e) => e.v);
-  const siteE = cspEntries.find((e) => e.source === "/(.*)");
+  const siteE = cspEntries.find((e) => e.source === "/((?!admin).*)");   // R94 · fixer: the site CSP can never match /admin
   const adminE = cspEntries.find((e) => e.source === "/admin/:path*");
-  ok("A1 · exactly two CSP entries: site /(.*) and /admin/:path*", cspEntries.length === 2 && !!siteE && !!adminE, JSON.stringify(cspEntries.map((e) => e.source)));
+  ok("A1 · exactly two CSP entries: site /((?!admin).*) and /admin/:path*", cspEntries.length === 2 && !!siteE && !!adminE, JSON.stringify(cspEntries.map((e) => e.source)));
   ok("A2 · the /admin entry comes AFTER the site entry (same key: the later match is what ships)", !!siteE && !!adminE && adminE.i > siteE.i);
+  ok("A2b · the site CSP source excludes /admin, so only ONE CSP header can reach the back office", !!siteE && /\(\?!admin\)/.test(siteE.source));
   const SITE = parseCsp(siteE.v), ADMIN = parseCsp(adminE.v);
   for (const [name, c] of [["site", SITE], ["admin", ADMIN]]) {
     ok(`A3 · ${name}: default-src 'self'`, JSON.stringify(c["default-src"]) === JSON.stringify(["'self'"]));
@@ -135,6 +136,9 @@ async function ensureServer() {
     siteFns.length >= 4 && siteFns.every((u) => allowed(SITE, "connect-src", u)), JSON.stringify(siteFns));
   ok("A18 · site: guide cover / Markdown images (any https:// URL an author types) are in img-src",
     allowed(SITE, "img-src", "https://images.example.com/cover.jpg") && allowed(SITE, "font-src", "https://fonts.gstatic.com/s/inter/v1/x.woff2"));
+  ok("A18b · admin: Google Fonts woff2 + the preconnect hosts in admin/index.html are in font-src / style-src (sandbox never fetches fonts, so this is static)",
+    allowed(ADMIN, "font-src", "https://fonts.gstatic.com/s/inter/v1/x.woff2") && allowed(ADMIN, "style-src", "https://fonts.googleapis.com/css2?family=Inter")
+    && (read("admin/index.html").match(/rel="preconnect" href="(https:[^"]+)"/g) || []).every((m) => { const u = m.match(/href="([^"]+)"/)[1]; return allowed(ADMIN, "font-src", u + "/x") || allowed(ADMIN, "style-src", u + "/x"); }));
 
   const evalish = /\beval\s*\(|new\s+Function\s*\(|set(Timeout|Interval)\s*\(\s*["'`]/;
   const evalHits = adminJs.concat(["admin/sw.js", "enhance.js"]).filter((f) => evalish.test(read(f).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));

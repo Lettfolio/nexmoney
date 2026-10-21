@@ -31,6 +31,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: npm ci
       - run: npm run lint
+      - run: npx tsc -p jsconfig.json --noEmit
       - run: npm i --no-save playwright@1.56.0
       - run: node build.js --hash
       - run: node db/check-schema-drift.js

@@ -219,7 +219,7 @@ comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated.
   ISO stamps, HH:MM(:SS), "N min ago"). `node panel-r87/dom-diff.js panel-r87/dump-base <dir>` must say IDENTICAL
   (142 views, 99,018 id records; two runs of the untouched tree are identical, and so was the carved tree).
   Re-point (commented "R90 · F"): r87_shell D12 reads the classes/ids from all SIX scripts (was four sources).
-  Build: `node build.js --hash` prints SEVEN admin hashes (core, reports-money, diary, import, vault, app, admin.css).
+  Build: `node build.js --hash` prints EIGHT admin hashes (core, reports-money, diary, import, vault, site, app, admin.css) plus style.css and enhance.js.
 
 **R90 · B / C / D notes.**
   - **B — THE openCase FUNCTION MAP.** `window.openCase(id, {focus})` is ≤ 200 lines with ≤ 1 nested closure (the
@@ -240,7 +240,7 @@ comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated.
     becomes one line `R73 · B3: <why>`; tombstones for code that no longer exists go; no `${/* … */ ""}` in
     templates; never touch a string, regex or template text. A comment ending in `…` is condensed — the full text
     is in git history (`git log -S` on its first words; pre-pass text at ee1eb07). **THE ORACLE:**
-    `node build.js --hash` must print the same seven hashes before and after any comment-only edit (esbuild strips
+    `node build.js --hash` must print the same ten hashes before and after any comment-only edit (esbuild strips
     comments — a changed hash means something else changed); mock-supabase.js is not built, so its oracle is
     `node --check` + an acorn token stream (comments excluded) equal to the previous one.
     Fixer pass (R90): D2 had head-truncated 1,295 comments; every one that had dropped ≥ 400 chars of its
@@ -5563,7 +5563,7 @@ test scripts to reach into the mock without going through the UI:
   `admin/mock-supabase.js` is synthetic (deterministic PRNG seed), and it must
   stay that way — no real NexMoney client names, emails, phone numbers or
   addresses, ever.
-- **The build tag is bumped in ALL SEVEN places, every round that edits any of
+- **The build tag is bumped in ALL EIGHT places (index.html + the seven scripts; R93 added site.js), every round that edits any of
   them (R81 · A3; seven since R90 · F — was four).** index.html
   (`window.NX_BUILD_TAG`), core.js (`window.__nxTag_core`), reports-money.js
   (`window.__nxTag_reportsmoney`), diary.js (`window.__nxTag_diary`), import.js
@@ -5572,7 +5572,7 @@ test scripts to reach into the mock without going through the UI:
   handshake that catches a mixed-deploy cache (nxCheckBuildTags compares all
   seven). `tests/r81_platform.js` §C and `tests/r90_carve.js` §A fail the
   battery on a partial bump, so this is a delivery-checklist item: edit any of
-  those seven files ⇒ bump the tag in all seven.
+  those files ⇒ bump the tag in all eight.
 - **A column the mock does not know is a 42703 (R81 · B).** `admin/mock-supabase.js` runs
   STRICT COLUMN MODE by default: every select/filter/order/payload/rpc-arg column name is
   checked against the per-table registry and an unknown one THROWS
@@ -5587,12 +5587,16 @@ test scripts to reach into the mock without going through the UI:
   mock mirror must refuse through `isStaff()` / `isAdminOrOwner()` / `isOwner()` (which
   carry the mirror). A guard without it lets an owner/admin session that has not verified
   its authenticator read through the RPC door what RLS already refuses at the table.
-- **Mock files are excluded from the live deploy.** `admin/mock.html` and
-  `admin/mock-supabase.js` (and now `tests/`, `smoke.js`, `HARNESS.md`,
-  `shots/`) are listed in `.vercelignore` so none of the harness ships to the
-  real site. If you add a new harness file, add it to `.vercelignore` too.
+- **Mock files are excluded from the live deploy.** Since R84 the served tree is
+  `dist/`, written by `build.js`; its `SKIP_DIRS` / `SKIP_FILES` / `SKIP_EXT` lists
+  are what keep `admin/mock.html`, `admin/mock-supabase.js`, `tests/`, `smoke.js`,
+  docs and configs out (R94 · A/B). If you add a new harness file, add it there —
+  `.vercelignore` is vestigial.
 
 ## Deploy — every change is a PR (R94)
+
+Function names cited in the older round sections below (e.g. `buildJumpNav`, `protPhoneHtml`,
+`autoDrawer`) describe code as it was then; R94 · B removed the dead ones. `git log -S<name>` finds the history.
 
 **`origin/main` is the only durable store; nobody pushes main.** The sandbox is ephemeral, so a
 green local run is pushed as a BRANCH straight away — but it reaches main only through a PR:
