@@ -437,7 +437,7 @@ const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
       ok("G2 · nav() to any gated page lands an adviser on Today with the hash rewritten", Object.values(bounce).every((b) => b.page === "dashboard" && b.hash === "#today" && b.shown), JSON.stringify(bounce));
       const gate = await p2.evaluate(() => Object.keys(PAGE_ROLE_GATE).sort());
       // R89 · F — + operations (the page that holds import · emails · data; their own gates stay for the aliases)
-      eq("G3 · PAGE_ROLE_GATE names exactly money · import · emails · data · operations", gate, ["data", "emails", "import", "money", "operations"]);
+      eq("G3 · PAGE_ROLE_GATE names exactly money · import · emails · data · operations · site (R93 · F)", gate, ["data", "emails", "import", "money", "operations", "site"]);
       ok("§G · p2 · no console errors", realErrs(p2).length === errBefore, JSON.stringify(realErrs(p2)));
       await p2.context().close();
       const p1 = await boot(browser, "p1");
