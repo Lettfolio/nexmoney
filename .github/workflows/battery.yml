@@ -28,7 +28,7 @@ jobs:
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: npm ci
       - run: npm run lint
       - run: npx tsc -p jsconfig.json --noEmit
@@ -53,7 +53,7 @@ jobs:
     steps:
       - name: Tools the suites shell out to (git for r90_case_split's and r82_correct's base reads, python3 for the static server)
         run: apt-get update -qq && apt-get install -y -qq git python3 curl >/dev/null
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Link the checkout to /root/nx
@@ -66,7 +66,7 @@ jobs:
         run: bash tests/run-battery.sh ${{ matrix.shard }} 4
       - name: Upload suite logs
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: battery-logs-shard-${{ matrix.shard }}
           path: /tmp/battery-logs/*.out
