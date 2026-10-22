@@ -150,6 +150,7 @@ const CORE_RULES = {
 module.exports = [
   { ignores: ["admin/mock-supabase.js", "admin/mock.html", "dist/**", "tests/**", "node_modules/**", "docs/**", "supabase/**", "edge/**"] },
   { files: ["**/*.js"], linterOptions: { reportUnusedDisableDirectives: "error" }, rules: CORE_RULES },
+  { files: ["admin/introducer.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.browser, supabase: "readonly" } } },   // R95 · E: the introducer portal's own script, not one of the seven
   // One block per script: its globals are every shared name EXCEPT its own declarations
   // (otherwise no-redeclare reads each declaration as shadowing a configured global).
   ...SCRIPTS.map((s) => {
