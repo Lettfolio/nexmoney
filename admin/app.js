@@ -2723,10 +2723,10 @@ async function renderCaseDocs(caseId, c, state) {
         </div>
         <div class="doc-acts">
           ${s === "requested"
-            ? `<button type="button" class="btn btn-sm doc-act" data-act="received" data-doc="${esc(d.id)}" title="Mark this document as received">✓ Received</button>
-               <button type="button" class="btn btn-sm doc-act" data-act="waive" data-doc="${esc(d.id)}" title="We have decided not to collect this one. It stays on the list so nobody asks again.">Waive</button>`
-            : `<button type="button" class="btn btn-sm doc-act" data-act="undo" data-doc="${esc(d.id)}" title="Put this back to outstanding">↺ Undo</button>`}
-          ${canDelete ? `<button type="button" class="btn btn-sm btn-ghost btn-danger doc-act" data-act="delete" data-doc="${esc(d.id)}" title="Remove this row entirely — only for something added by mistake. Waive is what you want if we decided not to collect it.">🗑</button>` : ""}
+            ? `<button type="button" class="btn btn-sm doc-act" data-doc-act="received" data-doc="${esc(d.id)}" title="Mark this document as received">✓ Received</button>
+               <button type="button" class="btn btn-sm doc-act" data-doc-act="waive" data-doc="${esc(d.id)}" title="We have decided not to collect this one. It stays on the list so nobody asks again.">Waive</button>`
+            : `<button type="button" class="btn btn-sm doc-act" data-doc-act="undo" data-doc="${esc(d.id)}" title="Put this back to outstanding">↺ Undo</button>`}
+          ${canDelete ? `<button type="button" class="btn btn-sm btn-ghost btn-danger doc-act" data-doc-act="delete" data-doc="${esc(d.id)}" title="Remove this row entirely — only for something added by mistake. Waive is what you want if we decided not to collect it.">🗑</button>` : ""}
         </div>
       </div>`;
     }).join("")
@@ -2747,7 +2747,7 @@ async function renderCaseDocs(caseId, c, state) {
     </div>
     ${linkState ? `<p class="panel-sub${linkState.expired ? " u-red u-fw-600" : ""}" id="docs-link-state">🔗 ${esc(linkState.text)}</p>` : ""}
     <div class="doc-link-out hidden" id="docs-link-out"></div>`;
-  body.querySelectorAll(".doc-act").forEach((b) => (b.onclick = () => docAction(b.dataset.act, b.dataset.doc, caseId, c)));
+  body.querySelectorAll(".doc-act").forEach((b) => (b.onclick = () => docAction(b.dataset.docAct, b.dataset.doc, caseId, c)));
   body.querySelectorAll(".doc-open").forEach((b) => (b.onclick = () => openDocFile(b.dataset.path, b)));
   $("#docs-add-btn").onclick = () => addDocItems(caseId, c);
   $("#docs-link-btn").onclick = () => copyDocUploadLink(caseId, c);
@@ -24084,7 +24084,7 @@ async function loadDataHealth() {
             <td>${esc(caseName(cs))}</td>
             <td>${esc([caseTypeLabel(cs), cs.lender, cs.stage ? (STAGE_LABEL[cs.stage] || cs.stage) : null].filter(Boolean).join(" · "))}</td>
             <td class="u-nowrap">${fmtD(cs.created_at)}${i === 0 ? ' <span class="badge blue" title="The most recent case on this address — normally the current owner">newest</span>' : ""}</td>
-            <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" ${actAttr("openCase", cs.id)}>Open case</button> <button class="btn btn-sm" ${actAttr("openClient", cs.client_id, null, null, cs.id)}>Client</button></td>
+            <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" ${actAttr("openCase", cs.id)}>Open case</button> <button class="btn btn-sm" ${actAttr("openClient", cs.client_id || "", null, null, cs.id)}>Client</button></td>
           </tr>`).join("")}
         </table>
       </div>`).join("") : '<div class="empty">No address appears on more than one client\'s cases. 👍</div>'}
@@ -26340,6 +26340,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r94";   // R89
+window.__nxTag_app = "r95";   // R89
 
 init();

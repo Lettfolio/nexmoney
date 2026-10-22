@@ -147,6 +147,15 @@ async function ensureServer() {
       return out;
     });
 
+    // R95 · fixer F1: a literal data-act="name" in markup IS a handler name to the kit — every one
+    // must resolve to a global function, or a data attribute has collided with the kit (the doc-act case).
+    {
+      const files = ["boot", "core", "reports-money", "diary", "import", "vault", "site", "app"].map((f) => `admin/${f}.js`).concat(["admin/index.html"]);
+      const names = new Set();
+      for (const f of files) for (const m of fs.readFileSync(path.join(REPO, f), "utf8").matchAll(/data-act="([A-Za-z_$][\w$]*)"/g)) names.add(m[1]);
+      const missing = await page.evaluate((ns) => ns.filter((n) => typeof window[n] !== "function"), [...names]);
+      ok(`A0 · every literal data-act="…" in the markup resolves to a global function (${names.size} names)`, missing.length === 0, JSON.stringify(missing));
+    }
     ok("A1 · data-args reach the global as JSON values (string, number, object)", r.a1ok);
     ok("A2 · \"$event\" → the event, \"$this\" → the element", r.a2ok);
     ok("A3 · no data-args → called with no arguments", r.a3ok);

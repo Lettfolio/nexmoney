@@ -1374,4 +1374,4 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_diary = "r94";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_diary = "r95";   // R89 — the CTO bumps all seven together at each gate

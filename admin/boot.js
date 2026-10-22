@@ -4,7 +4,7 @@
    It declares no globals other scripts read at definition time; NX_BUILD_TAG is read by app.js's boot.
    R81 · A3 — NX_BUILD_TAG is the deploy handshake: each admin script stamps its own window.__nxTag_*, and app.js
    compares all eight (this one + the seven __nxTag_*). EVERY round that edits ANY back-office script bumps all eight. */
-window.NX_BUILD_TAG = "r94";
+window.NX_BUILD_TAG = "r95";
 
 /* The Inter stylesheet is fetched as media="print" (non-blocking) and switched to all media once it has
    loaded — what the old inline load-handler media swap did. boot.js runs at the end of <body>, so the

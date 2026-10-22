@@ -40,8 +40,14 @@ begin;
 --   get_introducer_cases() / get_introducer_clients() (same body + `if my_introducer_id() is null
 --   then return; end if;`), switch introducer.html to .rpc(), then revoke select on the views
 --   from authenticated and drop them. Needs an introducer.html change, so not this round.
-alter view public.v_introducer_cases   set (security_invoker = false, security_barrier = true);
-alter view public.v_introducer_clients set (security_invoker = false, security_barrier = true);
+do $$ begin   -- R95: the views are dropped by migration 20261022090000 (RPCs replace them); skip if gone
+  if to_regclass('public.v_introducer_cases') is not null then
+    execute 'alter view public.v_introducer_cases   set (security_invoker = false, security_barrier = true)';
+  end if;
+  if to_regclass('public.v_introducer_clients') is not null then
+    execute 'alter view public.v_introducer_clients set (security_invoker = false, security_barrier = true)';
+  end if;
+end $$;
 revoke all on public.v_introducer_cases   from anon, public;
 revoke all on public.v_introducer_clients from anon, public;
 

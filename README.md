@@ -6,7 +6,7 @@ broker back office its advisers, administrators and owner work in every day.
 ## Architecture
 
 A static site (root `*.html`, `style.css`, `enhance.js`) and a single-page back office (`admin/`:
-seven classic scripts sharing one global scope, loaded in the order
+nine classic scripts (boot.js + core.js … app.js) sharing one global scope, loaded in the order
 `core.js → reports-money.js → diary.js → import.js → vault.js → site.js → app.js`). Both talk
 to one Supabase project, `sclghkmvzpwtmnzbkaoe` (eu-west-2): Postgres with RLS, Auth, Storage,
 cron and edge functions (source in `edge/`). Vercel project `nexmoney` builds `main` with

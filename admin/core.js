@@ -118,7 +118,7 @@ const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&"
 
 /* ===== R95 DELEGATION KIT =====
    R95 · B1: script-src loses 'unsafe-inline', so markup names a GLOBAL fn and one document listener calls it.
-   data-act="fn" data-args='[JSON]' ("$event"/"$this" substituted) data-on="change" (default click) — nearest match wins;
+   data-act=NAME data-args='[JSON]' ("$event"/"$this" substituted) data-on="change" (default click) — nearest match wins;
    data-stop = click barrier (stopImmediatePropagation: this is the FIRST document listener); data-prevent =
    preventDefault (a[href="#"] clicks and submits always). `this` and ev.currentTarget = the [data-act] element,
    as an inline handler saw them. error/toggle do not bubble: caught in capture, on the element itself only. */
@@ -365,4 +365,4 @@ async function readAll(q, opts) {
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_core = "r94";   // R89
+window.__nxTag_core = "r95";   // R89

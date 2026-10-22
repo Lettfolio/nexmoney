@@ -170,7 +170,7 @@ const FIXTURE = {
   let hash = "";
   try { hash = execFileSync("node", ["build.js", "--hash"], { cwd: REPO, encoding: "utf8", env: { ...process.env, NX_CONTENT_FIXTURE: "" } }); } catch (e) { hash = String(e); }
   const adminFiles = hash.trim().split("\n").map((l) => l.split(/\s+/)[1]).filter((f) => f && f.startsWith("admin/"));
-  eq("C20 · --hash prints the eight admin files", adminFiles, ["admin/core.js", "admin/reports-money.js", "admin/diary.js", "admin/import.js", "admin/vault.js", "admin/site.js", "admin/app.js", "admin/admin.css"]);
+  eq("C20 · --hash prints the nine admin files", adminFiles, ["admin/boot.js", "admin/core.js", "admin/reports-money.js", "admin/diary.js", "admin/import.js", "admin/vault.js", "admin/site.js", "admin/app.js", "admin/admin.css"]);
   ok("C21 · --hash does no content work", !/content/.test(hash));
   const vj = JSON.parse(rd("vercel.json"));
   ok("C22 · vercel.json: no /guides redirect, the others kept", !vj.redirects.some((r) => r.source === "/guides") && vj.redirects.some((r) => r.source === "/forum"));

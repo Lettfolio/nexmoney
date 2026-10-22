@@ -3,6 +3,11 @@
 
    THE TWO CONTENT-SECURITY-POLICIES IN vercel.json, PROVEN AGAINST THE PAGES.
 
+   R95 note: the §B runtime walk only reports an inline handler that actually FIRES (a
+   securitypolicyviolation is raised at execution time, not at parse time), so the static
+   count A20 is the real gate against inline handlers; §B proves the strict policy breaks
+   nothing that runs.
+
    §A (static) — vercel.json parses; exactly one CSP on "/(.*)" (site) and one on
         "/admin/:path*", the admin one LATER (Vercel applies every matching headers
         entry in order, so for the same key the later one is what ships); neither
@@ -168,7 +173,7 @@ async function ensureServer() {
   const inlineScope = adminDir.filter((f) => f.endsWith(".js") && f !== "mock-supabase.js").map((f) => `admin/${f}`)
     .concat(adminDir.filter((f) => f.endsWith(".html")).map((f) => `admin/${f}`), siteFiles);   // siteFiles includes unsubscribe.html (slice A) on purpose
   const tally = (re) => inlineScope.map((f) => [f, (read(f).match(re) || []).length]).filter(([, n]) => n);
-  const handlers = tally(/ on[a-z]+="/g);
+  const handlers = tally(/\son[a-z]+\s*=/g);   // R95 · fixer F5: any quoting (double, single, none)
   ok("A20 · zero inline on*=\" handlers across admin/*.js (bar the mock), admin/*.html and every root *.html",
     handlers.length === 0, `${handlers.reduce((a, [, n]) => a + n, 0)} left: ${JSON.stringify(handlers)}`);
   const jsUrls = tally(/href=["']javascript:/g);
