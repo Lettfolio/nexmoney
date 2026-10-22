@@ -158,7 +158,7 @@ module.exports = [
     return { files: ["admin/" + s.file], plugins: { nx: nxPlugin }, languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: g }, rules: { "nx/load-order": "error", "nx/shared-use": "error" } };
   }),
   { files: ["admin/sw.js", "admin/sw-kill.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.serviceworker } } },
-  { files: ["enhance.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.browser } } },
+  { files: ["enhance.js", "js/*.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.browser } } },
   { files: ["build.js", "smoke.js", "eslint.config.js", "db/*.js"], languageOptions: { ecmaVersion: 2022, sourceType: "commonjs", globals: { ...globals.node } } },
   // smoke.js and the drift check drive Playwright: their page.evaluate(() => …) callbacks run IN the page.
   { files: ["smoke.js", "db/check-schema-drift.js"], languageOptions: { globals: { window: "readonly", document: "readonly" } } },

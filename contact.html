@@ -110,7 +110,7 @@
         </a>
         <a href="/contact" class="btn btn-primary">Speak to an Adviser</a>
       </div>
-      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false" onclick="var n=document.getElementById('mainNav');this.setAttribute('aria-expanded',n.classList.toggle('open'))">
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false" data-act="navToggle" data-args='["$this"]'>
         <span></span><span></span><span></span>
       </button>
     </div>
@@ -204,7 +204,7 @@
         <h2>Request a Free Callback</h2>
         <p style="font-size:14px; color:var(--muted); margin-bottom:24px;">Fill in your details and a NexMoney adviser will aim to be in touch as quickly as possible during business hours.</p>
 
-        <form id="enquiryForm" onsubmit="submitForm(event)">
+        <form id="enquiryForm" data-act="submitForm" data-on="submit" data-args='["$event"]'>
           <input type="text" id="website" name="website" value="" style="position:absolute;left:-9999px;opacity:0;" tabindex="-1" autocomplete="off" aria-hidden="true">
           <div class="form-row">
             <div class="form-group">
@@ -359,51 +359,6 @@
   </div>
 </footer>
 
-<script>
-async function submitForm(e) {
-  e.preventDefault();
-  const btn = document.querySelector('#enquiryForm [type="submit"]');
-  const errorBox = document.getElementById('formError');
-  if (errorBox) errorBox.style.display = 'none';
-  const btnText = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-  const val = (id) => (document.getElementById(id) || { value: '' }).value || '';
-  const payload = {
-    name: (val('fname') + ' ' + val('lname')).trim(),
-    email: val('email'),
-    phone: val('phone'),
-    enquiry_type: val('enquiryType'),
-    property_value: val('propertyValue'),
-    message: val('message'),
-    page: location.pathname,
-    website: val('website') // honeypot
-  };
-  try {
-    const res = await fetch('https://sclghkmvzpwtmnzbkaoe.supabase.co/functions/v1/new-lead', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) throw new Error('new-lead responded ' + res.status);
-    document.getElementById('enquiryForm').style.display = 'none';
-    document.getElementById('formSuccess').style.display = 'block';
-  } catch (err) {
-    if (btn) { btn.disabled = false; btn.textContent = btnText; }
-    if (errorBox) { errorBox.style.display = 'block'; errorBox.scrollIntoView({ block: 'nearest' }); }
-  }
-}
-</script>
-
-<script>
-(function () {
-  var t = new URLSearchParams(location.search).get('type');
-  if (!t) return;
-  var s = document.getElementById('enquiryType');
-  if (!s) return;
-  for (var i = 0; i < s.options.length; i++) {
-    if (s.options[i].value === t) { s.value = t; break; }
-  }
-})();
-</script>
+<script src="/js/contact.js"></script>
 </body>
 </html>
