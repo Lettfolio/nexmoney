@@ -219,7 +219,7 @@ comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated.
   ISO stamps, HH:MM(:SS), "N min ago"). `node panel-r87/dom-diff.js panel-r87/dump-base <dir>` must say IDENTICAL
   (142 views, 99,018 id records; two runs of the untouched tree are identical, and so was the carved tree).
   Re-point (commented "R90 · F"): r87_shell D12 reads the classes/ids from all SIX scripts (was four sources).
-  Build: `node build.js --hash` prints EIGHT admin hashes (core, reports-money, diary, import, vault, site, app, admin.css) plus style.css and enhance.js.
+  Build: `node build.js --hash` prints NINE admin hashes (boot, core, reports-money, diary, import, vault, site, app, admin.css) plus style.css and enhance.js — eleven lines (R95 · C added boot.js).
 
 **R90 · B / C / D notes.**
   - **B — THE openCase FUNCTION MAP.** `window.openCase(id, {focus})` is ≤ 200 lines with ≤ 1 nested closure (the
@@ -5563,14 +5563,15 @@ test scripts to reach into the mock without going through the UI:
   `admin/mock-supabase.js` is synthetic (deterministic PRNG seed), and it must
   stay that way — no real NexMoney client names, emails, phone numbers or
   addresses, ever.
-- **The build tag is bumped in ALL EIGHT places (index.html + the seven scripts; R93 added site.js), every round that edits any of
-  them (R81 · A3; seven since R90 · F — was four).** index.html
+- **The build tag is bumped in ALL EIGHT places (boot.js + the seven scripts; R93 added site.js; R95 · C moved
+  NX_BUILD_TAG out of index.html into boot.js, so index.html carries NO tag and no inline script), every round that edits any of
+  them (R81 · A3; seven since R90 · F — was four).** boot.js
   (`window.NX_BUILD_TAG`), core.js (`window.__nxTag_core`), reports-money.js
   (`window.__nxTag_reportsmoney`), diary.js (`window.__nxTag_diary`), import.js
-  (`window.__nxTag_import`), vault.js (`window.__nxTag_vault`), app.js
+  (`window.__nxTag_import`), vault.js (`window.__nxTag_vault`), site.js (`window.__nxTag_site`), app.js
   (`window.__nxTag_app`) must carry the SAME literal — it is the deploy
   handshake that catches a mixed-deploy cache (nxCheckBuildTags compares all
-  seven). `tests/r81_platform.js` §C and `tests/r90_carve.js` §A fail the
+  eight). `tests/r81_platform.js` §C and `tests/r90_carve.js` §A fail the
   battery on a partial bump, so this is a delivery-checklist item: edit any of
   those files ⇒ bump the tag in all eight.
 - **A column the mock does not know is a 42703 (R81 · B).** `admin/mock-supabase.js` runs
@@ -5615,7 +5616,7 @@ the R52 stale-tree clobber. Daniel's folder is a reader's copy; refresh it with 
 
 **Repository layout.** Root: the public site (`*.html`, `style.css`, `enhance.js`, `assets/`),
 `build.js`, `smoke.js`, `vercel.json`, `README.md`, this file and `GO-LIVE-RUNBOOK.md`.
-`admin/` the back office (seven classic scripts, `index.html`, `sw.js`, `mock*`); `tests/` the
+`admin/` the back office (`boot.js` + seven classic scripts, `index.html` with nine script tags and none inline, `sw.js`, `mock*`); `tests/` the
 battery; `db/` hand-applied SQL by round + `check-schema-drift.js`; `supabase/migrations/` the
 exported migration record; `edge/` edge-function SOURCE, highest `-vN` per function only (older
 versions are in git history); `docs/` audits and reference papers; `docs/rounds/` closed rounds'
