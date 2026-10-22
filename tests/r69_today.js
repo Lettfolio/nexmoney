@@ -96,7 +96,10 @@ async function boot(browser, persona, opts) {
   page.on("dialog", (d) => { page.__dialogs.push(d.message()); d.accept(); });
   page.__err = [];
   page.on("pageerror", (e) => page.__err.push("pageerror: " + String(e)));
-  page.on("console", (m) => { if (m.type() === "error") page.__err.push("console: " + m.text()); });
+  // R95 · deps: a failed resource load logs "Failed to load resource: … 404" with NO url in its text, so the
+  // realErr favicon filter never saw the runner's lender-favicon 404s (Google answers 404 for some domains;
+  // the sandbox proxy blocks them as ERR_TUNNEL instead). Record the url so the filter — and the annotation — name it.
+  page.on("console", (m) => { if (m.type() === "error") page.__err.push("console: " + m.text() + " @ " + ((m.location() || {}).url || "")); });
   await page.goto(`${BASE}?as=${persona}`, { waitUntil: "networkidle" });
   await page.waitForTimeout(1600);
   return page;
