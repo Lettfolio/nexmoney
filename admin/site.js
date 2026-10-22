@@ -154,7 +154,7 @@ function sitePageRowHtml(meta) {
     name: { text: siteCtPath(meta.slug) },
     chips,
     fact: r && r.title ? esc(r.title) : `<span class="u-muted">— from HTML</span>`,
-    verbs: [{ label: "Edit", cls: "site-edit", onclick: `siteOpenPageEditor(${JSON.stringify(meta.slug)})` }],
+    verbs: [{ label: "Edit", cls: "site-edit", act: ["siteOpenPageEditor", meta.slug] }],
   });
 }
 function siteGuideRowHtml(g) {
@@ -165,7 +165,7 @@ function siteGuideRowHtml(g) {
     name: { text: g.title || "(untitled)" },
     chips: [{ label: g.status, cls: `${siteCtStatusCls[g.status] || "grey"} site-status` }],
     fact: `/guides/${esc(g.slug)} · ${esc(fmtAgo(g.updated_at))}`,
-    verbs: [{ label: "Edit", cls: "site-edit", onclick: `siteOpenGuideEditor(${JSON.stringify(String(g.id))})` }],
+    verbs: [{ label: "Edit", cls: "site-edit", act: ["siteOpenGuideEditor", String(g.id)] }],
   });
 }
 const siteCtStatusOrder = { draft: 0, approved: 1, published: 2, archived: 3 };
