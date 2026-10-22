@@ -68,7 +68,7 @@
 "use strict";
 
 const { chromium } = require("playwright");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -236,10 +236,12 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
     /* ---- the server-side belt: edge/process-emails-v20.ts ---- */
     console.log("\n— §A · A1 · edge/process-emails-v20.ts = v19 plus a send-time refusal, marked v20:");
     {
-      const v19 = fs.readFileSync(path.join(REPO, "edge/process-emails-v19.ts"), "utf8");
-      const v20p = path.join(REPO, "edge/process-emails-v20.ts");
-      ok("A5a · the v20 source is versioned in the repo", fs.existsSync(v20p), v20p);
-      const v20 = fs.existsSync(v20p) ? fs.readFileSync(v20p, "utf8") : "";
+      // R94 · A1: superseded edge sources left the tree (highest -vN only); read them from git at the R94 base.
+      const edgeSrc = (f) => { const p = path.join(REPO, "edge", f); if (fs.existsSync(p)) return fs.readFileSync(p, "utf8");
+        try { return execFileSync("git", ["-C", REPO, "show", `fba26c6:edge/${f}`], { encoding: "utf8", maxBuffer: 16 << 20 }); } catch (_) { return ""; } };
+      const v19 = edgeSrc("process-emails-v19.ts");
+      const v20 = edgeSrc("process-emails-v20.ts");
+      ok("A5a · the v20 source is versioned (tree or git history)", !!v20 && !!v19, `v19 ${v19.length} / v20 ${v20.length} chars`);
       ok("A5b · it names the three financial-promotion types and only those",
         /const FIN_PROMO_TYPES = \["referral_request", "protection_offer", "gi_exchange"\];/.test(v20), "FIN_PROMO_TYPES");
       ok("A5c · MARKETING_TYPES (the unsubscribe list) is left exactly as v19 had it — a different question",

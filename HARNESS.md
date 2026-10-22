@@ -219,7 +219,7 @@ comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated.
   ISO stamps, HH:MM(:SS), "N min ago"). `node panel-r87/dom-diff.js panel-r87/dump-base <dir>` must say IDENTICAL
   (142 views, 99,018 id records; two runs of the untouched tree are identical, and so was the carved tree).
   Re-point (commented "R90 · F"): r87_shell D12 reads the classes/ids from all SIX scripts (was four sources).
-  Build: `node build.js --hash` prints SEVEN admin hashes (core, reports-money, diary, import, vault, app, admin.css).
+  Build: `node build.js --hash` prints EIGHT admin hashes (core, reports-money, diary, import, vault, site, app, admin.css) plus style.css and enhance.js.
 
 **R90 · B / C / D notes.**
   - **B — THE openCase FUNCTION MAP.** `window.openCase(id, {focus})` is ≤ 200 lines with ≤ 1 nested closure (the
@@ -240,7 +240,7 @@ comments included; app.js 39,247 → 34,542 lines), the R78/R81 recipe repeated.
     becomes one line `R73 · B3: <why>`; tombstones for code that no longer exists go; no `${/* … */ ""}` in
     templates; never touch a string, regex or template text. A comment ending in `…` is condensed — the full text
     is in git history (`git log -S` on its first words; pre-pass text at ee1eb07). **THE ORACLE:**
-    `node build.js --hash` must print the same seven hashes before and after any comment-only edit (esbuild strips
+    `node build.js --hash` must print the same ten hashes before and after any comment-only edit (esbuild strips
     comments — a changed hash means something else changed); mock-supabase.js is not built, so its oracle is
     `node --check` + an acorn token stream (comments excluded) equal to the previous one.
     Fixer pass (R90): D2 had head-truncated 1,295 comments; every one that had dropped ≥ 400 chars of its
@@ -674,7 +674,7 @@ the flag around that probe and flips it back.** `window.__mock.columnRegistry()`
 whole registry (or one table's) for assertions — 28 entries (27 tables + `v_alerts`), 334
 columns; §A2 asserts every `__mock.db` table has a non-empty entry, so a table added later
 can't arrive with no schema behind it.
-  Findings from running the FULL battery under strict (detail in `R81-strict-findings.md`):
+  Findings from running the FULL battery under strict (detail in `docs/rounds/R81-strict-findings.md`):
   smoke 152/0 and all 84 pre-existing suites 0 failed (7,597 checks) + r81_strict 40/0 —
   **zero `MOCK STRICT` throws anywhere in the logs**. (`r12b`/`r14`/`r63_docs` hit the
   runner's 900 s wall on the first pass, stalled on a `page.evaluate` with the box idle and
@@ -5563,7 +5563,7 @@ test scripts to reach into the mock without going through the UI:
   `admin/mock-supabase.js` is synthetic (deterministic PRNG seed), and it must
   stay that way — no real NexMoney client names, emails, phone numbers or
   addresses, ever.
-- **The build tag is bumped in ALL SEVEN places, every round that edits any of
+- **The build tag is bumped in ALL EIGHT places (index.html + the seven scripts; R93 added site.js), every round that edits any of
   them (R81 · A3; seven since R90 · F — was four).** index.html
   (`window.NX_BUILD_TAG`), core.js (`window.__nxTag_core`), reports-money.js
   (`window.__nxTag_reportsmoney`), diary.js (`window.__nxTag_diary`), import.js
@@ -5572,7 +5572,7 @@ test scripts to reach into the mock without going through the UI:
   handshake that catches a mixed-deploy cache (nxCheckBuildTags compares all
   seven). `tests/r81_platform.js` §C and `tests/r90_carve.js` §A fail the
   battery on a partial bump, so this is a delivery-checklist item: edit any of
-  those seven files ⇒ bump the tag in all seven.
+  those files ⇒ bump the tag in all eight.
 - **A column the mock does not know is a 42703 (R81 · B).** `admin/mock-supabase.js` runs
   STRICT COLUMN MODE by default: every select/filter/order/payload/rpc-arg column name is
   checked against the per-table registry and an unknown one THROWS
@@ -5587,17 +5587,40 @@ test scripts to reach into the mock without going through the UI:
   mock mirror must refuse through `isStaff()` / `isAdminOrOwner()` / `isOwner()` (which
   carry the mirror). A guard without it lets an owner/admin session that has not verified
   its authenticator read through the RPC door what RLS already refuses at the table.
-- **Mock files are excluded from the live deploy.** `admin/mock.html` and
-  `admin/mock-supabase.js` (and now `tests/`, `smoke.js`, `HARNESS.md`,
-  `shots/`) are listed in `.vercelignore` so none of the harness ships to the
-  real site. If you add a new harness file, add it to `.vercelignore` too.
+- **Mock files are excluded from the live deploy.** Since R84 the served tree is
+  `dist/`, written by `build.js`; its `SKIP_DIRS` / `SKIP_FILES` / `SKIP_EXT` lists
+  are what keep `admin/mock.html`, `admin/mock-supabase.js`, `tests/`, `smoke.js`,
+  docs and configs out (R94 · A/B). If you add a new harness file, add it there —
+  `.vercelignore` is vestigial.
 
-## Recovery rule
+## Deploy — every change is a PR (R94)
 
-**`origin/main` is the only durable store for this harness.** This sandbox is
-ephemeral — nothing here survives except what's pushed. As soon as the full
-battery above is green, deploy/push immediately. Do not sit on a green run;
-treat "battery passed" and "pushed to origin/main" as one atomic step.
+Function names cited in the older round sections below (e.g. `buildJumpNav`, `protPhoneHtml`,
+`autoDrawer`) describe code as it was then; R94 · B removed the dead ones. `git log -S<name>` finds the history.
+
+**`origin/main` is the only durable store; nobody pushes main.** The sandbox is ephemeral, so a
+green local run is pushed as a BRANCH straight away — but it reaches main only through a PR:
+  1. Claude pushes `r<nn>-<slice>` (or `r<nn>-<name>`) through its GitHub route (the session's
+     attached repo, push access) and opens a PR against main. Commits carry the round prefix.
+  2. The ruleset on main requires the four `battery` shards (and `build-check`, which gates them)
+     to pass on the PR; there is no bypass. A red shard in the 23:00–00:00 UTC hour: re-run first.
+  3. Daniel reviews and merges. Claude never merges its own PR.
+  4. Vercel builds main (`build.js` → `dist/`) and deploys production.
+  5. Live-verify on the deployed host: every file `node build.js --hash` lists serves that SHA-256,
+     the eight build tags agree (no tag-mismatch strip), and `window.__errorLog` is empty (0).
+     Edge functions and SQL are separate: the CTO deploys edge via MCP, Daniel pastes SQL.
+**RETIRED for code (do not use):** `device_commit_files` into Daniel's folder, GitHub web upload
+through Chrome, `git` / `deploy.bat` in Daniel's Windows tree. They skipped the battery and caused
+the R52 stale-tree clobber. Daniel's folder is a reader's copy; refresh it with `git pull`.
+
+**Repository layout.** Root: the public site (`*.html`, `style.css`, `enhance.js`, `assets/`),
+`build.js`, `smoke.js`, `vercel.json`, `README.md`, this file and `GO-LIVE-RUNBOOK.md`.
+`admin/` the back office (seven classic scripts, `index.html`, `sw.js`, `mock*`); `tests/` the
+battery; `db/` hand-applied SQL by round + `check-schema-drift.js`; `supabase/migrations/` the
+exported migration record; `edge/` edge-function SOURCE, highest `-vN` per function only (older
+versions are in git history); `docs/` audits and reference papers; `docs/rounds/` closed rounds'
+contracts, slice reports and verifier notes (a round's own `R<nn>-*.md` sit at the root until it
+merges, then move there). Nothing under `docs/`, `tests/`, `db/`, `edge/` or `supabase/` ships.
 
 **R64-HF1 (2026-08-26) — chunked `.in()` reads.** PostgREST answers 400 when an `.in()` list
 runs past ~500 UUIDs (the list is in the URL). Production hit it silently on the Retention feed

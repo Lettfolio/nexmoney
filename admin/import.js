@@ -1161,7 +1161,6 @@ const REV_FIELD = Object.fromEntries(REV_FIELDS.map(([key, label, scope, kind]) 
 const REV_CASE_DIFF = ["rate_end_date", "erc_end_date", "lender", "product_name", "rate_type", "rate_percent",
   "loan_amount", "property_value", "term_years", "case_kind", "fee_status", "proc_fee", "broker_fee",
   "protection_status", "protection_commission", "gi_status", "lead_source", "submitted_at", "completed_date"];
-const REV_CLIENT_DIFF = ["date_of_birth", "email", "phone", "address", "is_vulnerable", "vulnerability_note"];
 /* R13 — the care columns this sync can write, and the only place the list is spelled out. */
 const REV_CARE_FIELDS = ["is_vulnerable", "vulnerability_note"];
 const REV_MONEY_FIELDS = new Set(["proc_fee", "broker_fee", "protection_commission"]);
@@ -2330,4 +2329,4 @@ window.__rev = {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_import = "r93";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_import = "r94";   // R89 — the CTO bumps all seven together at each gate

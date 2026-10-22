@@ -3,12 +3,12 @@
 The new site + back office live at nexmoney-two.vercel.app behind the reviewer gate. This is the ordered list to move
 nexmoney.co.uk onto it. Canonical host is **www.nexmoney.co.uk** (every page's `<link rel="canonical">`, the sitemap
 and the old site all use www) — the apex redirects to www. Owners: **Dev** (Cloudflare DNS), **Daniel** (Vercel,
-Supabase, Resend, git push), **Claude** (code, verification). Nothing here is done until Daniel says "go".
+Supabase, Resend, merging PRs), **Claude** (code, verification). Nothing here is done until Daniel says "go".
 
 ## 0 · Already in the repo (this round)
 - `vercel.json` — 31 permanent (301) redirects from every URL in the OLD site's sitemap to its nearest new page
   (list below). Live the moment it is pushed; harmless on nexmoney-two until the domain moves.
-- Gate removal is ONE command on the day (step 4) — no branch to juggle.
+- Gate removal is ONE PR merge on the day (step 4) — Claude opens it beforehand, green and waiting.
 
 ## 1 · Before the day (any time from now)
 1. **Resend** (Daniel, resend.com): Domains → Add domain `nexmoney.co.uk`, region **EU (Ireland)**. Resend shows three
@@ -24,21 +24,21 @@ Supabase, Resend, git push), **Claude** (code, verification). Nothing here is do
    (redirect to www). Vercel will show the two records for step 4 and say "Invalid configuration" until DNS moves —
    that is expected.
 4. **Stonebridge**: written sign-off that the reviewed site may go public (their reviewers used the gate).
+5. **GitHub / Vercel settings** (Daniel, once — R94: every change is a PR, nobody pushes main):
+   - GitHub → Settings → Rules → "main — battery must pass": require a pull request + the battery checks, and
+     **remove the Repository admin bypass**.
+   - GitHub → Settings → Code security: **Dependabot alerts** and **Secret scanning** (with push protection) on.
+   - Vercel → project `nexmoney` → Settings → Notifications: **notify on failed production deployment** (email).
 
 ## 2 · The day — order matters
-1. **Claude** — live-verify nexmoney-two one last time (seven hashes, gate, `__errorLog` 0).
+1. **Claude** — live-verify nexmoney-two one last time (eight hashes, gate, `__errorLog` 0).
 2. **Dev / Cloudflare** (DNS-only / grey cloud, NOT proxied):
    - `A     @    76.76.21.21`
    - `CNAME www  cname.vercel-dns.com`
    Delete or note any other record that still points at the old host `54.38.212.253`. Leave MX/SPF/DKIM/DMARC alone.
 3. **Vercel**: Domains page turns green (cert issued) — usually within 5 minutes at TTL 300.
-4. **Daniel — remove the gate** (Windows terminal, in the repo):
-   ```
-   git rm middleware.js gate.html
-   git commit -m "Go-live: reviewer gate removed"
-   git push origin main
-   ```
-   The battery runs on the push as usual; the deploy is live in ~1 minute.
+4. **Daniel — remove the gate**: merge Claude's PR "Go-live: reviewer gate removed" (`git rm middleware.js
+   gate.html`, battery already green). Vercel deploys main; live in ~1 minute.
 5. **Daniel — Supabase** (dashboard, your sign-in): Authentication → URL Configuration → Site URL
    `https://www.nexmoney.co.uk/admin/`; Redirect URLs add `https://www.nexmoney.co.uk/admin/**` and
    `https://nexmoney.co.uk/admin/**`; keep `https://nexmoney-two.vercel.app/admin/**` for a week. Then Edge
@@ -56,7 +56,7 @@ Supabase, Resend, git push), **Claude** (code, verification). Nothing here is do
 
 ## 3 · Rollback (any point in section 2)
 Cloudflare: `A @ 54.38.212.253` back, delete the `www` CNAME (or point it back at the old host). TTL 300 → old site
-returns in minutes. The gate commit can be reverted with `git revert HEAD`. Nothing in Supabase needs undoing — the
+returns in minutes. The gate PR can be reverted with GitHub's "Revert" button on it (a revert PR, merged the same way). Nothing in Supabase needs undoing — the
 old admin URL stays in the redirect list for a week.
 
 ## 4 · After (first week)

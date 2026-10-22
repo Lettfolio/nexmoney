@@ -1,3 +1,4 @@
+// @ts-check
 /* ==========================================================================
    NexMoney Back Office — admin/core.js  (R78 · A7)
    The first carve of app.js: PURE, DEPENDENCY-FREE LEAF UTILITIES, loaded BEFORE app.js. A declaration
@@ -65,7 +66,7 @@ function logClientError(kind, message, detail) {
     let page = "";
     try { page = String(location.hash || "").replace(/^#/, "").split(/[/?]/)[0].slice(0, 40); } catch (_) {}
     try {
-      if (!errorEventsOff && window.db && db.from) {
+      if (!errorEventsOff && /** @type {any} */ (window).db && db.from) {
         db.from("error_events").insert([{ error_type: etype, location: location_, page: page, role: entry.role || null }])
           .then((res) => { const c = res && res.error && res.error.code;
                            if (c === "42P01" || c === "42501" || c === "PGRST205" || c === "PGRST106") errorEventsOff = true; },
@@ -75,6 +76,7 @@ function logClientError(kind, message, detail) {
   } catch (_) { /* logging must NEVER throw */ }
 }
 window.logClientError = logClientError;      // so caught-but-notable errors + tests can record one
+// @ts-ignore -- R94 · B4: the harness reads window.__errorLog; Window has no typing for it.
 window.__errorLog = ERROR_LOG;               // stable reference; tests read .length (mutated in place)
 try {
   window.addEventListener("error", (e) => {
@@ -303,4 +305,5 @@ async function readAll(q, opts) {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_core = "r93";   // R89
+// @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
+window.__nxTag_core = "r94";   // R89

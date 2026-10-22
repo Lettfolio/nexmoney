@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "checkJs": false,
+    "allowJs": true,
+    "noEmit": true,
+    "target": "es2022",
+    "lib": ["dom", "es2022"],
+    "skipLibCheck": true
+  },
+  "include": [
+    "admin/core.js", "admin/reports-money.js", "admin/diary.js", "admin/import.js",
+    "admin/vault.js", "admin/site.js", "admin/app.js"
+  ]
+}

@@ -56,7 +56,6 @@ const BASIS_FORECAST = "(weighted · proc+broker, excl. sols)";
 const BASIS_INTRO_REV = "(all-time · earned · completed cases)";
 /* R5-F2 (Daniel-approved) — the HEADLINE basis. Fee value is now led with as EARNED ON COMPLETION: proc +
    broker + sols on cases whose completed_at falls in the period, paid or not. */
-const BASIS_EARNED_MONTH = "(earned · proc+broker+sols · completed this month)";
 const BASIS_EARNED_YTD = "(earned · proc+broker+sols · completed YTD)";
 const BASIS_TARGET_EARNED = "earned · proc+broker+sols · by completion date";
 /* R5-F1 (Daniel-approved) — the adviser's own three figures. Every one of these is scoped to assigned_to =
@@ -1292,9 +1291,7 @@ const miMedian = (arr) => {
 const miMean = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
 const miDays = (a, b) => { const d = Math.round((new Date(b) - new Date(a)) / 86400000); return isNaN(d) ? null : d; };
 
-let miState = { all: null, mv: null };
 function renderPipelineMI(all, mv) {
-  miState = { all, mv };
   const sec = $("#report-mi-section");
   if (!sec) return;
   /* OWNER/ADMIN gate — the whole section, hidden for plain advisers. Same mechanism the money panels use
@@ -1317,7 +1314,6 @@ function renderPipelineMI(all, mv) {
   const liveFeeByStage = Object.fromEntries(MI_LIVE_STAGES.map((s) => [s, 0]));
   let reachedApp = 0, reachedOffer = 0, reachedCompleted = 0;   // milestone-date counts
   let completedN = 0, notProceedingN = 0;                       // terminal outcomes
-  let appAndCompleted = 0, offerAndCompleted = 0;               // for historical stage weights
   const vCreatedApp = [], vAppOffer = [], vOfferComp = [], vCreatedComp = [];
 
   let miSkipped = 0;   // R21 Part B — one bad case must not abort the whole MI aggregation
@@ -1344,8 +1340,6 @@ function renderPipelineMI(all, mv) {
     if (hasApp) reachedApp++;
     if (hasOffer) reachedOffer++;
     if (hasComp) reachedCompleted++;
-    if (hasApp && hasComp) appAndCompleted++;
-    if (hasOffer && hasComp) offerAndCompleted++;
 
     if (c.stage === "completed") completedN++;
     else if (c.stage === "not_proceeding") notProceedingN++;
@@ -1366,7 +1360,6 @@ function renderPipelineMI(all, mv) {
     }
   });
 
-  const label = monthLabel(mv);
   $("#report-mi-scope").textContent = "From the case book's milestone dates (created → submitted → offer issued → completed). Samples are small pre-launch and sharpen as the book grows.";
   if (miSkipped > 0) $("#report-mi-scope").insertAdjacentHTML("beforeend", ` <span class="client-list-cap-note">${miSkipped} record(s) couldn't be displayed — logged</span>`);
 
@@ -3323,7 +3316,6 @@ function moneyOwedModel(all) {
            solsTotal: rows.reduce((s, r) => s + r.sols, 0),
            brokerTotal: rows.reduce((s, r) => s + r.broker, 0) };
 }
-const BASIS_OWED = "(earned · not yet received · completed cases · aged from completion date)";
 /* R74 · A2 (panel D#4): ONE ZERO CONVENTION, STATED ONCE. A dash and a zero are different facts, and this app was
    using them interchangeably for the SAME rows: the Money-owed ageing buckets on Reports printed "£0 · 0 cases" for
    an empty band while Monday money printed "—" for that identical band computed from that identical model, one page
@@ -4431,6 +4423,7 @@ const R44_CHUNK = 200;
 const R44_STMT_LIST = 10;
 /* R24: a NEW named select, not a widening of BOARD_CASE_COLS. The board's columns are the board's; this read
    wants proc_fee/proc_fee_paid_at/ completed_at, which the board has no use for… */
+// eslint-disable-next-line no-unused-vars -- R94 · B3: reconciliation column contract that R44_CASE_PICK mirrors (kept as the record).
 const R44_CASE_COLS = "id,lender,stage,loan_amount,proc_fee,proc_fee_paid_at,completed_at,assigned_to,clients!client_id(first_name,last_name)";
 /* R85 · E11 — kept as the reconciliation's column CONTRACT (what its rows carry); the read itself is
    now the R44_CASE_PICK off the session Book below, which mirrors it column for column. */
@@ -5110,4 +5103,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r93";   // R89
+window.__nxTag_reportsmoney = "r94";   // R89
