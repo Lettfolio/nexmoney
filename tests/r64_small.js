@@ -438,7 +438,7 @@ async function setSettingLive(page, key, value) {
         await page.$eval("#client-adviser", (e) => e.value), "all");
 
       // R88 · B: a colleague's book has no button (Mine|All); it is set through the hidden compat select, as Retention's door does.
-      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");
+      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); }, "p3");
       await wait(page, 900);
       eq("§B3c · picking a COLLEAGUE persists too", await lsGet(page, "nx_clients_adviser_p2"), "p3");   // PATCHED R82 · A4
       await page.reload();
@@ -583,7 +583,7 @@ async function setSettingLive(page, key, value) {
       await page.waitForTimeout(2000);
       const sub = await page.$eval("#ret-cold-sub", (e) => e.textContent);
       ok("§C2f · the Retention “Gone quiet” panel prints 3 too", /3-month window/.test(sub) && /is a setting/.test(sub), sub);
-      const inPanel = await page.evaluate((id) => [...document.querySelectorAll("#ret-cold-list .row-item .t")].some((t) => (t.getAttribute("onclick") || "").includes(id)), probe.clientId);
+      const inPanel = await page.evaluate((id) => [...document.querySelectorAll("#ret-cold-list .row-item .t")].some((t) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t) || "").includes(id)), probe.clientId);
       eq("§C2g · …and the same client is on it", inPanel, true);
       ok("§C2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();

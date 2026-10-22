@@ -266,12 +266,12 @@ const count = (s, needle) => s.split(needle).length - 1;
       const btn = (p) => [...document.querySelectorAll(`#${p}-list .row-item > button`)].find((b) => /^Retry all failed/.test(b.textContent));
       const e = btn("email"), m = btn("sms");
       return {
-        email: e && { onclick: e.getAttribute("onclick"), jc: getComputedStyle(e.parentElement).justifyContent, cls: e.parentElement.className, style: e.parentElement.getAttribute("style") },
-        sms: m && { onclick: m.getAttribute("onclick"), jc: getComputedStyle(m.parentElement).justifyContent, cls: m.parentElement.className, style: m.parentElement.getAttribute("style") },
+        email: e && { act: e.getAttribute("data-act"), args: e.getAttribute("data-args"), jc: getComputedStyle(e.parentElement).justifyContent, cls: e.parentElement.className, style: e.parentElement.getAttribute("style") },
+        sms: m && { act: m.getAttribute("data-act"), args: m.getAttribute("data-args"), jc: getComputedStyle(m.parentElement).justifyContent, cls: m.parentElement.className, style: m.parentElement.getAttribute("style") },
       };
     });
     eq("B8 · both Failed views offer Retry-all, right-aligned by the utility class (no inline style)",
-      ra, { email: { onclick: "retryAllFailedEmails()", jc: "flex-end", cls: "row-item u-jc-end", style: null }, sms: { onclick: "retryAllFailedSms()", jc: "flex-end", cls: "row-item u-jc-end", style: null } });
+      ra, { email: { act: "retryAllFailedEmails", args: null, jc: "flex-end", cls: "row-item u-jc-end", style: null }, sms: { act: "retryAllFailedSms", args: null, jc: "flex-end", cls: "row-item u-jc-end", style: null } });
     await page.evaluate(() => window.retryAllFailedSms()); await wait(page, 2000);
     await page.evaluate(() => window.retryAllFailedEmails()); await wait(page, 2000);
     const afterAll = await page.evaluate(async (s) => {

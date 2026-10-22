@@ -293,7 +293,7 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
           h: Math.round(r.getBoundingClientRect().height),
           callPack: !!r.querySelector(".call-pack, .callpack, .cs-callpack, .ret-callpack") || /Balance|reverts to|pays £/.test(r.textContent),
           verbs,
-          start: !!r.querySelector("button.btn-retention[onclick*='startRetentionCase']"),
+          start: !!r.querySelector("button.btn-retention[data-act='startRetentionCase']"),
           remortgageChip: [...r.querySelectorAll(".ret-out-chip")].some((b) => /Re-mortgaging/.test(b.textContent)),
           more: !!r.querySelector("details.row-more"),   // R88 · C: the kit's More ▾ (was details.ret-row-more)
           hiddenVerbs: [...r.querySelectorAll("details.row-more button")].map((b) => b.textContent.trim()),
@@ -317,7 +317,7 @@ const visibleProse = (page, sectionSel) => page.evaluate((sel) => {
       });
       ok("C2c · opening More exposes exactly the hidden verbs", exposed.before === 0 && exposed.after === exposed.n && exposed.n >= 1, JSON.stringify(exposed));
       await page.evaluate(() => document.querySelectorAll("#ret-rates-list details.row-more").forEach((d) => { d.open = true; }));
-      await page.click("#ret-rates-list details.row-more button[onclick*=\"retBookReview\"]");
+      await page.click("#ret-rates-list details.row-more button[data-act=\"retBookReview\"]");
       await page.waitForTimeout(1800);
       const appt = await page.evaluate(() => ({ form: !!document.getElementById("appt-form"), title: (document.getElementById("appt-form") || { elements: {} }).elements.title?.value }));
       ok("C2d · Book review from inside More still opens the diary editor prefilled", appt.form && appt.title === "Rate-end review", JSON.stringify(appt));

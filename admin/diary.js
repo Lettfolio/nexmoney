@@ -184,7 +184,7 @@ function diaryTasksByDay(rows) {
 function diaryTaskChipHtml(t, todayStr) {
   const overdue = t.due_date && t.due_date < todayStr;
   const tip = `Task${overdue ? " (overdue)" : ""}: ${t.title || "(untitled)"}${t.assigned_to ? " · " + staffName(t.assigned_to) : " · unassigned"}. Click to open the case.`;
-  const click = t.case_id ? ` onclick="event.stopPropagation();openCase('${jsArg(t.case_id)}')"` : "";
+  const click = t.case_id ? ` data-stop ${actAttr("openCase", t.case_id)}` : "";
   return `<div class="diary-task${overdue ? " overdue" : ""}${t.case_id ? "" : " no-case"}" title="${esc(tip)}"${click}><span class="dt-mark">☑</span><span class="dt-title">${esc(t.title || "(untitled task)")}</span></div>`;
 }
 /* R13 · M-31: THE DIARY'S HALF OF ABSENCE: the band, and the panel. The all-day band(s) for one date,
@@ -374,7 +374,7 @@ async function loadDiary() {
            struck through: the meeting is still on the record but it did not happen… */
         const outcomeSet = isApptOutcome(a.outcome);
         const outcomeStruck = a.outcome === "no_show" || a.outcome === "rearranged";
-        return `<div class="appt${partner ? " clash" : ""}${outcomeSet ? " has-outcome outcome-" + a.outcome : ""}${outcomeStruck ? " outcome-struck" : ""}" draggable="true" data-appt="${esc(a.id)}" data-title="${esc(a.title)}" onclick="openAppt('${a.id}')"${colorStyle}${clashTitle}>
+        return `<div class="appt${partner ? " clash" : ""}${outcomeSet ? " has-outcome outcome-" + a.outcome : ""}${outcomeStruck ? " outcome-struck" : ""}" draggable="true" data-appt="${esc(a.id)}" data-title="${esc(a.title)}" ${actAttr("openAppt", a.id)}${colorStyle}${clashTitle}>
         ${partner ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : ""}<span class="at">${new Date(a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</span> ${esc(a.title)}
         ${outcomeSet ? `<div>${apptOutcomeChipHtml(a.outcome)}</div>` : ""}
         ${chip ? `<div>${chip}</div>` : ""}
@@ -564,7 +564,7 @@ function diaryLaneBlocksHtml(appts, who, apptCtx) {
     const chip = propCtxChip(ctx, a.case_id, "row-prop");
     /* R75 · A2: DRAG TO MOVE. `draggable` + the id on the element is the whole contract, exactly as the
        pipeline board's cards carry it (wireBoardDnD): the handlers are delegated and wired per paint… */
-    const box = `style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" draggable="true" data-appt="${esc(a.id)}" data-title="${esc(a.title)}" onclick="openAppt('${a.id}')"`;
+    const box = `style="top:${top}px;height:${height}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 4px);${colorStyle}" draggable="true" data-appt="${esc(a.id)}" data-title="${esc(a.title)}" ${actAttr("openAppt", a.id)}`;
     const warn = isClash ? `<span class="clash-tag" title="${esc(clashWords)}" aria-label="${esc(clashWords)}">⚠</span> ` : "";
     const whoName = a.clients ? [a.clients.first_name, a.clients.last_name].filter(Boolean).join(" ") : "";
     const staffLine = a.staff_id && who === "all" ? staffName(a.staff_id) : "";
@@ -762,7 +762,7 @@ function diaryLaneClickTime(lane, clientY) {
   return `${pad2(DIARY_DAY_START_HOUR + Math.floor(mins / 60))}:${pad2(mins % 60)}`;
 }
 if ($("#diary-week-view")) $("#diary-week-view").addEventListener("click", (e) => {
-  if (e.target.closest(".appt-block")) return;    // a block's own onclick opens it
+  if (e.target.closest(".appt-block, [data-act]")) return;    // a block / task chip opens itself (R95 · C2)
   const lane = e.target.closest(".dw-lane");
   if (!lane || !lane.dataset.date) return;
   openAppt(null, { starts_at: `${lane.dataset.date}T${diaryLaneClickTime(lane, e.clientY)}` });
@@ -892,7 +892,7 @@ window.diaryMoveAppt = diaryMoveAppt;   // the drag is pointer-only; tests and t
 // Click an empty part of the lane → new appointment prefilled with the clicked time (rounded to
 // the nearest half hour); clicks on an appointment block are handled by the block's own onclick.
 $("#diary-day-lane").addEventListener("click", (e) => {
-  if (e.target.closest(".appt-block")) return;
+  if (e.target.closest(".appt-block, [data-act]")) return;   // R95 · C2: a task chip's data-act no longer stops propagation
   const lane = $("#diary-day-lane");
   const rect = lane.getBoundingClientRect();
   const totalMinutes = (DIARY_DAY_END_HOUR - DIARY_DAY_START_HOUR) * 60;
@@ -973,7 +973,7 @@ $("#new-appt-btn").addEventListener("click", () => openAppt(null));
 // Click an empty part of a day cell → New appointment pre-filled with that date (QW9).
 // Clicks on an appointment inside a cell are handled by the appointment's own onclick.
 $("#diary-grid").addEventListener("click", (e) => {
-  if (e.target.closest(".appt")) return;
+  if (e.target.closest(".appt, [data-act]")) return;   // R95 · C2: a task chip's data-act no longer stops propagation
   const cell = e.target.closest(".diary-day");
   if (!cell || !cell.dataset.date) return;
   openAppt(null, { starts_at: cell.dataset.date + "T10:00" });
@@ -1374,4 +1374,4 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_diary = "r94";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_diary = "r95";   // R89 — the CTO bumps all seven together at each gate

@@ -785,7 +785,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   const advName = (a) => {
     const target = a.id === null ? "unassigned" : (a.offTeam ? null : a.id);
     return target
-      ? `<button type="button" class="linkish" onclick="reportGotoAdviser('${esc(target)}')" title="Open the pipeline filtered to ${esc(a.name)}">${esc(a.name)}</button>`
+      ? `<button type="button" class="linkish" ${actAttr("reportGotoAdviser", target)} title="Open the pipeline filtered to ${esc(a.name)}">${esc(a.name)}</button>`
       : esc(a.name);
   };
   // T1-18: the sample size travels with the average. In a month where every adviser has exactly one
@@ -874,9 +874,9 @@ function renderThreadedPanels(all, mv, repAdvisers) {
     </tr>
   </table>
   ${advRowsQuiet.length && advRows.length !== advRowsAll.length
-    ? `<p class="panel-sub u-m-8-0-0" id="report-scoreboard-quiet">${advRowsQuiet.length} row${advRowsQuiet.length === 1 ? "" : "s"} with nothing this month hidden (${esc(advRowsQuiet.map((r) => r.name).join(", "))}) — counted in the totals. <button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Show all</button></p>`
+    ? `<p class="panel-sub u-m-8-0-0" id="report-scoreboard-quiet">${advRowsQuiet.length} row${advRowsQuiet.length === 1 ? "" : "s"} with nothing this month hidden (${esc(advRowsQuiet.map((r) => r.name).join(", "))}) — counted in the totals. <button type="button" class="linkish" id="report-scoreboard-showall" ${actAttr("toggleScoreboardShowAll")}>Show all</button></p>`
     : advRowsQuiet.length && scoreboardShowAll && advRowsAll.some((r) => !advRowQuiet(r))
-      ? `<p class="panel-sub u-m-8-0-0" id="report-scoreboard-quiet"><button type="button" class="linkish" id="report-scoreboard-showall" onclick="toggleScoreboardShowAll()">Hide the ${advRowsQuiet.length} empty row${advRowsQuiet.length === 1 ? "" : "s"}</button></p>`
+      ? `<p class="panel-sub u-m-8-0-0" id="report-scoreboard-quiet"><button type="button" class="linkish" id="report-scoreboard-showall" ${actAttr("toggleScoreboardShowAll")}>Hide the ${advRowsQuiet.length} empty row${advRowsQuiet.length === 1 ? "" : "s"}</button></p>`
       : ""}
   <p class="panel-sub u-m-8-0-0" id="report-scoreboard-reconcile">The ${openSum} open cases above ${openSum === liveTotal ? "<strong>reconcile with</strong>" : "<strong>do not reconcile with</strong>"} the ${liveTotal} live cases on the Money &amp; book tiles${unassignedLive ? ` · ${unassignedLive} of them unassigned` : ""}.</p>` : `<div class="empty">No adviser activity in ${label}.</div>`;
   }
@@ -894,7 +894,7 @@ function renderCohortFunnel(all, mv) {
   $("#report-funnel").innerHTML = monthCases.length ? STAGES.map(([s, l]) => {
     const n = monthCases.filter((c) => c.stage === s).length;
     return n ? `
-    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;cursor:pointer;" class="funnel-row" onclick="reportGotoStage('${s}')" title="Open the pipeline at the ${esc(l)} stage">
+    <div style="display:flex;align-items:center;gap:8px;margin:3px 0;cursor:pointer;" class="funnel-row" ${actAttr("reportGotoStage", s)} title="Open the pipeline at the ${esc(l)} stage">
       <span style="width:90px;font-size:12px;color:var(--muted);">${l}</span>
       <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(n / maxF) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
       <span style="width:24px;font-size:12px;font-weight:600;">${n}</span>
@@ -973,7 +973,7 @@ function renderLeadSourcesPanel(all, mv) {
     ${Object.entries(srcMap).sort((a, b) => b[1].cases - a[1].cases).map(([k, v]) => {
       const disp = displayOf(k, v);
       return `<tr>
-      <td>${k === "(not set)" ? esc(disp) : `<button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(disp)}')" title="Open the pipeline filtered to ${esc(disp)}">${esc(disp)}</button>`}</td>
+      <td>${k === "(not set)" ? esc(disp) : `<button type="button" class="linkish" ${actAttr("reportGotoSearch", disp)} title="Open the pipeline filtered to ${esc(disp)}">${esc(disp)}</button>`}</td>
       <td>${v.cases}</td>
       <td>${v.live}</td>
       <td>${v.completed}</td>
@@ -1151,14 +1151,14 @@ function renderBookForecast(all) {
       <span style="width:90px;font-size:12px;color:var(--muted);">${b.label}</span>
       <div style="flex:1;background:var(--light);border-radius:4px;"><div style="width:${(b.weighted / maxW) * 100}%;background:var(--orange);border-radius:4px;height:16px;"></div></div>
       <span style="width:150px;font-size:12px;font-weight:600;text-align:right;">${b.cases} case${b.cases === 1 ? "" : "s"} · ${fmtM(b.weighted)}</span>
-      ${canExpand ? `<button type="button" class="btn btn-sm" id="report-forecast-none-toggle" onclick="toggleForecastNoneList()">▸ Show</button>` : ""}
+      ${canExpand ? `<button type="button" class="btn btn-sm" id="report-forecast-none-toggle" ${actAttr("toggleForecastNoneList")}>▸ Show</button>` : ""}
     </div>`;
     const expandList = canExpand ? `
     <div id="report-forecast-none-list" class="hidden" style="margin:0 0 8px 98px;">
       ${b.list.map((c) => `
         <div class="row-item" style="padding:6px 8px;">
           <div class="row-main">
-            <div class="t u-pointer" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</div>
+            <div class="t u-pointer" ${actAttr("openCase", c.id)}>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</div>
             <div class="s">${esc(STAGE_LABEL[c.stage] || c.stage)}${c.assigned_to ? " · " + esc(initials(c.assigned_to)) : ""}</div>
           </div>
         </div>`).join("")}
@@ -1179,10 +1179,10 @@ function renderBookForecast(all) {
           ? `gap <strong>${fmtM(gap)}</strong>`
           : `<strong>${fmtM(-gap)}</strong> ahead of target`}</span>`;
       } else {
-        line = `<span id="report-forecast-target-line">No monthly fee target is set, so there is no gap to read this against — <button type="button" class="linkish" id="report-forecast-target-set" onclick="nav('settings', true, 'firm')">set one in Settings › Firm & rules</button>.</span>`;
+        line = `<span id="report-forecast-target-line">No monthly fee target is set, so there is no gap to read this against — <button type="button" class="linkish" id="report-forecast-target-set" ${actAttr("nav", "settings", true, "firm")}>set one in Settings › Firm & rules</button>.</span>`;
       }
       const noneLine = buckets.none.cases
-        ? ` · <button type="button" class="linkish" id="report-forecast-none-line" onclick="toggleForecastNoneList()" title="Show which cases have no expected completion date">${buckets.none.cases} case${buckets.none.cases === 1 ? "" : "s"} (${fmtM(buckets.none.weighted)} weighted) ${buckets.none.cases === 1 ? "has" : "have"} no expected completion date</button>`
+        ? ` · <button type="button" class="linkish" id="report-forecast-none-line" ${actAttr("toggleForecastNoneList")} title="Show which cases have no expected completion date">${buckets.none.cases} case${buckets.none.cases === 1 ? "" : "s"} (${fmtM(buckets.none.weighted)} weighted) ${buckets.none.cases === 1 ? "has" : "have"} no expected completion date</button>`
         : "";
       tEl.innerHTML = `<p class="panel-sub rep-forecast-target">${line}${noneLine}</p>`;
     }
@@ -1379,7 +1379,7 @@ function renderPipelineMI(all, mv) {
   const stepPct = (num, den) => (den ? Math.round((num / den) * 100) + "%" : "—");
   /* R77 · A3: THE COVERAGE GUARD: NEVER PRINT 3000%. A later milestone counting MORE cases than the one
      before it is not a conversion rate, it is a hole in the dates. */
-  const miCoverageClause = (n) => `<button type="button" class="linkish mi-coverage-clause" onclick="miGotoMilestoneHealth()" title="Open Data health at the missing application/offer date list">date coverage too thin — ${n} case${n === 1 ? " is" : "s are"} missing application/offer dates → fix in Data health</button>`;
+  const miCoverageClause = (n) => `<button type="button" class="linkish mi-coverage-clause" ${actAttr("miGotoMilestoneHealth")} title="Open Data health at the missing application/offer date list">date coverage too thin — ${n} case${n === 1 ? " is" : "s are"} missing application/offer dates → fix in Data health</button>`;
   const stepCell = (num, den) => (num > den ? miCoverageClause(missMilestone) : stepPct(num, den));
   $("#report-mi-conversion").innerHTML = `
     <table class="imp-table">
@@ -1563,9 +1563,9 @@ function renderMiScoreboard(all, mv) {
   const miQuiet = boardRowsAll.filter(miRowQuiet);
   const boardRows = (scoreboardShowAll || !boardRowsAll.some((a) => !miRowQuiet(a))) ? boardRowsAll : boardRowsAll.filter((a) => !miRowQuiet(a));
   const miQuietLine = miQuiet.length && boardRows.length !== boardRowsAll.length
-    ? ` <button type="button" class="linkish" id="report-mi-scoreboard-showall" onclick="toggleScoreboardShowAll()">Show all (${miQuiet.length} hidden: ${esc(miQuiet.map((a) => a.name).join(", "))})</button>`
+    ? ` <button type="button" class="linkish" id="report-mi-scoreboard-showall" ${actAttr("toggleScoreboardShowAll")}>Show all (${miQuiet.length} hidden: ${esc(miQuiet.map((a) => a.name).join(", "))})</button>`
     : miQuiet.length && scoreboardShowAll && boardRowsAll.some((a) => !miRowQuiet(a))
-      ? ` <button type="button" class="linkish" id="report-mi-scoreboard-showall" onclick="toggleScoreboardShowAll()">Hide the ${miQuiet.length} empty row${miQuiet.length === 1 ? "" : "s"}</button>` : "";
+      ? ` <button type="button" class="linkish" id="report-mi-scoreboard-showall" ${actAttr("toggleScoreboardShowAll")}>Hide the ${miQuiet.length} empty row${miQuiet.length === 1 ? "" : "s"}</button>` : "";
   $("#report-mi-scoreboard-scope").innerHTML = `Live cases as of now; completed and fees written for ${esc(label)}; win rate and median cycle all-time. Sorted by fees written.${miQuietLine}`;
   $("#report-mi-scoreboard").innerHTML = boardRows.length ? `<table class="imp-table">
     <tr><th>Adviser</th><th>Live</th><th title="Completed in ${esc(label)}">Completed</th><th title="Broker + proc fee on cases completed in ${esc(label)}">Fees written</th><th title="All-time completed ÷ (completed + not proceeding)">Win rate</th><th title="All-time median days, created → completed">Median cycle</th></tr>
@@ -1618,6 +1618,7 @@ function miCsv(filename, header, rows) {
   a.click();
 }
 
+/* R95 · C1: the drill-down's "Open" row button was two inline calls; data-act names one global. */
 /* R20: the reusable drill-down modal. Reuses the existing #modal / openModal() infra (same pattern as the
    merge/appointment modals: set #modal.innerHTML, then openModal()). */
 function miDrilldown(title, cases) {
@@ -1632,7 +1633,7 @@ function miDrilldown(title, cases) {
       <td>${esc(STAGE_LABEL[c.stage] || c.stage)}</td>
       <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">Unassigned</span>'}</td>
       <td class="num">${fmtM(feeOf(c))}</td>
-      <td><button type="button" class="btn btn-sm" onclick="closeModal(); openCase('${c.id}')">Open</button></td>
+      <td><button type="button" class="btn btn-sm" ${actAttr("closeModalOpenCase", c.id)}>Open</button></td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No cases match.</div>';
   $("#modal").innerHTML = `<div id="mi-drilldown" class="mi-drilldown">
@@ -2185,18 +2186,18 @@ function renderBookKpis(c) {
      further down this page can never disagree by a penny. Pure arithmetic over rows already in hand; no read. */
   const owedNow = moneyOwedModel(all);
   $("#report-kpis").innerHTML = `
-    <div class="kpi dq-clickable" onclick="kpiGoto('completed')" title="View completed cases in the pipeline"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
-    <div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
-    ${money ? `<div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>` : ""}
+    <div class="kpi dq-clickable" ${actAttr("kpiGoto", "completed")} title="View completed cases in the pipeline"><div class="num">${completedYr.length}</div><div class="lbl">Completions ${yr}</div></div>
+    <div class="kpi dq-clickable" ${actAttr("kpiGoto", "active")} title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Live cases</div></div>
+    ${money ? `<div class="kpi dq-clickable" ${actAttr("kpiGoto", "active")} title="View the pipeline — loan value of the ${active.length} live cases"><div class="num" title="${esc(fmtM(pipelineValue))}">${fmtM(pipelineValue)}</div><div class="lbl">Pipeline loan value</div></div>` : ""}
     ${money ? `<div class="kpi kpi-headline"><div class="num" title="${esc(fmtM(earnedYr.total))}">${fmtM(earnedYr.total)}</div><div class="lbl">Fees earned ${yr}</div>${basisLine(BASIS_EARNED_YTD + ` — ${earnedYr.n} completion${earnedYr.n === 1 ? "" : "s"}, paid or not`)}</div>
     
     <div class="kpi kpi-secondary kpi-wide"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div>${basisLine(BASIS_CASH_YTD + (feesPaidYrFutureN ? ` — includes ${fmtM(feesPaidYrFuture)} dated after today (${feesPaidYrFutureN}); ${fmtM(feesPaidYr - feesPaidYrFuture)} actually received` : ""))}</div>
     
-    <div class="kpi dq-clickable ${feesOutstanding ? "warn" : ""}" onclick="kpiGoto('fees')" title="Broker fees on cases at ANY stage with no payment recorded — fee_status “not requested” or “requested”. Not proceeding is excluded. View the Protection &amp; Fees drawer — Fees due tab."><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Broker fees outstanding (all stages)</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>
-    <div class="kpi dq-clickable ${owedNow.grand ? "warn" : ""}" id="report-kpi-owed" onclick="gotoMoneyOwed()" title="Procuration, solicitor and broker fees on cases that have COMPLETED and carry no paid date — the money the firm has earned and not been paid. A wider set of fee types than the tile beside it, over a narrower set of cases. Opens Money owed on the Money tab."><div class="num" title="${esc(fmtM(owedNow.grand))}">${fmtM(owedNow.grand)}</div><div class="lbl">Owed on completed cases</div>${basisLine(`(proc + sols + broker · earned, not yet received · ${owedNow.n} completed case${owedNow.n === 1 ? "" : "s"})`)}</div>` : ""}
+    <div class="kpi dq-clickable ${feesOutstanding ? "warn" : ""}" ${actAttr("kpiGoto", "fees")} title="Broker fees on cases at ANY stage with no payment recorded — fee_status “not requested” or “requested”. Not proceeding is excluded. View the Protection &amp; Fees drawer — Fees due tab."><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Broker fees outstanding (all stages)</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>
+    <div class="kpi dq-clickable ${owedNow.grand ? "warn" : ""}" id="report-kpi-owed" ${actAttr("gotoMoneyOwed")} title="Procuration, solicitor and broker fees on cases that have COMPLETED and carry no paid date — the money the firm has earned and not been paid. A wider set of fee types than the tile beside it, over a narrower set of cases. Opens Money owed on the Money tab."><div class="num" title="${esc(fmtM(owedNow.grand))}">${fmtM(owedNow.grand)}</div><div class="lbl">Owed on completed cases</div>${basisLine(`(proc + sols + broker · earned, not yet received · ${owedNow.n} completed case${owedNow.n === 1 ? "" : "s"})`)}</div>` : ""}
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
     <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>
-    <div class="kpi ${scored.length ? "dq-clickable" : ""}" ${scored.length ? `id="report-nps-tile" onclick="toggleNpsList()" title="List every case that returned a review score"` : ""}><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}${scored.length ? " ▾" : ""}</div></div>`;
+    <div class="kpi ${scored.length ? "dq-clickable" : ""}" ${scored.length ? `id="report-nps-tile" ${actAttr("toggleNpsList")} title="List every case that returned a review score"` : ""}><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}${scored.length ? " ▾" : ""}</div></div>`;
   activateAll("#report-kpis .kpi.dq-clickable");   // R73 · B1 — same gesture as the other three
   return scored;
 }
@@ -2257,7 +2258,7 @@ function renderBookIntroducers(c) {
   $("#report-introducers").innerHTML = Object.keys(iMap).length
     ? `<table class="imp-table"><tr><th>Introducer</th><th>Cases</th><th title="Still in the live pipeline — neither won nor lost, and excluded from Conversion">Live</th><th>Completed</th><th title="${esc(CONV_TH_TITLE)}">Conversion</th><th>Last referral</th>${money ? `<th title="Fee value earned on this introducer's completed cases, all time. Not scoped to the month picker, and not cash — some of it may still be unpaid.">Revenue</th>` : ""}</tr>` +
       Object.entries(iMap).sort((a, b) => b[1].total - a[1].total)
-        .map(([k, v]) => `<tr><td><button type="button" class="linkish" onclick="reportGotoSearch('${jsArg(k)}')" title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button></td><td>${v.total}</td><td>${v.live}</td><td>${v.done}</td><td>${convCell(v.done, v.lost)}</td><td>${fmtD(v.last)}</td>${money ? `<td class="num">${fmtM(v.revenue)}</td>` : ""}</tr>`).join("") + `</table>`
+        .map(([k, v]) => `<tr><td><button type="button" class="linkish" ${actAttr("reportGotoSearch", k)} title="Open the pipeline filtered to ${esc(k)}">${esc(k)}</button></td><td>${v.total}</td><td>${v.live}</td><td>${v.done}</td><td>${convCell(v.done, v.lost)}</td><td>${fmtD(v.last)}</td>${money ? `<td class="num">${fmtM(v.revenue)}</td>` : ""}</tr>`).join("") + `</table>`
       // R5-17: the Revenue basis sits UNDER the table rather than in the column head: this panel shares a
       // two-column grid with the completions chart…
       + (money ? `<p class="panel-sub u-m-8-0-0">Revenue ${esc(BASIS_INTRO_REV)} — fee value on completed cases, paid or not.</p>` : "")
@@ -2560,7 +2561,7 @@ function renderNpsList(scored) {
     const when = c.completed_at || c.updated_at || c.created_at;
     return `<div class="nps-row ${cls}">
       <span class="nps-score">${n}/10</span>
-      <button type="button" class="linkish" onclick="openCase('${c.id}')" title="Open this case">${esc(name)}</button>
+      <button type="button" class="linkish" ${actAttr("openCase", c.id)} title="Open this case">${esc(name)}</button>
       <span class="nps-meta">${c.assigned_to ? esc(profileName(c.assigned_to) || staffName(c.assigned_to)) : "unassigned"}${when ? " · " + fmtD(when) : ""}</span>
     </div>`;
   }).join("");
@@ -2732,14 +2733,14 @@ function advPromotersBlockHtml(all, ctx) {
           : "";
       return `<div class="row-item adv-promo-row" data-client="${esc(c.client_id)}" data-case="${esc(c.id)}">
         <div class="row-main">
-          <div class="t"><button type="button" class="linkish" onclick="openClient('${jsArg(c.client_id)}')" title="Open this client's record">${esc(name)}</button>${flag}</div>
+          <div class="t"><button type="button" class="linkish" ${actAttr("openClient", c.client_id)} title="Open this client's record">${esc(name)}</button>${flag}</div>
           <div class="s"><span class="adv-promo-score">${s}/10</span>${c.completed_at ? ` · completed ${fmtD(c.completed_at)}` : " · not completed"}${c.lender ? ` · ${esc(c.lender)}` : ""}${c.assigned_to ? ` · ${esc(staffName(c.assigned_to))}` : ""}</div>
           <div class="ret-row-acts adv-promo-acts">
-            <button type="button" class="btn btn-sm ret-row-chip adv-promo-call" onclick="event.stopPropagation();advPromoCallTask('${jsArg(c.id)}')" title="Add a call task on this case — assigned to the case's adviser, due tomorrow (a weekend landing rolls to Monday). A thank-you call is how most referral asks actually happen.">✆ Call task</button>
-            ${optedOut || noEmail ? "" : `<button type="button" class="btn btn-sm ret-row-chip adv-promo-ask" onclick="event.stopPropagation();advPromoAsk('${jsArg(c.id)}', event)" title="Queue the house referral-request email for this client — the same writer as every other send, so the hold, the opt-out rule and the unsubscribe footer all apply.">✉ Queue referral request</button>`}
+            <button type="button" class="btn btn-sm ret-row-chip adv-promo-call" data-stop ${actAttr("advPromoCallTask", c.id)} title="Add a call task on this case — assigned to the case's adviser, due tomorrow (a weekend landing rolls to Monday). A thank-you call is how most referral asks actually happen.">✆ Call task</button>
+            ${optedOut || noEmail ? "" : `<button type="button" class="btn btn-sm ret-row-chip adv-promo-ask" data-stop ${actAttr("advPromoAsk", c.id, "$event")} title="Queue the house referral-request email for this client — the same writer as every other send, so the hold, the opt-out rule and the unsubscribe footer all apply.">✉ Queue referral request</button>`}
           </div>
         </div>
-        <button class="btn btn-sm" onclick="openCase('${jsArg(c.id)}')">Open case</button>
+        <button class="btn btn-sm" ${actAttr("openCase", c.id)}>Open case</button>
       </div>`;
     }).join("") + (m.waiting.length > 50 ? `<div class="empty">…and ${m.waiting.length - 50} more — queue or call the ones above first.</div>` : "") + `</div>`;
   }
@@ -2883,7 +2884,7 @@ function renderAdvocacy(all, ctx) {
     rows.forEach((c) => { if (c.client_id && !nameById[c.client_id]) { const n = nameOf(c); if (n) nameById[c.client_id] = n; } });
     topBlock = list.length
       ? `<table id="adv-top-table"><tr><th>Referrer</th><th class="num" title="Distinct people they have sent us.">Referrals</th><th class="num" title="How many of those referred cases have completed.">Completed</th>${money ? `<th class="num" title="Fee value (proc + broker + sols) earned on this referrer's referred cases that completed — paid or not. All time.">Converted value</th>` : ""}</tr>`
-        + list.map((v) => `<tr data-referrer="${esc(v.id)}"><td><button type="button" class="linkish" onclick="openClient('${jsArg(v.id)}')" title="Open this client's record">${esc(nameById[v.id] || "(client not in this view)")}</button></td><td class="num">${v.clients.size}</td><td class="num">${v.done}</td>${money ? `<td class="num adv-value">${fmtM(v.value)}</td>` : ""}</tr>`).join("")
+        + list.map((v) => `<tr data-referrer="${esc(v.id)}"><td><button type="button" class="linkish" ${actAttr("openClient", v.id)} title="Open this client's record">${esc(nameById[v.id] || "(client not in this view)")}</button></td><td class="num">${v.clients.size}</td><td class="num">${v.done}</td>${money ? `<td class="num adv-value">${fmtM(v.value)}</td>` : ""}</tr>`).join("")
         + `</table>`
         + howFold({ id: "adv-top-how", title: "How this is counted", html: money ? `<p class="adv-basis" id="adv-top-basis">Converted value ${esc(BASIS_INTRO_REV)} — fee value on completed referred cases, paid or not.</p>`
           : `<p class="adv-basis" id="adv-top-basis">Referral counts only — fee value is not shown at your access level.</p>` })
@@ -2900,7 +2901,7 @@ function renderAdvocacy(all, ctx) {
         const who = t.cases?.clients ? [t.cases.clients.first_name, t.cases.clients.last_name].filter(Boolean).join(" ") : "(client unknown)";
         const late = t.due_date && t.due_date < todayStr;
         return `<tr data-task="${esc(t.id)}"><td>${esc(who)}</td><td>${esc(t.title)}</td><td class="num${late ? " cs-danger-txt" : ""}">${t.due_date ? fmtD(t.due_date) : "—"}${late ? " <span class=\"badge red\">overdue</span>" : ""}</td><td>${t.assigned_to ? esc(staffName(t.assigned_to)) : '<span class="cs-muted">unassigned</span>'}</td>`
-          + `<td>${t.case_id ? `<button type="button" class="btn btn-sm adv-open-btn" onclick="openCase('${jsArg(t.case_id)}')" title="Open the case — the timeline holds what the client actually said">Open</button>` : ""}</td></tr>`;
+          + `<td>${t.case_id ? `<button type="button" class="btn btn-sm adv-open-btn" ${actAttr("openCase", t.case_id)} title="Open the case — the timeline holds what the client actually said">Open</button>` : ""}</td></tr>`;
       }).join("")
       + `</table>`
       + howFold({ id: "adv-detractor-how", title: "How this is counted", html: `<p class="adv-basis" id="adv-detractor-basis">${openTasks.length} open review-feedback task${openTasks.length === 1 ? "" : "s"}${overdueN ? ` · <strong>${overdueN} overdue</strong>` : ""} — raised when an unhappy client answers; their words are on the case timeline.</p>` })
@@ -3080,8 +3081,8 @@ async function renderApptOutcomes() {
     + (repeat.length
       ? `<div id="report-outcomes-noshow-list">${repeat.map((c) => `
         <div class="row-item" data-client="${esc(c.id)}">
-          <div class="row-main"><div class="t" onclick="openClient('${jsArg(c.id)}')">${esc(c.name)}</div><div class="s"><strong>${c.n}</strong> recorded no-show${c.n === 1 ? "" : "s"} · last one ${esc(fmtD(c.last))}</div></div>
-          <button class="btn btn-sm" onclick="openClient('${jsArg(c.id)}')">Open</button>
+          <div class="row-main"><div class="t" ${actAttr("openClient", c.id)}>${esc(c.name)}</div><div class="s"><strong>${c.n}</strong> recorded no-show${c.n === 1 ? "" : "s"} · last one ${esc(fmtD(c.last))}</div></div>
+          <button class="btn btn-sm" ${actAttr("openClient", c.id)}>Open</button>
         </div>`).join("")}</div>`
       : emptyState({
         headline: "No client has 2+ recorded no-shows.",
@@ -3201,7 +3202,7 @@ async function renderReferralsOut(all, mv) {
         const b = REFERRAL_STATUS_BADGE[r.status] || ["grey", String(r.status)];
         return `<tr class="refout-row" data-ref-id="${esc(r.id)}">
           <td>${esc(fmtD(r.created_at))}</td>
-          <td>${r.case_id ? `<button type="button" class="linkish" onclick="openCase('${esc(r.case_id)}')" title="Open the case this referral was made from">${esc(r.client_name)}</button>` : esc(r.client_name)}</td>
+          <td>${r.case_id ? `<button type="button" class="linkish" ${actAttr("openCase", r.case_id)} title="Open the case this referral was made from">${esc(r.client_name)}</button>` : esc(r.client_name)}</td>
           <td>${esc(r.property || "—")}</td>
           <td>${esc(kindLabel(r.kind))}</td>
           <td>${esc(r.referred_to || "(not recorded)")}</td>
@@ -3247,7 +3248,7 @@ function renderReportExtras(rep) {
   $("#report-ltv").innerHTML = ltv.length ? `<table class="imp-table">
     <tr><th>Name</th><th>Cases</th><th>LTV</th></tr>
     ${ltv.map((c) => `<tr>
-      <td><button class="btn btn-sm" onclick="openClient('${c.client_id}')">${esc(c.name)}</button></td>
+      <td><button class="btn btn-sm" ${actAttr("openClient", c.client_id)}>${esc(c.name)}</button></td>
       <td>${c.cases ?? 0}</td>
       <td class="num">${fmtM(c.ltv)}</td>
     </tr>`).join("")}
@@ -3389,7 +3390,7 @@ function renderMoneyOwed(all) {
     const head = `<tr class="owed-group-row"><td><strong>${owedGroupBy === "lender" ? lenderIcon(name === "(no lender recorded)" ? "" : name) : ""}${esc(name)}</strong> <span class="cs-muted">${rows.length} case${rows.length === 1 ? "" : "s"}</span></td>${cellsFor(rows)}<td class="owed-cell"><strong>${fmtM(gTot)}</strong></td></tr>`;
     const caseRows = rows.slice().sort((a, b) => (b.days ?? -1) - (a.days ?? -1)).map((r) => {
       const parts = r.lines.map((l) => `${l.label} ${fmtM(l.amount)}`).join(" · ");
-      return `<tr class="owed-case-row" onclick="openCase('${r.id}')" title="Open this case">
+      return `<tr class="owed-case-row" ${actAttr("openCase", r.id)} title="Open this case">
         <td class="owed-case-cell">${esc([r.c.clients?.first_name, r.c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"}
           ${propChip(r.c, { cls: "row-prop" }) || ""}
           <div class="s">${esc(parts)}${r.c.completed_at ? ` · completed ${fmtD(r.c.completed_at)}` : ""}${r.days == null ? " · <em>no completion date recorded</em>" : ` · ${r.days}d`}</div></td>
@@ -3561,7 +3562,7 @@ function renderRateEndBook(all) {
 
   const rows = m.buckets.map((b) => {
     const open = rateEndOpen.has(b.key);
-    const head = `<tr class="rb-bucket-row${open ? " is-open" : ""}" onclick="toggleRateBucket('${b.key}')" title="${b.n ? "Show the cases behind this bucket" : "No maturities in this bucket"}">
+    const head = `<tr class="rb-bucket-row${open ? " is-open" : ""}" ${actAttr("toggleRateBucket", b.key)} title="${b.n ? "Show the cases behind this bucket" : "No maturities in this bucket"}">
       <td><span class="rb-caret">${b.n ? (open ? "▾" : "▸") : "·"}</span> <strong>${esc(b.label)}</strong> <span class="cs-muted">${esc(fmtD(b.from))} – ${esc(fmtD(b.to))}</span></td>
       <td>${b.n}</td>
       <td class="num">${fmtM(b.loan)}</td>
@@ -3571,7 +3572,7 @@ function renderRateEndBook(all) {
     if (!open || !b.n) return head;
     return head + b.entries.map((e) => {
       const c = e.c;
-      return `<tr class="rb-case-row" onclick="openCase('${c.id}')" title="Open this case">
+      return `<tr class="rb-case-row" ${actAttr("openCase", c.id)} title="Open this case">
         <td class="rb-case-cell">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"}
           ${propChip(c, { cls: "row-prop" }) || '<span class="cs-muted">no property recorded</span>'}
           ${e.dupes > 1 ? `<span class="badge grey" title="${e.dupes} cases share this property and this rate end date — counted once. The most recently completed one is shown.">${e.dupes} cases</span>` : ""}
@@ -3600,13 +3601,13 @@ function renderRateEndBook(all) {
       .slice(0, 20)
       .map((c) => `<div class="row-item rb-recover-row">
         <div class="row-main">
-          <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(c, { cls: "row-prop" }) || ""}</div>
+          <div class="t" ${actAttr("openCase", c.id)}>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ")) || "(no name)"} ${propChip(c, { cls: "row-prop" }) || ""}</div>
           <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "no lender")} — rate ended ${fmtD(c.rate_end_date)} (${daysSince(c.rate_end_date)} ${daysSince(c.rate_end_date) === 1 ? "day" : "days"} ago) · last fee ${caseLastFee(c) ? fmtM(caseLastFee(c)) : "none recorded"}</div>
           
           ${upliftLineHtml(c)}
         </div>
         ${retentionToMeHtml(c.id, c)}
-        <button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${c.id}', event)" title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>
+        <button class="btn btn-sm btn-retention" data-stop ${actAttr("startRetentionCase", c.id, "$event")} title="Create the follow-on remortgage case, the call task and a queued reminder">🔁 Start retention case</button>
       </div>`).join("")}${rec.uncovered.length > 20 ? `<div class="empty">…and ${rec.uncovered.length - 20} more.</div>` : ""}</div>`
       : '<div class="empty">Every completed case whose rate has ended already has a follow-on case. Nothing to recover. 👍</div>'}`;
 }
@@ -3756,13 +3757,13 @@ function renderLeadResponse(leads, cases) {
       + `An enquiry with no case behind it has no adviser — it was never accepted, or it was accepted before the lead-to-case link existed — and is counted in the “no adviser recorded” row rather than dropped.</p>` });
 
   const nBreach = m.breaching.length;
-  $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" onclick="gotoLeadInbox()" title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open My Day on Today.` : "Nothing is past the promise right now. Open My Day on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
+  $("#leadresp-tools").innerHTML = `<button type="button" class="btn btn-sm${nBreach ? " btn-danger" : ""}" id="leadresp-breach-btn" ${actAttr("gotoLeadInbox")} title="${nBreach ? `${nBreach} enquir${nBreach === 1 ? "y is" : "ies are"} past the ${LEAD_SLA_MIN}-minute promise right now — open My Day on Today.` : "Nothing is past the promise right now. Open My Day on Today."}">${nBreach ? `⏱ ${nBreach} breaching now` : "⏱ none breaching"} →</button>`;
 
   $("#report-leadresp-headline").innerHTML = [
     `<div class="kpi kpi-headline"><div class="num">${m.nResponded ? esc(fmtRespMins(m.median)) : "—"}</div><div class="lbl">Median response</div><div class="s">${m.nResponded} of ${m.nLeads} enquir${m.nLeads === 1 ? "y" : "ies"} answered</div></div>`,
     `<div class="kpi${m.p90 != null && m.p90 > LEAD_SLA_RED_MIN ? " bad" : ""}"><div class="num">${m.nResponded ? esc(fmtRespMins(m.p90)) : "—"}</div><div class="lbl">p90 response</div><div class="s">${m.nResponded ? `9 in 10 answered inside this` : "no answered enquiries yet"}</div></div>`,
     `<div class="kpi"><div class="num">${m.conv == null ? "—" : m.conv + "%"}</div><div class="lbl">Conversion</div><div class="s">${m.won} of ${m.nLeads} became a case</div></div>`,
-    `<div class="kpi dq-clickable${nBreach ? " bad" : ""}" onclick="gotoLeadInbox()" title="Open the waiting enquiries in My Day on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
+    `<div class="kpi dq-clickable${nBreach ? " bad" : ""}" ${actAttr("gotoLeadInbox")} title="Open the waiting enquiries in My Day on Today"><div class="num" id="leadresp-breach-n">${nBreach}</div><div class="lbl">Breaching now</div><div class="s">waiting over ${LEAD_SLA_MIN} min, nobody yet</div></div>`,
   ].join("");
 
   const tableFor = (groups, headWord, emptyWord) => {
@@ -3911,11 +3912,11 @@ async function loadMoneyPage() {
 
   /* ---- R89 · B — link, don't copy: where the retired read-only panels live. ---- */
   const links = $("#money-links");
-  if (links) links.innerHTML = `Also: <button type="button" class="linkish" id="money-link-rateend" onclick="repRevealPanel('#report-rateend-panel')">Rate-end book</button>`
-    + ` · <button type="button" class="linkish" id="money-link-advisers" onclick="repRevealPanel('#report-scoreboard-panel')">Adviser scoreboard</button>`
-    + ` · <button type="button" class="linkish" id="money-link-sources" onclick="repRevealPanel('#report-sources-panel')">Lead sources</button>`
-    + ` · <button type="button" class="linkish" id="money-link-quotes" onclick="nav('protection')">Protection quotes</button>`
-    + ` · <button type="button" class="linkish" id="money-link-pipeline" onclick="nav('pipeline')">Pipeline</button>.`;
+  if (links) links.innerHTML = `Also: <button type="button" class="linkish" id="money-link-rateend" ${actAttr("repRevealPanel", "#report-rateend-panel")}>Rate-end book</button>`
+    + ` · <button type="button" class="linkish" id="money-link-advisers" ${actAttr("repRevealPanel", "#report-scoreboard-panel")}>Adviser scoreboard</button>`
+    + ` · <button type="button" class="linkish" id="money-link-sources" ${actAttr("repRevealPanel", "#report-sources-panel")}>Lead sources</button>`
+    + ` · <button type="button" class="linkish" id="money-link-quotes" ${actAttr("nav", "protection")}>Protection quotes</button>`
+    + ` · <button type="button" class="linkish" id="money-link-pipeline" ${actAttr("nav", "pipeline")}>Pipeline</button>.`;
 
   /* R44 — the rate-card panel renders from data already in hand (R81 · A2): zero further network.
      It still carries its own owner gate. */
@@ -5103,4 +5104,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r94";   // R89
+window.__nxTag_reportsmoney = "r95";   // R89

@@ -585,7 +585,7 @@ async function mkCase(page, opts) {
       await page.waitForTimeout(2000);
       const badges = await page.evaluate((ids) => {
         const rowOf = (cid) => {
-          const t = document.querySelector(`#ret-cold-list .t[onclick="openClient('${cid}')"]`);
+          const t = document.querySelector(`#ret-cold-list .t[data-act="openClient"][data-args='["${cid}"]']`);
           return t ? t.closest(".row-item") : null;
         };
         const read = (cid) => {
@@ -641,7 +641,7 @@ async function mkCase(page, opts) {
        ===================================================================== */
     {
       console.log("\n— §G · introducer.html: forgot-password + recovery + honest copy (static — the live Supabase round-trip is untestable here)");
-      const html = fs.readFileSync(path.join(REPO, "admin", "introducer.html"), "utf8");
+      const html = fs.readFileSync(path.join(REPO, "admin", "introducer.html"), "utf8") + "\n" + fs.readFileSync(path.join(REPO, "admin", "introducer.js"), "utf8");   // R95 · E: the script moved to introducer.js
       ok("§G1 · the login card carries a “Forgot password?” button (#forgot-btn)",
         /id="forgot-btn"/.test(html) && /Forgot password\?/.test(html));
       ok("§G2 · it calls resetPasswordForEmail with redirectTo the INTRODUCER page, not the admin app",

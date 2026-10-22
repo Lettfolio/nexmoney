@@ -142,7 +142,7 @@ const rowFor = (page, sel, caseId) => page.evaluate(({ s, id }) => {
   const row = [...document.querySelectorAll(`${s} .row-item`)]
     /* R88 · C: on the Retention page the NAME opens the client and the case is a chip (.ret-case-chip);
        Today's drawer still names the case on .t — either carries the case id. */
-    .find((r) => { const t = r.querySelector(".ret-case-chip[onclick], .t[onclick*='openCase']"); return t && t.getAttribute("onclick").includes(`'${id}'`); });
+    .find((r) => { const t = r.querySelector(".ret-case-chip[data-act], .t[data-act='openCase']"); return t && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t).includes(`'${id}'`); });
   if (!row) return null;
   const tel = row.querySelector("a[href^='tel:']");
   const sms = row.querySelector("a[href^='sms:']");
@@ -155,13 +155,14 @@ const rowFor = (page, sel, caseId) => page.evaluate(({ s, id }) => {
     smsTitle: sms ? sms.getAttribute("title") : null,
     lastc: lastc ? lastc.textContent.trim() : null,
     never: !!row.querySelector(".ret-row-never"),
-    outChips: [...row.querySelectorAll(".ret-out-chip")].map((b) => b.getAttribute("onclick")),
+    outStops: [...row.querySelectorAll(".ret-out-chip")].map((b) => b.hasAttribute("data-stop")),
+    outChips: [...row.querySelectorAll(".ret-out-chip")].map((b) => ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b)),
   };
 }, { s: sel, id: caseId });
 
 const retRowIds = (page) => page.evaluate(() =>
-  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]   // R88 · C: the case is the chip
-    .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
+  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[data-act]")]   // R88 · C: the case is the chip
+    .map((el) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el).match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
 
 const notesFor = (page, caseId) => page.evaluate(async (id) => {
   const { data } = await window.__mockDb.from("case_notes").select("*");
@@ -303,7 +304,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     const t = tag();
     const c = await mkClientCase(page, { first: "R70A2", last: "Rowchip" + t, phone: "07700900811", case: { lender: "Halifax", rate_percent: 2.4, rate_end_date: ymd(-25), completed_at: ymd(-780), loan_amount: 180000, property_address: "1 R70 Row, Testtown TE7 0AA" } });
     await goPage(page, "retention", 2800);
-    await page.click(`#ret-rates-list button[onclick*="retLogCall('${c.caseId}')"]`);
+    await page.click(`#ret-rates-list button[data-act="retLogCall"][data-args*='"${c.caseId}"']`);
     await page.waitForTimeout(1200);
     await page.click("#ret-logcall-panel #cs-call-outcome-chips .tl-chip[data-outcome='No answer']");
     await page.waitForTimeout(250);
@@ -377,8 +378,8 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       const db = window.__mockDb;
       const win = 210 * 86400000;                       // ≥ the app's comms window at the 6-month default
       const since = Date.now() - win;
-      const ids = [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]   // R88 · C
-        .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean);
+      const ids = [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[data-act]")]   // R88 · C
+        .map((el) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el).match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean);
       const { data: cases } = await db.from("cases").select("id,client_id");
       const byId = {}; (cases || []).forEach((c) => { byId[c.id] = c.client_id; });
       const clientIds = [...new Set(ids.map((id) => byId[id]).filter(Boolean))];
@@ -452,7 +453,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       dRow && /retRateOutcome\('[^']+','renewed'\)/.test(dRow.outChips[0])
       && /retRateOutcome\('[^']+','sold'\)/.test(dRow.outChips[1])
       && dRow.outChips.length === 2, JSON.stringify(dRow && dRow.outChips));   // R87 · book (C3): no third chip
-    ok("C1c · …each stopping the row's own click-through to the case", dRow && dRow.outChips.every((h) => /event\.stopPropagation\(\)/.test(h)), JSON.stringify(dRow && dRow.outChips));
+    ok("C1c · …each stopping the row's own click-through to the case", dRow && dRow.outStops.length === 2 && dRow.outStops.every(Boolean), JSON.stringify(dRow && dRow.outStops));   // R95 · B: data-stop is the kit's stopPropagation
     eq("C1d · a LIVE row carries none — there is no rate end to record an outcome for", lRow && lRow.outChips.length, 0);
     eq("C1e · …and the drawer carries none either (page-only, like the rest of the cluster)",
       await page.evaluate(() => document.querySelectorAll("#alerts-rateerc .ret-out-chip").length), 0);
@@ -461,7 +462,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     /* R87 · book (C3): the outcome chips sit behind the row's "More ▾" <details>; open them first. */
     const openMore = () => page.evaluate(() => document.querySelectorAll("#ret-rates-list details.row-more").forEach((d) => { d.open = true; }));
     await openMore();
-    await page.click(`#ret-rates-list button[onclick*="retRateOutcome('${done.caseId}','renewed')"]`);
+    await page.click(`#ret-rates-list button[data-act="retRateOutcome"][data-args*='"${done.caseId}","renewed"']`);
     await page.waitForTimeout(1500);
     const renewOverlay = await page.evaluate(() => ({
       heading: (document.querySelector("#overlay-modal h3") || {}).textContent || "",
@@ -487,7 +488,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     // C3 — "Property sold" opens the SAME overlay on the other radio, and recording it works.
     await goPage(page, "retention", 2800);
     await openMore();   // R87 · book (C3)
-    await page.click(`#ret-rates-list button[onclick*="retRateOutcome('${sold.caseId}','sold')"]`);
+    await page.click(`#ret-rates-list button[data-act="retRateOutcome"][data-args*='"${sold.caseId}","sold"']`);
     await page.waitForTimeout(1500);
     const soldOverlay = await page.evaluate(() => ({
       checked: (document.querySelector('input[name="reo-kind"]:checked') || {}).value,
@@ -513,7 +514,7 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
     // C4 — the third chip is startRetentionCase, unchanged (native confirm, real successor).
     await goPage(page, "retention", 2800);
     page.__dialogs = [];
-    await page.click(`#ret-rates-list button[onclick*="startRetentionCase('${retain.caseId}', event)"]`);
+    await page.click(`#ret-rates-list button[data-act="startRetentionCase"][data-args*='"${retain.caseId}","$event"']`);
     await page.waitForTimeout(3200);
     ok("C4a · 'Re-mortgaging with us' asks the same confirm the row's own button asks",
       page.__dialogs.some((d) => d.type === "confirm" && /retention case/i.test(d.message)), JSON.stringify(page.__dialogs.slice(0, 2)));
@@ -588,8 +589,8 @@ const caseRow = (page, caseId) => page.evaluate(async (id) => {
       const owner = {}; (cases || []).forEach((c) => { owner[c.id] = c.client_id; });
       let bad = 0;
       [...document.querySelectorAll("#briefing-list .brief-row")].forEach((row) => {
-        const t = row.querySelector(".t[onclick]");
-        const m = t && (t.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || []);
+        const t = row.querySelector(".t[data-act]");
+        const m = t && (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t).match(/openCase\('([^']+)'\)/) || []);
         const cid = m && m[1] ? owner[m[1]] : null;
         if (cid && noPhone.has(cid) && row.querySelector("a[href^='tel:']")) bad++;
       });

@@ -607,7 +607,7 @@ const tasksOnCase = (page, caseId) => page.evaluate(async (cid) =>
         GT.openRevTasks.map((t) => [t.client, t.title]));
       ok("R9-2 · …and the count is stated in words underneath",
         shown.detrBasis.includes(`${GT.openRevTasks.length} open review-feedback task`), shown.detrBasis.slice(0, 160));
-      const opensCase = await page.evaluate(() => !!document.querySelector("#adv-detractor-table button[onclick^='openCase']"));
+      const opensCase = await page.evaluate(() => !!document.querySelector("#adv-detractor-table button[data-act='openCase']"));
       ok("R9-2 · …each linked to the case that holds what the client said", opensCase);
       ok("no console errors (dashboard)", !page.__err, JSON.stringify(page.__err));
       await page.close();

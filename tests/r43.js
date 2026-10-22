@@ -289,7 +289,7 @@ const selectSavedViews = (page) => page.evaluate(async () => {
       await wait(page, SETTLE);
 
       const rowsFor = (id) => page.evaluate((cid) => [...document.querySelectorAll("#alerts-rateerc .row-item")]
-        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && r.querySelector(".t").getAttribute("onclick")) || "").includes(`'${cid}'`)).length, id);
+        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".t"))) || "").includes(`'${cid}'`)).length, id);
 
       const srcRowsBefore = await rowsFor(src.caseId);
       ok("§3a · the seeded live source case shows in #alerts-rateerc before any successor", srcRowsBefore >= 1, srcRowsBefore);

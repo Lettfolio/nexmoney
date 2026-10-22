@@ -366,21 +366,21 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
 
   // mark received
   const sa302Id = afterAdd.find((d) => d.item === "Latest SA302").id;
-  await owner.click(`.doc-act[data-act="received"][data-doc="${sa302Id}"]`);
+  await owner.click(`.doc-act[data-doc-act="received"][data-doc="${sa302Id}"]`);
   await owner.waitForTimeout(700);
   const sa302 = await owner.evaluate(async (i) => (await window.__mockDb.from("case_documents").select("*").eq("id", i).single()).data, sa302Id);
   eq("Mark received sets the status and stamps received_at", [sa302.status, !!sa302.received_at], ["received", true]);
   ok("the row now shows the received chip", await exists(owner, `.doc-row[data-doc="${sa302Id}"][data-status="received"]`));
 
   // undo
-  await owner.click(`.doc-act[data-act="undo"][data-doc="${sa302Id}"]`);
+  await owner.click(`.doc-act[data-doc-act="undo"][data-doc="${sa302Id}"]`);
   await owner.waitForTimeout(700);
   const sa302b = await owner.evaluate(async (i) => (await window.__mockDb.from("case_documents").select("*").eq("id", i).single()).data, sa302Id);
   eq("Undo returns it to outstanding and clears the received date", [sa302b.status, sa302b.received_at], ["requested", null]);
 
   // waive, with a reason
   const lrId = afterAdd.find((d) => d.item === "Landlord reference").id;
-  await owner.click(`.doc-act[data-act="waive"][data-doc="${lrId}"]`);
+  await owner.click(`.doc-act[data-doc-act="waive"][data-doc="${lrId}"]`);
   await owner.waitForTimeout(400);
   ok("waiving asks why, and says plainly that it is not a delete",
     /not a delete/i.test(await txt(owner, "#overlay-modal") || ""));
@@ -399,7 +399,7 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
   // delete (owner)
   /* R74 · B3: deleting a checklist row is a destructive verb and asks in the HOUSE overlay now,
      not window.confirm. Same question, same words — read off the dialog's own body. */
-  await owner.click(`.doc-act[data-act="delete"][data-doc="${lrId}"]`);
+  await owner.click(`.doc-act[data-doc-act="delete"][data-doc="${lrId}"]`);
   await owner.waitForTimeout(500);
   const delConfirm = await owner.$eval("#ovl-confirm-body", (e) => e.textContent).catch(() => "");
   ok("delete confirms, and points at Waive as the thing you probably meant", /Waive instead/i.test(delConfirm), delConfirm);
@@ -412,18 +412,18 @@ const groundTruth = (page) => page.evaluate(async ({ CHASE_MAX }) => {
 
   console.log("\n=== R9-5 · ROLE RULES ===");
   eq("owner sees a delete control on every row",
-    await owner.$$eval('#docs-list .doc-act[data-act="delete"]', (e) => e.length),
+    await owner.$$eval('#docs-list .doc-act[data-doc-act="delete"]', (e) => e.length),
     await owner.$$eval("#docs-list .doc-row", (e) => e.length));
   const adviser = await newPage(browser, "p2");
   await openCase(adviser, G.ids.quirke);
-  eq("an adviser is offered NO delete control at all", await adviser.$$eval('#docs-list .doc-act[data-act="delete"]', (e) => e.length), 0);
+  eq("an adviser is offered NO delete control at all", await adviser.$$eval('#docs-list .doc-act[data-doc-act="delete"]', (e) => e.length), 0);
   ok("…but can still mark received and waive — the checklist is their daily work",
-    (await adviser.$$eval('#docs-list .doc-act[data-act="received"]', (e) => e.length)) > 0
-    && (await adviser.$$eval('#docs-list .doc-act[data-act="waive"]', (e) => e.length)) > 0);
+    (await adviser.$$eval('#docs-list .doc-act[data-doc-act="received"]', (e) => e.length)) > 0
+    && (await adviser.$$eval('#docs-list .doc-act[data-doc-act="waive"]', (e) => e.length)) > 0);
   const admin = await newPage(browser, "p1");
   await openCase(admin, G.ids.quirke);
   ok("an administrator does get delete (the rule is Owner/Administrator, not Owner)",
-    (await admin.$$eval('#docs-list .doc-act[data-act="delete"]', (e) => e.length)) > 0);
+    (await admin.$$eval('#docs-list .doc-act[data-doc-act="delete"]', (e) => e.length)) > 0);
 
   console.log("\n=== R9-5 · THE UPLOAD LINK ===");
   await openCase(owner, G.ids.ellingham);

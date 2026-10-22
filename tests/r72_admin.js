@@ -225,8 +225,8 @@ const wtState = (page) => page.evaluate(() => {
       hasCb: !!r.querySelector(".wt-cb"),
       checked: !!(r.querySelector(".wt-cb") || {}).checked,
       synth: r.classList.contains("wt-row-mine"),
-      hasSnooze: !!r.querySelector('button[onclick^="snoozeAlert"]'),
-      hasDismiss: !!r.querySelector('button[onclick^="resolveAlert"]'),
+      hasSnooze: !!r.querySelector('button[data-act="snoozeAlert"]'),
+      hasDismiss: !!r.querySelector('button[data-act="resolveAlert"]'),
     })),
   }));
   const bar = document.querySelector("#wt-bulk-bar");
@@ -558,7 +558,7 @@ function docSuggested(docsListRaw, kind) {
       const suggested = await page.$eval(`#briefing-list select.lead-adviser[data-lead="${lead}"]`, (s) => s.value).catch(() => null);
       ok("B5 · the lead row still SUGGESTS an adviser (the round-robin default is untouched)",
         !!suggested, String(suggested));
-      await page.click(`#briefing-list [onclick^="acceptLead('${lead}'"]`);
+      await page.click(`#briefing-list [data-act="acceptLead"][data-args^='["${lead}"']`);
       await wait(page, 2000);
       const leadCase = await page.evaluate(async (id) => {
         const { data: l } = await window.__mockDb.from("leads").select("converted_case_id").eq("id", id).single();
@@ -737,7 +737,7 @@ function docSuggested(docsListRaw, kind) {
       }]);
       await goto(page, "clients", 1000);
       await openWatchtower(page);
-      await page.click(`#watchtower-list button[onclick*="resolveAlert('${soloIds[0]}'"]`);
+      await page.click(`#watchtower-list button[data-act="resolveAlert"][data-args*='"${soloIds[0]}"']`);
       await wait(page, 1600);
       eq("C13 · the per-row Dismiss is untouched and still resolves its own row",
         (await alertRows(page, soloIds)).filter((a) => !!a.resolved_at).length, 1);

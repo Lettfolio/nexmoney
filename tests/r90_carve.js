@@ -133,10 +133,10 @@ const declares = (src, name) => new RegExp(`^(?:async\\s+)?(?:function\\*?\\s+|c
         ok(`A2 · ${label} loads core → reports-money → diary → import → vault → site → app, in that order`,
           at.every((v, i) => v >= 0 && (i === 0 || v > at[i - 1])), JSON.stringify(at));
       }
-      const tagRe = { "index.html": /window\.NX_BUILD_TAG\s*=\s*"([^"]+)"/, "core.js": /window\.__nxTag_core\s*=\s*"([^"]+)"/,
+      const tagRe = { "boot.js": /window\.NX_BUILD_TAG\s*=\s*"([^"]+)"/, "core.js": /window\.__nxTag_core\s*=\s*"([^"]+)"/,
         "reports-money.js": /window\.__nxTag_reportsmoney\s*=\s*"([^"]+)"/, "diary.js": /window\.__nxTag_diary\s*=\s*"([^"]+)"/,
         "import.js": /window\.__nxTag_import\s*=\s*"([^"]+)"/, "vault.js": /window\.__nxTag_vault\s*=\s*"([^"]+)"/, "site.js": /window\.__nxTag_site\s*=\s*"([^"]+)"/, "app.js": /window\.__nxTag_app\s*=\s*"([^"]+)"/ };
-      const tags = Object.fromEntries(Object.entries(tagRe).map(([f, re]) => { const m = (f === "index.html" ? idx : srcs[f]).match(re); return [f, m ? m[1] : null]; }));
+      const tags = Object.fromEntries(Object.entries(tagRe).map(([f, re]) => { const m = (f === "boot.js" ? rd("boot.js") : srcs[f]).match(re); return [f, m ? m[1] : null]; }));
       const tv = Object.values(tags);
       ok(`A3 · the eight tag literals are equal (${tv[0]})`, tv.length === 8 && tv.every((t) => t && t === tv[0]), JSON.stringify(tags));
       ok("A3 · app.js's boot compare names all eight tags", /const vals = \[window\.NX_BUILD_TAG, window\.__nxTag_core, window\.__nxTag_reportsmoney, window\.__nxTag_diary, window\.__nxTag_import, window\.__nxTag_vault, window\.__nxTag_site, window\.__nxTag_app\]/.test(srcs["app.js"]));
@@ -172,7 +172,7 @@ const declares = (src, name) => new RegExp(`^(?:async\\s+)?(?:function\\*?\\s+|c
       let out = "";
       try { out = execFileSync("node", ["build.js", "--hash"], { cwd: REPO, encoding: "utf8" }); } catch (e) { out = String(e); }
       const admin = out.split("\n").filter((l) => /^[0-9a-f]{64}\s+admin\//.test(l)).map((l) => l.trim().split(/\s+/)[1]);
-      eq("B2 · build.js --hash prints the eight admin files (R93 · F: + site.js)", admin, ["admin/core.js", "admin/reports-money.js", "admin/diary.js", "admin/import.js", "admin/vault.js", "admin/site.js", "admin/app.js", "admin/admin.css"]);
+      eq("B2 · build.js --hash prints the nine admin files (R93 · F: + site.js; R95 · C: + boot.js)", admin, ["admin/boot.js", "admin/core.js", "admin/reports-money.js", "admin/diary.js", "admin/import.js", "admin/vault.js", "admin/site.js", "admin/app.js", "admin/admin.css"]);
     }
 
     /* =====================================================================

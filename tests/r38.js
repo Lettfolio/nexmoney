@@ -199,8 +199,8 @@ async function rowIds(page, containerSel, fnName) {
   const press = () => page.evaluate(() => { const b = document.querySelector('#ret-segs .seg-btn[data-seg="cold"]'); if (b) b.click(); });
   if (cold) { await press(); await page.waitForTimeout(1800); }
   const ids = await page.evaluate(({ sel, fn }) => {
-    return [...document.querySelectorAll(sel + " .row-item .t[onclick], " + sel + " .row-item .ret-case-chip[onclick]")].map((el) => {
-      const m = el.getAttribute("onclick").match(new RegExp(fn + "\\('([^']+)'"));
+    return [...document.querySelectorAll(sel + " .row-item .t[data-act], " + sel + " .row-item .ret-case-chip[data-act]")].map((el) => {
+      const m = ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el).match(new RegExp(fn + "\\('([^']+)'"));
       return m ? m[1] : null;
     }).filter(Boolean);
   }, { sel: containerSel, fn: fnName });
@@ -512,7 +512,7 @@ async function groupHeadings(page, containerSel) {
 
       await goto(page, "retention", 1800);
       const rowSel = `#ret-rates-list tr, #ret-rates-list .row-item`;
-      const startBtnSel = `#ret-rates-list button.btn-retention[onclick*="startRetentionCase('${src.caseId}'"]`;
+      const startBtnSel = `#ret-rates-list button.btn-retention[data-act="startRetentionCase"][data-args*='"${src.caseId}"']`;
       await page.waitForSelector(startBtnSel, { timeout: 5000 }).catch(() => {});
       const btnPresent = await page.$(startBtnSel);
       ok("fixture · the seeded ended case shows a Start retention case button", !!btnPresent);
@@ -525,7 +525,7 @@ async function groupHeadings(page, containerSel) {
       const afterSource = await readCase(page, src.caseId);
       ok("§C4b · the source case is now stamped as reminded", !!afterSource.rate_reminder_queued_at, JSON.stringify(afterSource));
 
-      const flippedBtnGone = await page.evaluate((id) => !document.querySelector(`#ret-rates-list button.btn-retention[onclick*="startRetentionCase('${id}'"]`), src.caseId);
+      const flippedBtnGone = await page.evaluate((id) => !document.querySelector(`#ret-rates-list button.btn-retention[data-act="startRetentionCase"][data-args*='"${id}"']`), src.caseId);
       ok("§C4c · the row's \"Start retention case\" button is gone (it flipped)", flippedBtnGone);
 
       const allCases = await readAllCases(page);
@@ -617,7 +617,7 @@ async function groupHeadings(page, containerSel) {
       await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
       await wait(page, 1800);
       const agedRowText = await page.evaluate((id) => {
-        const row = [...document.querySelectorAll("#ret-cold-list .row-item")].find((r) => r.querySelector(`.t[onclick="openClient('${id}')"]`));
+        const row = [...document.querySelectorAll("#ret-cold-list .row-item")].find((r) => r.querySelector(`.t[data-act="openClient"][data-args='["${id}"]']`));
         return row ? row.textContent : null;
       }, aged.clId);
       ok("§E1d · the aged client's row shows the SAME last-contact age app.js itself computes", agedRowText && agedRowText.includes(expectedAge), JSON.stringify({ agedRowText, expectedAge }));

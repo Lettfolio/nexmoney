@@ -303,7 +303,7 @@ async function setTargetsViaEditor(page, map) {
       const cellSel = `#report-advisers .adv-target-cell[data-pct]`;
       // Locate p3's row by its adviser link (advName() renders a button carrying the staff id).
       const p3Cell = await page.evaluate((p3Id) => {
-        const btn = document.querySelector(`#report-advisers button[onclick*="reportGotoAdviser('${p3Id}')"]`);
+        const btn = document.querySelector(`#report-advisers button[data-act="reportGotoAdviser"][data-args*='"${p3Id}"']`);
         const row = btn ? btn.closest("tr") : null;
         const cell = row ? row.querySelector(".adv-target-cell") : null;
         return cell ? { pct: cell.getAttribute("data-pct"), text: cell.textContent.replace(/\s+/g, " ").trim() } : null;
@@ -339,8 +339,8 @@ async function setTargetsViaEditor(page, map) {
       const noTargetCell = await page.evaluate((targetedIds) => {
         const rows = [...document.querySelectorAll("#report-advisers tr")].slice(1, -1); // drop header + foot
         for (const tr of rows) {
-          const btn = tr.querySelector("button[onclick^=\"reportGotoAdviser\"]");
-          const id = btn ? (btn.getAttribute("onclick").match(/reportGotoAdviser\('([^']+)'\)/) || [])[1] : null;
+          const btn = tr.querySelector("button[data-act=\"reportGotoAdviser\"]");
+          const id = btn ? (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn).match(/reportGotoAdviser\('([^']+)'\)/) || [])[1] : null;
           if (id && id !== "unassigned" && !targetedIds.includes(id)) {
             const cell = tr.querySelector(".adv-target-cell");
             if (cell) return { id, pct: cell.getAttribute("data-pct"), text: cell.textContent.trim() };

@@ -799,7 +799,7 @@ async function setHold(page, value) {
       await goto(page, "emails", 1300);
       await page.evaluate((id) => {
         const rows = [...document.querySelectorAll("#page-emails .row-item")];
-        const hit = rows.find((x) => [...x.querySelectorAll("button")].some((b) => (b.getAttribute("onclick") || "").includes(`fixContactOpen('sms','${id}'`)));
+        const hit = rows.find((x) => [...x.querySelectorAll("button")].some((b) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || "").includes(`fixContactOpen('sms','${id}'`)));
         [...hit.querySelectorAll("button")].find((b) => /Fix contact/.test(b.textContent)).click();
       }, smsRow.id);
       await wait(page, 1300);

@@ -236,7 +236,7 @@
         </a>
         <a href="/contact" class="btn btn-primary">Speak to an Adviser</a>
       </div>
-      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false" onclick="var n=document.getElementById('mainNav');this.setAttribute('aria-expanded',n.classList.toggle('open'))">
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false" data-act="navToggle" data-args='["$this"]'>
         <span></span><span></span><span></span>
       </button>
     </div>
@@ -274,11 +274,11 @@
 <section style="padding-top:0;">
   <div class="container">
     <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:40px; justify-content:center;">
-      <a href="#borrowing" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='transparent'">💰 Borrowing & Deposits</a>
-      <a href="#process" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='transparent'">📋 The Application Process</a>
-      <a href="#types" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='transparent'">🏠 Mortgage Types</a>
-      <a href="#brokers" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='transparent'">🤝 Using a Broker</a>
-      <a href="#specialist" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" onmouseover="this.style.borderColor='var(--orange)'" onmouseout="this.style.borderColor='transparent'">⭐ Specialist Situations</a>
+      <a href="#borrowing" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" data-act="hoverStyle" data-on="mouseover mouseout" data-args='["$event","$this","borderColor","var(--orange)","transparent"]'>💰 Borrowing & Deposits</a>
+      <a href="#process" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" data-act="hoverStyle" data-on="mouseover mouseout" data-args='["$event","$this","borderColor","var(--orange)","transparent"]'>📋 The Application Process</a>
+      <a href="#types" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" data-act="hoverStyle" data-on="mouseover mouseout" data-args='["$event","$this","borderColor","var(--orange)","transparent"]'>🏠 Mortgage Types</a>
+      <a href="#brokers" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" data-act="hoverStyle" data-on="mouseover mouseout" data-args='["$event","$this","borderColor","var(--orange)","transparent"]'>🤝 Using a Broker</a>
+      <a href="#specialist" style="background:var(--glass2); color:var(--blue); padding:8px 18px; border-radius:20px; font-size:14px; font-weight:600; text-decoration:none; border:2px solid transparent; transition:all 0.2s;" data-act="hoverStyle" data-on="mouseover mouseout" data-args='["$event","$this","borderColor","var(--orange)","transparent"]'>⭐ Specialist Situations</a>
     </div>
   </div>
 </section>

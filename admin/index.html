@@ -16,15 +16,15 @@
 <!-- R82 · A9 — THE FREE 290ms. This stylesheet was RENDER-BLOCKING: nothing painted until Google
      Fonts answered, measured A/B at 596ms vs 306ms to first paint, on every one of the 505+ page
      loads the battery drives and on every real sign-in. media="print" makes the browser fetch it
-     at low priority WITHOUT blocking the render tree; the onload swaps it to all the moment it
+     at low priority WITHOUT blocking the render tree; boot.js swaps it to all (R95 · C: was onload) the moment it
      lands, so Inter still arrives — just after the page is already usable. The fallback stack is
      already real and already the thing the user sees for those milliseconds: admin.css's
      --font is "Inter", -apple-system, "Segoe UI", system-ui, Roboto, Arial, sans-serif, and the
      &display=swap on this URL means the webfont swaps in when it arrives rather than hiding text
      while it is fetched. The preconnects above stay — they make the non-blocking fetch faster.
      <noscript> keeps the old blocking behaviour for a browser with JS off, which cannot run the
-     onload and would otherwise never get the face at all. -->
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+     swap and would otherwise never get the face at all. -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" data-swap="1">
 <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="/admin/admin.css">
 <!-- R31-A · a11y — skip link styling. Lives here (not admin.css) so the whole
@@ -224,7 +224,7 @@
           <details class="hdr-more" id="brief-more">
             <summary class="btn btn-ghost btn-sm hdr-more-btn" aria-label="More: Outlook sync, tasks due later" title="More — Outlook sync, tasks due later">⋯</summary>
             <div class="hdr-more-menu" role="menu">
-              <button type="button" class="badge amber hidden" id="brief-ahead" onclick="nav('diary')"></button>
+              <button type="button" class="badge amber hidden" id="brief-ahead" data-act="nav" data-args='["diary"]'></button>
               <button class="btn btn-ghost btn-sm" id="sync-outlook-btn" aria-label="Sync Outlook inbox">⟳ Sync Outlook</button>
             </div>
           </details>
@@ -301,7 +301,7 @@
           <!-- R41 — the Tasks drawer this comment used to point at ("the same segment the Tasks
                panel beside it has carried since T1-5") is gone; My Day's Mine/All plus the
                "· unassigned" suffix under All is where task scoping lives now. -->
-          <h3 onclick="toggleDrawer(event,'rateerc')">⚠️ Rate &amp; ERC alerts</h3>
+          <h3 data-act="toggleDrawer" data-args='["$event","rateerc"]'>⚠️ Rate &amp; ERC alerts</h3>
           <div class="rate-scope-row">
             <span class="segment" role="group" aria-label="Whose rate alerts to show">
               <button class="btn btn-sm seg-btn seg-first" id="rate-scope-mine" aria-label="Show only alerts on my cases">Mine</button>
@@ -313,7 +313,7 @@
           <div id="alerts-rateerc" class="dash-scroll"></div>
         </div>
         <div class="panel dash-card dash-drawer collapsed" id="revenue-panel">
-          <h3 onclick="toggleDrawer(event,'revenue')">🛡️💷 Protection &amp; fees <span class="count" id="revenue-count"></span></h3>
+          <h3 data-act="toggleDrawer" data-args='["$event","revenue"]'>🛡️💷 Protection &amp; fees <span class="count" id="revenue-count"></span></h3>
           <div class="dash-tabs">
             <button class="dash-tab active" data-tab="protection">🛡️ Protection <span class="count" id="tab-protection-count"></span></button>
             <button class="dash-tab" data-tab="fees">💷 Fees due <span class="count" id="tab-fees-count"></span></button>
@@ -558,7 +558,7 @@
         <input type="month" id="report-month" aria-label="Report month">
         <!-- R89 · B — the level-2 chip strip is opt-in, as in R87; its door sits in the page head now
              that the section pills it hung off are tabs. Shown only on a tab with 2+ panels. -->
-        <button type="button" class="btn btn-sm btn-ghost rep-chips-toggle" id="reports-jump-toggle" aria-controls="rep-nav" aria-expanded="false" onclick="repToggleChips()" title="Show or hide one chip per panel on this tab" hidden>Panels ▾</button>
+        <button type="button" class="btn btn-sm btn-ghost rep-chips-toggle" id="reports-jump-toggle" aria-controls="rep-nav" aria-expanded="false" data-act="repToggleChips" title="Show or hide one chip per panel on this tab" hidden>Panels ▾</button>
       </div>
       <div class="page-tabs-slot"></div>
       <!-- R89 · B — the level-2 strip (one chip per panel of the tab on screen). ONE element, moved into
@@ -729,7 +729,7 @@
                a single month of lead_source is usually too few rows to read. -->
           <div class="panel-head-row">
             <h3>Lead sources</h3>
-            <button type="button" class="btn btn-sm" id="report-sources-scope-btn" onclick="toggleSourcesScope()">All time</button>
+            <button type="button" class="btn btn-sm" id="report-sources-scope-btn" data-act="toggleSourcesScope">All time</button>
           </div>
           <p class="panel-sub" id="report-sources-scope">Set the lead source on cases to build this up.</p>
           <div id="report-sources"></div>
@@ -740,7 +740,7 @@
       <div class="panel hidden" id="report-losses-panel">
         <div class="panel-head-row">
           <h3>Losses — why cases didn't proceed</h3>
-          <button type="button" class="btn btn-sm" id="report-losses-scope-btn" onclick="toggleLossesScope()">All time</button>
+          <button type="button" class="btn btn-sm" id="report-losses-scope-btn" data-act="toggleLossesScope">All time</button>
         </div>
         <div class="panel-sub" id="report-losses-scope"></div>
         <div id="report-losses"></div>
@@ -758,7 +758,7 @@
       <div class="panel hidden" id="report-nps-panel">
         <div class="panel-head-row">
           <h3>Review scores — every respondent</h3>
-          <button type="button" class="btn btn-sm" onclick="toggleNpsList()">Hide</button>
+          <button type="button" class="btn btn-sm" data-act="toggleNpsList">Hide</button>
         </div>
         <p class="panel-sub" id="report-nps-scope"></p>
         <!-- R42 · F3 — the respondent list. toggleNpsList() opens this drawer when it reveals the panel — the tile click IS the request to read the list, and making it a second click would be a disclosure inside a disclosure. -->
@@ -1478,6 +1478,8 @@
      bar so an Undo toast is announced with its button. -->
 <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
 
+<!-- R95 · C — boot.js FIRST: the build tag, the Inter media swap and the SW registration (no inline script, CSP). -->
+<script src="/admin/boot.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js" integrity="sha384-hazsLVND17GNLVdtV19te6qbFT2YuLgl8SamcF+QR5eIOC+W4dGKrUNMxU1jH1zD" crossorigin="anonymous"></script>
 <!-- R55 · F7 — SheetJS (~1MB) is only needed by the Import / reconciliation / offer-export flows,
      so it no longer blocks every boot: app.js lazy-loads it on first use (ensureXlsx()). -->
@@ -1495,11 +1497,9 @@
      anything from a later script (AST-scanned; each file's header has the proof). import.js's two
      bindings on the drop-zone inputs app.js CREATES at eval run at DOMContentLoaded (R81 · A1's
      recipe). app.js stays LAST.
-     R81 · A3 — NX_BUILD_TAG below is the deploy handshake: each JS file ends by stamping its own
-     window.__nxTag_*, and app.js's boot compares all EIGHT (R93 · F added site.js). EVERY round that edits ANY
-     of index.html / core.js / reports-money.js / diary.js / import.js / vault.js / site.js / app.js bumps
-     the tag IN ALL EIGHT PLACES. -->
-<script>window.NX_BUILD_TAG = "r94";</script>
+     R81 · A3 — NX_BUILD_TAG (in boot.js since R95 · C) is the deploy handshake: each JS file ends by stamping
+     its own window.__nxTag_*, and app.js's boot compares all of them. EVERY round that edits ANY of boot.js /
+     core.js / reports-money.js / diary.js / import.js / vault.js / site.js / app.js bumps the tag in every one. -->
 <script src="/admin/core.js"></script>
 <script src="/admin/reports-money.js"></script>
 <script src="/admin/diary.js"></script>
@@ -1507,15 +1507,5 @@
 <script src="/admin/vault.js"></script>
 <script src="/admin/site.js"></script>
 <script src="/admin/app.js"></script>
-<script>
-  // PWA install support. Register only over https (never file:// or the sandbox http harness).
-  if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
-    try {
-      window.addEventListener('load', function () {
-        navigator.serviceWorker.register('/admin/sw.js', { scope: '/admin/' }).catch(function () {});
-      });
-    } catch (e) { /* non-blocking */ }
-  }
-</script>
 </body>
 </html>

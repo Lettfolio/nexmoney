@@ -3,6 +3,11 @@
 
    THE TWO CONTENT-SECURITY-POLICIES IN vercel.json, PROVEN AGAINST THE PAGES.
 
+   R95 note: the §B runtime walk only reports an inline handler that actually FIRES (a
+   securitypolicyviolation is raised at execution time, not at parse time), so the static
+   count A20 is the real gate against inline handlers; §B proves the strict policy breaks
+   nothing that runs.
+
    §A (static) — vercel.json parses; exactly one CSP on "/(.*)" (site) and one on
         "/admin/:path*", the admin one LATER (Vercel applies every matching headers
         entry in order, so for the same key the later one is what ships); neither
@@ -20,18 +25,30 @@
         public *.html. Zero `securitypolicyviolation` events and zero console "Content
         Security Policy" messages. Environmental CDN 403s are not violations and are
         not counted. A control probe proves violations ARE caught.
+   R95 · D — STRICT: neither script-src allows 'unsafe-inline'. §A also counts every inline
+        on*= handler / javascript: URL / inline <script> across admin + site (must be zero, bar
+        the site's js-class one-liner, allowed by its pinned sha256) and renders a guide through
+        build.js. §B injects its probes as same-origin files (an inline probe would itself be
+        blocked) and drives the site's data-act handlers under the strict policy.
    ========================================================================== */
 "use strict";
 const { chromium } = require("playwright");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
+const os = require("os");
+const crypto = require("crypto");
+const { spawnSync } = require("child_process");
 const path = require("path");
 
 const REPO = "/root/nx";
 const PORT = 8099;
 const ORIGIN = `http://localhost:${PORT}`;
 const SUPA = "https://sclghkmvzpwtmnzbkaoe.supabase.co";
+// R95 · D: the ONE inline script the site keeps (it must run before first paint), allowed by hash.
+// Changing its bytes changes the hash: update vercel.json's site script-src and this pin together.
+const JS_CLASS = "document.documentElement.classList.add('js')";
+const JS_CLASS_HASH = "'sha256-Du+OJKJSbdUgz5nrHeWWINvez6XKDDU/tyj/5c2uvwo='";
 
 let pass = 0;
 const failures = [];
@@ -102,8 +119,14 @@ async function ensureServer() {
       JSON.stringify([c["script-src"], c["connect-src"]]));
     ok(`A7 · ${name}: upgrade-insecure-requests set`, "upgrade-insecure-requests" in c);
   }
-  ok("A8 · site script-src is 'self' 'unsafe-inline' only (no third-party script on the public site)",
-    JSON.stringify(SITE["script-src"]) === JSON.stringify(["'self'", "'unsafe-inline'"]), JSON.stringify(SITE["script-src"]));
+  ok("A8 · site script-src is exactly 'self' + the js-class one-liner's pinned hash (no third-party script)",
+    JSON.stringify(SITE["script-src"]) === JSON.stringify(["'self'", JS_CLASS_HASH]), JSON.stringify(SITE["script-src"]));
+  ok("A8b · the pinned hash IS sha256 of the one-liner's bytes",
+    JS_CLASS_HASH === `'sha256-${crypto.createHash("sha256").update(JS_CLASS).digest("base64")}'`);
+  ok("A8c · STRICT: neither script-src carries 'unsafe-inline' or 'unsafe-hashes'",
+    !/unsafe-inline|unsafe-hashes/.test((SITE["script-src"] || []).concat(ADMIN["script-src"] || []).join(" ")), JSON.stringify([SITE["script-src"], ADMIN["script-src"]]));
+  ok("A8d · admin script-src is exactly 'self' + the supabase-js and SheetJS paths",
+    JSON.stringify(ADMIN["script-src"]) === JSON.stringify(["'self'", "https://cdn.jsdelivr.net/npm/@supabase/", "https://cdn.sheetjs.com/xlsx-0.20.2/"]), JSON.stringify(ADMIN["script-src"]));
   ok("A9 · no realtime: admin connect-src has no wss:// (the code opens no channel)",
     !sourcesFor(ADMIN, "connect-src").some((s) => /^wss:/.test(s)) && !/\.channel\(/.test(["core", "reports-money", "diary", "import", "vault", "site", "app"].map((f) => read(`admin/${f}.js`)).join("\n")));
 
@@ -112,7 +135,7 @@ async function ensureServer() {
   const extStyles = (html) => [...html.matchAll(/<link\b[^>]*>/g)].map((m) => m[0]).filter((t) => /rel="stylesheet"/.test(t))
     .map((t) => (t.match(/href="(https?:\/\/[^"]+)"/) || [])[1]).filter(Boolean);
   const adminHtml = ["admin/index.html", "admin/introducer.html"];
-  const adminJs = ["core", "reports-money", "diary", "import", "vault", "site", "app"].map((f) => `admin/${f}.js`);
+  const adminJs = ["boot", "core", "reports-money", "diary", "import", "vault", "site", "app", "introducer"].map((f) => `admin/${f}.js`);   // R95: + boot.js and introducer.js (its inline script moved out)
   const adminScripts = adminHtml.flatMap((f) => extScripts(read(f)))
     .concat(adminJs.flatMap((f) => [...read(f).matchAll(/\.src\s*=\s*"(https:\/\/[^"]+)"/g)].map((m) => m[1])));
   ok("A10 · admin: every external script (supabase-js tag, SheetJS lazy loader) is in script-src",
@@ -131,7 +154,8 @@ async function ensureServer() {
   ok("A15 · site: no page loads a third-party script", siteScripts.length === 0, JSON.stringify(siteScripts));
   const siteStyles = siteFiles.flatMap((f) => extStyles(read(f)));
   ok("A16 · site: every external stylesheet (Google Fonts) is in style-src", siteStyles.length > 0 && siteStyles.every((u) => allowed(SITE, "style-src", u)), JSON.stringify(siteStyles.filter((u) => !allowed(SITE, "style-src", u))));
-  const siteFns = siteFiles.flatMap((f) => [...read(f).matchAll(/https:\/\/[a-z0-9]+\.supabase\.co\/functions\/v1[^"' ]*/g)].map((m) => m[0]));
+  const sitePageJs = fs.existsSync(path.join(REPO, "js")) ? fs.readdirSync(path.join(REPO, "js")).filter((f) => f.endsWith(".js")).map((f) => `js/${f}`) : [];
+  const siteFns = siteFiles.concat(sitePageJs).flatMap((f) => [...read(f).matchAll(/https:\/\/[a-z0-9]+\.supabase\.co\/functions\/v1[^"' ]*/g)].map((m) => m[0]));
   ok("A17 · site: every edge-function URL (new-lead, fact-find, docs/feedback FN_BASE) is in connect-src",
     siteFns.length >= 4 && siteFns.every((u) => allowed(SITE, "connect-src", u)), JSON.stringify(siteFns));
   ok("A18 · site: guide cover / Markdown images (any https:// URL an author types) are in img-src",
@@ -143,6 +167,39 @@ async function ensureServer() {
   const evalish = /\beval\s*\(|new\s+Function\s*\(|set(Timeout|Interval)\s*\(\s*["'`]/;
   const evalHits = adminJs.concat(["admin/sw.js", "enhance.js"]).filter((f) => evalish.test(read(f).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
   ok("A19 · no eval / new Function / string timers in the shipped JS (script-src has no 'unsafe-eval')", evalHits.length === 0, JSON.stringify(evalHits));
+
+  /* R95 · D: the inline inventory — under the strict policies every survivor is a dead control. */
+  const adminDir = fs.readdirSync(path.join(REPO, "admin"));
+  const inlineScope = adminDir.filter((f) => f.endsWith(".js") && f !== "mock-supabase.js").map((f) => `admin/${f}`)
+    .concat(adminDir.filter((f) => f.endsWith(".html")).map((f) => `admin/${f}`), siteFiles);   // siteFiles includes unsubscribe.html (slice A) on purpose
+  const tally = (re) => inlineScope.map((f) => [f, (read(f).match(re) || []).length]).filter(([, n]) => n);
+  const handlers = tally(/\son[a-z]+\s*=/g);   // R95 · fixer F5: any quoting (double, single, none)
+  ok("A20 · zero inline on*=\" handlers across admin/*.js (bar the mock), admin/*.html and every root *.html",
+    handlers.length === 0, `${handlers.reduce((a, [, n]) => a + n, 0)} left: ${JSON.stringify(handlers)}`);
+  const jsUrls = tally(/href=["']javascript:/g);
+  ok("A21 · zero javascript: hrefs (blocked by a script-src without 'unsafe-inline')", jsUrls.length === 0, JSON.stringify(jsUrls));
+  const inlineScripts = (html) => [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)]
+    .filter((m) => !/\bsrc=/.test(m[1]) && !/type=["']application\/ld\+json["']/.test(m[1])).map((m) => m[2]);
+  const htmlScope = inlineScope.filter((f) => f.endsWith(".html"));
+  const badInline = htmlScope.map((f) => [f, inlineScripts(read(f)).filter((b) => b !== JS_CLASS).length]).filter(([, n]) => n);
+  ok("A22 · no inline <script> (non-JSON-LD) in admin/*.html or root *.html other than the hashed js-class one-liner", badInline.length === 0, JSON.stringify(badInline));
+  const oneLiners = siteFiles.filter((f) => inlineScripts(read(f)).includes(JS_CLASS));
+  ok("A23 · the js-class one-liner is byte-identical wherever it appears (so the one hash covers it)", oneLiners.length >= 14, `n=${oneLiners.length}`);
+
+  /* The guide shell is rendered by build.js; prove a RENDERED guide (and the overridden pages) stay clean. */
+  const fx = path.join(os.tmpdir(), `r94_csp_fixture_${process.pid}.json`);
+  fs.writeFileSync(fx, JSON.stringify({
+    site_pages: [{ slug: "mortgages", title: "R95 override | NexMoney", faq: [{ q: "Q?", a: "A <b>x</b>" }] }],
+    site_posts: [{ id: "g1", slug: "r95-csp-guide", title: "R95 CSP guide", excerpt: "x", status: "published", published_at: "2026-10-01T00:00:00Z", created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z",
+      body_md: "# H\n\n<script>alert(1)</script>\n\n<img src=x onerror=\"alert(1)\">\n\n[bad](javascript:alert(1))" }],
+  }));
+  const b = spawnSync("node", ["build.js"], { cwd: REPO, encoding: "utf8", env: { ...process.env, NX_CONTENT_FIXTURE: fx } });
+  try { fs.unlinkSync(fx); } catch (_) { /* gone */ }
+  const distHtml = (d) => fs.readdirSync(path.join(REPO, d)).filter((f) => f.endsWith(".html")).map((f) => path.join(d, f));
+  const rendered = b.status === 0 ? distHtml("dist").concat(fs.existsSync(path.join(REPO, "dist/guides")) ? distHtml("dist/guides") : []) : [];
+  const dirty = rendered.filter((f) => !f.startsWith("dist/admin")).map((f) => { const h = read(f); return [f, (h.match(/ on[a-z]+="/g) || []).length + inlineScripts(h).filter((x) => x !== JS_CLASS).length]; }).filter(([, n]) => n);
+  ok("A24 · build.js (fixture) renders the guide; dist/guides/*.html + every dist/*.html carry no inline handler or non-hashed inline script",
+    rendered.includes("dist/guides/r95-csp-guide.html") && dirty.length === 0, b.status !== 0 ? b.stderr.slice(0, 300) : JSON.stringify(dirty));
 
   /* ------------------------------------------------------------------ B. runtime */
   /* WHY no page.evaluate below: once Playwright evaluates in a page's main world, Chrome lets eval() run
@@ -180,9 +237,12 @@ async function ensureServer() {
       const resp = await route.fetch();
       const inj = (new URL(route.request().url()).searchParams.get("r94") || "").split(",").filter((k) => INJECT[k]);
       let body = await resp.text();
-      if (inj.length) body = body.replace(/<\/body>/i, inj.map((k) => `<script>${INJECT[k]}</script>`).join("") + "</body>");
+      // R95 · D: as same-origin files — an inline probe would itself be a violation under the strict policy.
+      if (inj.length) body = body.replace(/<\/body>/i, inj.map((k) => `<script src="/__r94/${k}.js"></script>`).join("") + "</body>");
       await route.fulfill({ response: resp, body, headers: { ...resp.headers(), "content-security-policy": policy } });
     });
+    await ctx.route(`${ORIGIN}/__r94/*.js`, (route) => route.fulfill({ status: 200, contentType: "text/javascript",
+      body: INJECT[path.basename(new URL(route.request().url()).pathname, ".js")] || "" }));
     // SheetJS: the sandbox cannot reach cdn.sheetjs.com — serve the same library from node_modules at the real URL.
     if (fs.existsSync(XLSX_LOCAL)) {
       await ctx.route("https://cdn.sheetjs.com/**", (route) => route.fulfill({ status: 200, contentType: "text/javascript", body: fs.readFileSync(XLSX_LOCAL) }));
@@ -287,6 +347,57 @@ async function ensureServer() {
       await page.close();
     }
     await ctx.close();
+
+    console.log("\nB · site behaviour through the data-act kit, under the strict site policy");
+    {
+      const { ctx: c2, cspConsole: con2 } = await ctxWith(SITE_HDR);
+      let lead = 200;
+      await c2.route(`${SUPA}/functions/v1/new-lead`, (r) => r.fulfill({ status: lead, contentType: "application/json", body: "{}" }));
+      const pg = await c2.newPage();
+      const style = (sel) => pg.locator(sel).first().getAttribute("style");
+      await pg.setViewportSize({ width: 390, height: 844 });
+      await pg.goto(`${ORIGIN}/index.html`, { waitUntil: "load" });
+      await pg.click(".nav-toggle");
+      ok("B · nav toggle (navToggle): opens #mainNav and sets aria-expanded", (await pg.locator(".nav-toggle").getAttribute("aria-expanded")) === "true"
+        && /\bopen\b/.test(await pg.locator("#mainNav").getAttribute("class")));
+      await pg.click(".nav-toggle");
+      ok("B · nav toggle: second click closes it", (await pg.locator(".nav-toggle").getAttribute("aria-expanded")) === "false");
+      await pg.setViewportSize({ width: 1440, height: 960 });
+      await pg.fill("#income1", "100000");
+      ok("B · index borrow calc (oninput → data-on=input): £400,000 – £550,000", (await pg.locator("#borrowResult").textContent()).trim() === "£400,000 – £550,000", await pg.locator("#borrowResult").textContent());
+      await pg.click('.calc-tab:has-text("Monthly repayments")');
+      ok("B · index calc tabs (switchCalc via data-args [\"repay\",\"$this\"])", await pg.locator("#calc-repay").isVisible() && !(await pg.locator("#calc-borrow").isVisible())
+        && /\bactive\b/.test(await pg.locator('.calc-tab:has-text("Monthly repayments")').getAttribute("class")));
+      await pg.hover('a.btn-outline[href="/faq"]');
+      ok("B · index FAQ button hover (hoverStyle mouseover)", /background: rgba\(61, 162, 255, 0\.12\)/.test(await style('a.btn-outline[href="/faq"]')), await style('a.btn-outline[href="/faq"]'));
+      await pg.mouse.move(2, 2);
+      ok("B · index FAQ button un-hover (hoverStyle mouseout)", /background: transparent/.test(await style('a.btn-outline[href="/faq"]')));
+
+      await pg.goto(`${ORIGIN}/calculators.html`, { waitUntil: "load" });
+      await pg.fill("#b_income1", "50000");
+      ok("B · calculators borrow calc: £200,000 – £275,000", (await pg.locator("#b_result").textContent()).trim() === "£200,000 – £275,000", await pg.locator("#b_result").textContent());
+
+      await pg.goto(`${ORIGIN}/faq.html`, { waitUntil: "load" });
+      await pg.hover('a[href="#borrowing"]');
+      ok("B · faq jump-link hover sets the orange border", /border-color: var\(--orange\)/.test(await style('a[href="#borrowing"]')), await style('a[href="#borrowing"]'));
+      await pg.mouse.move(2, 2);
+      ok("B · faq jump-link un-hover clears it", !/--orange/.test(await style('a[href="#borrowing"]')) && /border(-color)?: (2px solid )?transparent/.test(await style('a[href="#borrowing"]')), await style('a[href="#borrowing"]'));
+
+      const fillContact = async () => {
+        await pg.fill("#fname", "R95"); await pg.fill("#lname", "Test"); await pg.fill("#email", "r95@example.com");
+        await pg.fill("#phone", "07700900000"); await pg.check("#consent");
+      };
+      await pg.goto(`${ORIGIN}/contact.html?type=remortgage`, { waitUntil: "load" });
+      ok("B · contact ?type= preselects the enquiry type (page script from /js/contact.js)", (await pg.locator("#enquiryType").inputValue()) === "remortgage");
+      lead = 500; await fillContact(); await pg.click('#enquiryForm [type="submit"]'); await pg.waitForTimeout(600);
+      ok("B · contact submit (data-on=submit) on a failing new-lead shows the error and stays on the page", await pg.locator("#formError").isVisible()
+        && pg.url().includes("/contact.html?type=remortgage"));
+      lead = 200; await pg.click('#enquiryForm [type="submit"]'); await pg.waitForTimeout(600);
+      ok("B · contact submit on 200 shows the success state", await pg.locator("#formSuccess").isVisible() && !(await pg.locator("#enquiryForm").isVisible()));
+      const v = await violations(pg);
+      ok("B · site behaviour run: zero CSP violations", v.length === 0 && con2.length === 0, JSON.stringify(v.concat(con2).slice(0, 6)));
+      await c2.close();
+    }
   } catch (e) {
     failures.push("crash: " + (e && e.stack || e));
     console.log("  ✗ crash", e);

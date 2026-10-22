@@ -440,20 +440,6 @@
   "review_requested_at",
   "stage"
  ],
- "v_introducer_cases": [
-  "case_kind",
-  "client_id",
-  "completed_at",
-  "created_at",
-  "id",
-  "introducer_id",
-  "stage"
- ],
- "v_introducer_clients": [
-  "first_name",
-  "id",
-  "last_name"
- ],
  "vault_entries": [
   "category",
   "created_at",

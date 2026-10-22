@@ -223,7 +223,7 @@ function renderVault() {
       ? emptyState({
           headline: "No entries match your search",
           sub: `Nothing in the vault matches “${vaultSearchTerm()}”. It searches the name, the owner and the username — not the secrets themselves.`,
-          action: { label: "Clear the search", id: "vault-empty-clear", onclick: "clearVaultSearch()" },
+          action: { label: "Clear the search", id: "vault-empty-clear", act: ["clearVaultSearch"] },
         })
       : emptyState({
           headline: "The vault is empty",
@@ -392,4 +392,4 @@ async function deleteVaultEntry(id) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_vault = "r94";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_vault = "r95";   // R89 — the CTO bumps all seven together at each gate

@@ -163,9 +163,9 @@ const openDrawer = async (page, panelId) => {
 
       /* … and on the Rate & ERC row */
       await openDrawer(page, "#rate-erc-panel");
-      const hasRowBtn = await page.evaluate(() => document.querySelector("#alerts-rateerc").innerHTML.indexOf("startRetentionCase('ca018'") >= 0);
+      const hasRowBtn = await page.evaluate(() => document.querySelector("#alerts-rateerc").innerHTML.indexOf('data-act="startRetentionCase" data-args="[&quot;ca018&quot;') >= 0);
       ok("R5-6 · the Rate & ERC row offers it too", hasRowBtn);
-      await page.click("#alerts-rateerc button.btn-retention[onclick*=\"'ca018'\"]");
+      await page.click("#alerts-rateerc button.btn-retention[data-args*='\"ca018\"']");
       await page.waitForTimeout(2200);
 
       const dlg = lastDialog(page, /retention case for/i);
@@ -188,7 +188,7 @@ const openDrawer = async (page, panelId) => {
           queued: q.map((e) => ({ type: e.email_type, status: e.status, sent: e.sent_at })),
           srcStamped: !!src.rate_reminder_queued_at,
           openRetention: cases.filter((c) => c.retention_source_case_id && !["completed", "not_proceeding"].includes(c.stage)).length,
-          rowBtnGone: document.querySelector("#alerts-rateerc").innerHTML.indexOf("startRetentionCase('ca018'") < 0,
+          rowBtnGone: document.querySelector("#alerts-rateerc").innerHTML.indexOf('data-act="startRetentionCase" data-args="[&quot;ca018&quot;') < 0,
           sentDelta: all.filter((e) => e.status === "sent").length - sentBefore,
         };
       }, sentBefore);
@@ -230,7 +230,7 @@ const openDrawer = async (page, panelId) => {
         const rows = [...document.querySelectorAll("#alerts-rateerc .row-item")];
         return {
           kwameRows: rows.filter((r) => /Kwame Boateng/.test(r.textContent)).length,
-          succPresent: rows.some((r) => (((r.querySelector(".t") || {}).getAttribute && r.querySelector(".t").getAttribute("onclick")) || "").includes(`'${succId}'`)),
+          succPresent: rows.some((r) => (((r.querySelector(".t") || {}).getAttribute && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".t"))) || "").includes(`'${succId}'`)),
         };
       }, after.succ.id);
       eq("R35 §4 · exactly ONE Rate & ERC row for Kwame Boateng — the live successor doesn't renag it", rateErcRows.kwameRows, 1);
@@ -243,7 +243,7 @@ const openDrawer = async (page, panelId) => {
       ok("R5-6 · the new case is badged 🔁 Retention opportunity", /🔁 Retention opportunity/.test(succModal), succModal.slice(0, 120));
       await page.evaluate(() => window.closeModal());
       await page.waitForTimeout(400);
-      const nagGone = await page.evaluate(() => document.querySelector("#briefing-list").innerHTML.indexOf("briefQueueEmail('ca018'") < 0);
+      const nagGone = await page.evaluate(() => document.querySelector("#briefing-list").innerHTML.indexOf('data-act="briefQueueEmail" data-args="[&quot;ca018&quot;') < 0);
       ok("R5-6 · My Day no longer offers a bare Send reminder on the source case", nagGone);
 
       /* RES-1 — the dedupe was a non-atomic check-then-insert guarded only by a per-DOM-button
@@ -566,7 +566,7 @@ const openDrawer = async (page, panelId) => {
 
       await page.evaluate((caseId) => window.openCase(caseId), target.case_id);
       await page.waitForTimeout(700);
-      const chipSel = `#tasks-inline [onclick^="openReassign(event,'${target.id}'"]`;
+      const chipSel = `#tasks-inline [data-act="openReassign"][data-args^='["$event","${target.id}"']`;
       ok("fixture · the case modal renders a reassign chip for the task", !!(await page.$(chipSel)));
 
       await page.click(chipSel);
@@ -595,7 +595,7 @@ const openDrawer = async (page, panelId) => {
       await page.click("#brief-scope-all");
       await page.waitForTimeout(SETTLE);
       const briefRowText = await page.evaluate((taskId) => {
-        const anchor = document.querySelector(`#snooze-1d-brief-${taskId}, [onclick^="briefDone('${taskId}'"]`);
+        const anchor = document.querySelector(`#snooze-1d-brief-${taskId}, [data-act="briefDone"][data-args^='["${taskId}"']`);
         const row = anchor && anchor.closest(".row-item");
         return row ? row.textContent : null;
       }, target.id);

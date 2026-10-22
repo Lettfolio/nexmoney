@@ -65,6 +65,7 @@ const SKIP_EXT = new Set([".md", ".pdf", ".docx", ".bat", ".log", ".zip"]);
 
 // Served admin assets that get minified (path → esbuild loader).
 const MINIFY = {
+  "admin/boot.js": "js",           // R95 · C — first script: build tag, font swap, SW registration (was inline)
   "admin/core.js": "js",
   "admin/reports-money.js": "js",
   "admin/diary.js": "js",          // R90 · F — the third carve: diary.js / import.js / vault.js

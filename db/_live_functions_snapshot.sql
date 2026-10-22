@@ -3,6 +3,7 @@
 -- other 23 incl. the R86 pair get_team_mfa/session_ok). Evidence for the retired migration layer (HARNESS.md, R90 · A);
 -- not applied by anything. Refresh: select proname, prosecdef, pg_get_functiondef(oid) from pg_proc where pronamespace =
 -- (select oid from pg_namespace where nspname = 'public') order by proname.
+-- R95 · E: get_introducer_cases/_clients added as the R95 migration creates them (live after the R95 merge).
 
 -- ===== ai_usage_bump (secdef=True) =====
 CREATE OR REPLACE FUNCTION public.ai_usage_bump(p_uid uuid, p_fn text, p_bytes bigint)
@@ -567,6 +568,40 @@ begin
     'emails_failed', (select count(*) from email_queue where status = 'failed')
   );
 end $function$
+
+
+-- ===== get_introducer_cases (secdef=True) =====
+CREATE OR REPLACE FUNCTION public.get_introducer_cases()
+ RETURNS TABLE(id uuid, client_id uuid, introducer_id uuid, stage case_stage, case_kind case_kind, created_at timestamp with time zone, completed_at timestamp with time zone)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select c.id, c.client_id, c.introducer_id, c.stage, c.case_kind, c.created_at, c.completed_at
+    from public.cases c
+   where (select public.session_ok())   -- R95 · E1: R86 rule, every new RPC guard carries it
+     and c.introducer_id is not null
+     and c.introducer_id = (select public.my_introducer_id())
+   order by c.created_at desc;
+$function$
+
+
+-- ===== get_introducer_clients (secdef=True) =====
+CREATE OR REPLACE FUNCTION public.get_introducer_clients(p_ids uuid[])
+ RETURNS TABLE(id uuid, first_name text, last_name text)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select cl.id, cl.first_name, cl.last_name
+    from public.clients cl
+   where (select public.session_ok())   -- R95 · E1
+     and cl.id = any (p_ids)
+     and exists (select 1 from public.cases c
+                  where c.client_id = cl.id
+                    and c.introducer_id is not null
+                    and c.introducer_id = (select public.my_introducer_id()));
+$function$
 
 
 -- ===== get_protection_pipeline (secdef=True) =====

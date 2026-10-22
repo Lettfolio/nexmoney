@@ -115,6 +115,65 @@ window.dbFail = dbFail;
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])));
+
+/* ===== R95 DELEGATION KIT =====
+   R95 · B1: script-src loses 'unsafe-inline', so markup names a GLOBAL fn and one document listener calls it.
+   data-act=NAME data-args='[JSON]' ("$event"/"$this" substituted) data-on="change" (default click) — nearest match wins;
+   data-stop = click barrier (stopImmediatePropagation: this is the FIRST document listener); data-prevent =
+   preventDefault (a[href="#"] clicks and submits always). `this` and ev.currentTarget = the [data-act] element,
+   as an inline handler saw them. error/toggle do not bubble: caught in capture, on the element itself only. */
+/** @type {Set<string>} */
+const actWarned = new Set();
+/** @param {Element} el @param {Event} ev @returns {any[]} */
+function actArgs(el, ev) {
+  const raw = el.getAttribute("data-args");
+  let list = [];
+  if (raw) {
+    try { list = JSON.parse(raw); } catch (_) { list = []; }
+    if (!Array.isArray(list)) list = [list];
+  }
+  return list.map((a) => (a === "$event" ? ev : a === "$this" ? el : a));
+}
+/** @param {Element} el @param {Event} ev */
+function actRun(el, ev) {
+  const name = el.getAttribute("data-act") || "";
+  if (ev.type === "submit" || el.hasAttribute("data-prevent")
+      || (ev.type === "click" && el.tagName === "A" && el.getAttribute("href") === "#")) ev.preventDefault();
+  if (!name) return;
+  const fn = /** @type {any} */ (window)[name];
+  if (typeof fn !== "function") {
+    if (!actWarned.has(name)) { actWarned.add(name); console.error(`data-act: no global function "${name}"`); }
+    return;
+  }
+  try { Object.defineProperty(ev, "currentTarget", { value: el, configurable: true }); } catch (_) { /* best effort */ }
+  fn.apply(el, actArgs(el, ev));
+}
+/** @param {Event} ev */
+function actDispatch(ev) {
+  const t = /** @type {any} */ (ev.target);
+  let el = t && t.nodeType === 1 ? t : t && t.parentElement;
+  for (; el && el.nodeType === 1; el = el.parentElement) {
+    if (el.hasAttribute("data-act") && (el.getAttribute("data-on") || "click") === ev.type) {
+      actRun(el, ev);
+      if (ev.type === "click" && el.hasAttribute("data-stop")) ev.stopImmediatePropagation();
+      return;
+    }
+    if (ev.type === "click" && el.hasAttribute("data-stop")) { ev.stopImmediatePropagation(); return; }
+  }
+}
+/** @param {Event} ev */
+function actDispatchSelf(ev) {
+  const el = /** @type {any} */ (ev.target);
+  if (el && el.nodeType === 1 && el.hasAttribute("data-act") && el.getAttribute("data-on") === ev.type) actRun(el, ev);
+}
+["click", "change", "input", "submit", "keydown"].forEach((type) => document.addEventListener(type, actDispatch, false));
+["error", "toggle"].forEach((type) => document.addEventListener(type, actDispatchSelf, true));
+/** The kit attributes for generated HTML: actAttr("openCase", id) → data-act="openCase" data-args="[&quot;…&quot;]".
+ * @param {string} name @param {...any} args @returns {string} */
+function actAttr(name, ...args) {
+  return `data-act="${esc(name)}"` + (args.length ? ` data-args="${esc(JSON.stringify(args))}"` : "");
+}
+/* ===== END R95 DELEGATION KIT ===== */
 /* R18-P2 — trailing-edge debounce for high-frequency search/filter inputs. The wrapped fn reads the live
    input value at fire time, so the delayed call always sees the latest keystroke. */
 function howFold(o) {
@@ -306,4 +365,4 @@ async function readAll(q, opts) {
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_core = "r94";   // R89
+window.__nxTag_core = "r95";   // R89

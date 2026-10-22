@@ -251,7 +251,7 @@ const moveResult = (page) => page.evaluate(() => window.__r76mv);
     await page.evaluate((id) => {
       const s = document.querySelector(`#board .card[data-id="${id}"] .card-stage-move`);
       s.value = "offer";
-      s.dispatchEvent(new Event("change"));
+      s.dispatchEvent(new Event("change", { bubbles: true }));
     }, c.caseId);
     await wait(page, 1200);
     const t1 = await toastText(page);
@@ -267,7 +267,7 @@ const moveResult = (page) => page.evaluate(() => window.__r76mv);
     await page.evaluate((id) => {
       const s = document.querySelector(`#board .card[data-id="${id}"] .card-stage-move`);
       s.value = "fact_find";
-      s.dispatchEvent(new Event("change"));
+      s.dispatchEvent(new Event("change", { bubbles: true }));
     }, c.caseId);
     await wait(page, 1200);
     const t2 = await toastText(page);
