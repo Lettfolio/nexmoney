@@ -47,7 +47,8 @@ try {
   // Supabase SDK failed to load (CDN outage, ad-blocker, proxy, SRI mismatch).
   // Show a visible message instead of a silent blank page, then stop.
   const showFail = () => {
-    document.body.innerHTML = '<div style="max-width:460px;margin:15vh auto;padding:24px;font-family:system-ui,sans-serif;text-align:center;color:#333"><h1 style="font-size:20px;margin:0 0 12px">Something went wrong loading the app</h1><p style="margin:0 0 16px;color:#666">We couldn\'t load a required component. Check your connection and reload.</p><button onclick="location.reload()" style="padding:10px 20px;border:0;border-radius:6px;background:#1a5;color:#fff;font-size:15px;cursor:pointer">Reload</button></div>';
+    document.body.innerHTML = '<div style="max-width:460px;margin:15vh auto;padding:24px;font-family:system-ui,sans-serif;text-align:center;color:#333"><h1 style="font-size:20px;margin:0 0 12px">Something went wrong loading the app</h1><p style="margin:0 0 16px;color:#666">We couldn\'t load a required component. Check your connection and reload.</p><button style="padding:10px 20px;border:0;border-radius:6px;background:#1a5;color:#fff;font-size:15px;cursor:pointer">Reload</button></div>';
+    document.body.querySelector("button").onclick = () => location.reload();   // R95 · B3: CSP — no inline handler
   };
   if (document.body) showFail(); else document.addEventListener("DOMContentLoaded", showFail);
   throw e;
@@ -592,14 +593,14 @@ function kitDataAttrs(attrs) {
     return name ? ` data-${name}="${esc(String(v))}"` : "";
   }).join("");
 }
-/* One verb: an ordinary .btn-sm. `onclick` is the caller's expression; the row's own click is
-   stopped first so a verb never also opens the row. `href` renders an <a> instead. */
+/* One verb: an ordinary .btn-sm. `act` is the caller's ["globalFn", ...args] (R95 · B2: no inline handlers); the
+   verb is a data-stop barrier so it never also opens the row. `href` renders an <a> instead. */
 function kitVerbHtml(v, cls) {
   if (!v || !v.label) return "";
   const classes = ["btn", "btn-sm", cls, v.cls].filter(Boolean).join(" ");
   const common = `class="${esc(classes)}"${kitAttr("id", v.id)}${kitAttr("title", v.title)}`;
-  if (v.href) return `<a ${common} href="${esc(v.href)}" onclick="event.stopPropagation()">${esc(v.label)}</a>`;
-  const click = v.onclick ? ` onclick="event.stopPropagation();${esc(v.onclick)}"` : ` onclick="event.stopPropagation()"`;
+  if (v.href) return `<a ${common} href="${esc(v.href)}" data-stop>${esc(v.label)}</a>`;
+  const click = v.act ? ` data-stop ${actAttr(...v.act)}` : ` data-stop`;
   return `<button type="button" ${common}${click}${v.disabled ? " disabled" : ""}>${esc(v.label)}</button>`;
 }
 /* ≤3 visible verbs; the 4th onward join `more` inside one native <details class="row-more">. */
@@ -609,7 +610,7 @@ function kitVerbsHtml(verbs, more, opts) {
   const shown = all.slice(0, KIT_MAX_VERBS);
   const rest = all.slice(KIT_MAX_VERBS).concat((more || []).filter((v) => v && v.label));
   const moreHtml = rest.length
-    ? `<details class="row-more${o.moreCls ? " " + esc(o.moreCls) : ""}"${kitAttr("id", o.moreId)} onclick="event.stopPropagation()"><summary class="btn btn-sm" title="${esc(o.moreTitle || "More actions")}">More ▾</summary><span class="row-more-body">${rest.map((v) => kitVerbHtml(v, o.verbCls)).join("")}</span></details>`
+    ? `<details class="row-more${o.moreCls ? " " + esc(o.moreCls) : ""}"${kitAttr("id", o.moreId)} data-stop><summary class="btn btn-sm" title="${esc(o.moreTitle || "More actions")}">More ▾</summary><span class="row-more-body">${rest.map((v) => kitVerbHtml(v, o.verbCls)).join("")}</span></details>`
     : "";
   return shown.map((v) => kitVerbHtml(v, o.verbCls)).join("") + moreHtml;
 }
@@ -667,7 +668,7 @@ function bulkBarHtml(o) {
     + `<span class="bulk-bar-count"><strong${kitAttr("id", countId)}>${n}</strong> selected</span>`
     + (o.extra || "")
     + kitVerbsHtml(o.verbs, o.more, { moreId: o.moreId, moreCls: o.moreCls, moreTitle: o.moreTitle || "The other verbs for the selected rows" })
-    + `<button type="button" class="btn btn-sm bulk-clear"${kitAttr("id", clearId)}${o.onClear ? ` onclick="${esc(o.onClear)}"` : ""}>Clear</button>`
+    + `<button type="button" class="btn btn-sm bulk-clear"${kitAttr("id", clearId)}${o.clearAct ? " " + actAttr(...o.clearAct) : ""}>Clear</button>`
     + `</div>`;
 }
 /* dockBulkBar(listEl, barEl) — the bar sits in a .bulk-dock as the LAST child of the list's scroller and
@@ -689,16 +690,16 @@ function rowItemHtml(o) {
   const cb = o.cb
     ? `<input type="checkbox" class="bulk-cb${o.cb.name ? " " + esc(o.cb.name) : ""}" data-id="${esc(o.cb.value == null ? o.id : o.cb.value)}" aria-label="Select ${esc(text || "this row")}"${o.cb.checked ? " checked" : ""}>`
     : "";
-  /* The name ALWAYS opens the client. `clientId` is the house way; a raw onclick/href is allowed
+  /* The name ALWAYS opens the client. `clientId` is the house way; a raw act/href is allowed
      only for a list whose rows are not clients (KIT.md rule 3). */
   let nameEl;
-  if (name.clientId) nameEl = `<div class="t" onclick="openClient('${jsArg(name.clientId)}')">${esc(text)}</div>`;
+  if (name.clientId) nameEl = `<div class="t" ${actAttr("openClient", name.clientId)}>${esc(text)}</div>`;
   else if (name.href) nameEl = `<a class="t" href="${esc(name.href)}">${esc(text)}</a>`;
-  else nameEl = `<div class="t"${name.onclick ? ` onclick="${esc(name.onclick)}"` : ""}>${esc(text)}</div>`;
+  else nameEl = `<div class="t"${name.act ? " " + actAttr(...name.act) : ""}>${esc(text)}</div>`;
   const chips = (o.chips || []).filter((c) => c && c.label).slice(0, KIT_MAX_CHIPS).map((c) => {
     const cls = `badge ${c.cls || "grey"}`;
-    return c.onclick
-      ? `<button type="button" class="${esc(cls)} row-chip"${kitAttr("id", c.id)}${kitAttr("title", c.title)} onclick="event.stopPropagation();${esc(c.onclick)}">${esc(c.label)}</button>`
+    return c.act
+      ? `<button type="button" class="${esc(cls)} row-chip"${kitAttr("id", c.id)}${kitAttr("title", c.title)} data-stop ${actAttr(...c.act)}>${esc(c.label)}</button>`
       : `<span class="${esc(cls)}"${kitAttr("id", c.id)}${kitAttr("title", c.title)}>${esc(c.label)}</span>`;
   }).join(" ");
   const contact = o.contact && o.contact.phone
@@ -1291,7 +1292,7 @@ function assigneeChipHtml(id) { const ini = initials(id); return ini ? `<span cl
 function taskAssigneeHtml(taskId, assignedTo, reloadKey) {
   const ini = initials(assignedTo);
   const tip = assignedTo && ini ? staffName(assignedTo) + " — click to reassign" : "Unassigned — click to assign";
-  return `<span class="chip chip-set" role="button" tabindex="0" title="${esc(tip)}" onclick="openReassign(event,'${taskId}','${assignedTo || ""}','${reloadKey || ""}')">${ini ? esc(ini) : "＋"}</span>`;
+  return `<span class="chip chip-set" role="button" tabindex="0" title="${esc(tip)}" data-stop ${actAttr("openReassign", "$event", taskId, assignedTo || "", reloadKey || "")}>${ini ? esc(ini) : "＋"}</span>`;
 }
 window.openReassign = function (ev, taskId, currentId, reloadKey) {
   ev.stopPropagation();
@@ -1421,7 +1422,7 @@ const REFILE_BADGE = '<span class="badge grey note-refiled-badge" title="This no
 /* The "Re-file…" control. Offered on any note that is neither a marker nor already re-filed — no role gate,
    because anyone who can read a note and see it is on the wrong case is the right person to say so. */
 function refileBtnHtml(noteId) {
-  return ` <button type="button" class="btn btn-sm note-refile-btn" data-note-id="${esc(noteId)}" onclick="refileNote('${jsArg(noteId)}', event)" title="This note is on the wrong case — move a copy to the right one and mark this one as filed in error">Re-file…</button>`;
+  return ` <button type="button" class="btn btn-sm note-refile-btn" data-note-id="${esc(noteId)}" ${actAttr("refileNote", noteId, "$event")} title="This note is on the wrong case — move a copy to the right one and mark this one as filed in error">Re-file…</button>`;
 }
 const tlDayLabel = (ts) => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short", day: "numeric", month: "short" }).format(new Date(ts)).replace(",", "");
 // Relative age that reads correctly for FUTURE items (upcoming appointments show "in Nd").
@@ -1475,7 +1476,7 @@ function lfavFail(img) {
 function lenderIcon(lender, size = 16) {
   const dom = lenderDomain(lender);
   if (!dom || LFAV_DEAD.has(dom)) return "";
-  return `<img class="lfav" data-dom="${dom}" src="https://www.google.com/s2/favicons?domain=${dom}&sz=32" width="${size}" height="${size}" alt="" loading="lazy" decoding="async" onerror="lfavFail(this)">`;
+  return `<img class="lfav" data-dom="${dom}" src="https://www.google.com/s2/favicons?domain=${dom}&sz=32" width="${size}" height="${size}" alt="" loading="lazy" decoding="async" data-on="error" ${actAttr("lfavFail", "$this")}>`;
 }
 
 /* R6 BATCH 1 · THE PROPERTY PRIMITIVE A client is not a property. A portfolio landlord's five cases are five
@@ -3491,7 +3492,7 @@ function confirmHardDelete(what, extra) {
 function emptyState(o) {
   o = o || {};
   const act = o.action && o.action.label
-    ? `<button type="button" class="btn btn-sm"${o.action.id ? ` id="${esc(o.action.id)}"` : ""}${o.action.onclick ? ` onclick="${o.action.onclick}"` : ""}>${esc(o.action.label)}</button>`
+    ? `<button type="button" class="btn btn-sm"${o.action.id ? ` id="${esc(o.action.id)}"` : ""}${o.action.act ? " " + actAttr(...o.action.act) : ""}>${esc(o.action.label)}</button>`
     : "";
   return `<div class="empty-state">`
     + `<strong class="empty-state-h">${o.headlineHtml || esc(o.headline || "Nothing here.")}</strong>`
@@ -5003,6 +5004,8 @@ async function putEmailOnHold() {
 /* R72 · A3: "BEFORE GO-LIVE", THE ONE ORDERED LIST (R70 panel, M4 · Priya F5) Settings is ten switches, each with
    its own honest paragraph, and NOWHERE does the page say what stands between this firm and actually going live.
    THE RULES THIS BLOCK KEEPS: · It ADDS NO SETTINGS KEYS and writes nothing. … */
+/* R95 · B4: the row's old inline `goliveJump(a)||goliveJump(b)`, as one global for the delegation kit. */
+window.goliveJumpOr = function (sel, fallback) { return goliveJump(sel) || (fallback ? goliveJump(fallback) : false); };
 window.goliveJump = function (sel) {
   let el = null;
   try { el = document.querySelector(sel); } catch (e) { el = null; }
@@ -5097,7 +5100,7 @@ function renderSettingsGolive() {
   const outstanding = rows.filter((r) => r.state !== "ready");
   const ready = rows.filter((r) => r.state === "ready");
   const chip = (s) => s === "ready" ? `<span class="badge green">ready</span>` : s === "unknown" ? `<span class="badge grey">not known</span>` : `<span class="badge red">blocked</span>`;
-  const row = (r) => `<div class="golive-item" id="${r.id}" data-state="${r.state}" role="button" tabindex="0" title="Jump to the setting that changes this" onclick="goliveJump('${jsArg(r.sel)}')${r.fallback ? `||goliveJump('${jsArg(r.fallback)}')` : ""}">
+  const row = (r) => `<div class="golive-item" id="${r.id}" data-state="${r.state}" role="button" tabindex="0" title="Jump to the setting that changes this" ${actAttr("goliveJumpOr", r.sel, r.fallback || "")}>
       <div class="golive-item-head"><span class="golive-label">${r.label}</span> ${chip(r.state)}</div>
       <div class="golive-detail">${r.detail}</div>
       ${r.state === "ready" ? "" : `<div class="golive-blocks">${r.blocks}</div>`}
@@ -5235,7 +5238,7 @@ async function renderSettings() {
       </select>
     </label>`, setNoteHtml("birthday-status", `Birthday greetings: <strong>${settings.birthday_enabled === "on" ? "ON" : "OFF"}</strong>${
       dobStats ? ` · <strong>${dobStats.withDob}</strong> of <strong>${dobStats.total}</strong> client${dobStats.total === 1 ? "" : "s"} have a date of birth${
-        dobStats.total > dobStats.withDob ? ` — <a href="javascript:void(0)" id="birthday-missing-link" onclick="gotoClientSegment('no_dob')">${dobStats.total - dobStats.withDob} missing →</a>` : " — none missing"}`
+        dobStats.total > dobStats.withDob ? ` — <a href="#" id="birthday-missing-link" ${actAttr("gotoClientSegment", "no_dob")}>${dobStats.total - dobStats.withDob} missing →</a>` : " — none missing"}`
       : " · client count unavailable just now"}.`))}
     
     <label>Completion anniversary emails
@@ -6376,12 +6379,12 @@ function renderTodayKpis() {
   // adviser's home screen. …
   const money = showMoney();
   const kpiHtml = `
-    <div class="kpi dq-clickable" onclick="kpiGoto('active')" title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div>${scopeTag}</div>
-    <div class="kpi dq-clickable" onclick="kpiGoto('completions')" title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div>${scopeTag}</div>
+    <div class="kpi dq-clickable" ${actAttr("kpiGoto", "active")} title="View the pipeline"><div class="num">${active.length}</div><div class="lbl">Active cases</div>${scopeTag}</div>
+    <div class="kpi dq-clickable" ${actAttr("kpiGoto", "completions")} title="View Reports"><div class="num">${completedThisYear.length}</div><div class="lbl">Completions in ${yr}</div>${scopeTag}</div>
     
-    <div class="kpi dq-clickable ${kpiCounts.inWindow ? "warn" : ""}" onclick="kpiGoto('rates')" title="${esc(`Rates ${rateBookWindowWord(reminderMonths)} — ${kpiCounts.ended} already ended (the client is on the reversion rate now) and ${kpiCounts.ending} still to end. A rate that has already lapsed is INSIDE the window, not past it. View Rate & ERC alerts.`)}"><div class="num">${kpiCounts.inWindow}</div><div class="lbl">Rates ${rateBookWindowWord(reminderMonths)}</div>${scopeTag}</div>
-    <div class="kpi dq-clickable ${kpiCounts.ercAll ? "bad" : ""}" onclick="kpiGoto('erc')" title="View Rate &amp; ERC alerts. ERC = Early Repayment Charge, the fee for leaving a deal early — &quot;outlasts the rate&quot; means it is still running after the client's discounted rate has already finished, so they are locked in past the deal that locked them in."><div class="num">${kpiCounts.ercAll}</div><div class="lbl">ERC outlasts rate</div>${scopeTag}</div>
-    ${money ? `<div class="kpi dq-clickable ${feesDue.length ? "warn" : ""}" onclick="kpiGoto('fees')" title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div>${scopeTag}</div>` : ""}`;
+    <div class="kpi dq-clickable ${kpiCounts.inWindow ? "warn" : ""}" ${actAttr("kpiGoto", "rates")} title="${esc(`Rates ${rateBookWindowWord(reminderMonths)} — ${kpiCounts.ended} already ended (the client is on the reversion rate now) and ${kpiCounts.ending} still to end. A rate that has already lapsed is INSIDE the window, not past it. View Rate & ERC alerts.`)}"><div class="num">${kpiCounts.inWindow}</div><div class="lbl">Rates ${rateBookWindowWord(reminderMonths)}</div>${scopeTag}</div>
+    <div class="kpi dq-clickable ${kpiCounts.ercAll ? "bad" : ""}" ${actAttr("kpiGoto", "erc")} title="View Rate &amp; ERC alerts. ERC = Early Repayment Charge, the fee for leaving a deal early — &quot;outlasts the rate&quot; means it is still running after the client's discounted rate has already finished, so they are locked in past the deal that locked them in."><div class="num">${kpiCounts.ercAll}</div><div class="lbl">ERC outlasts rate</div>${scopeTag}</div>
+    ${money ? `<div class="kpi dq-clickable ${feesDue.length ? "warn" : ""}" ${actAttr("kpiGoto", "fees")} title="View the Protection &amp; Fees drawer — Fees due tab"><div class="num">${fmtM(feesDueTotal)}</div><div class="lbl">Fees outstanding (${feesDue.length}) <span style="font-weight:400;opacity:.7;">· all stages</span></div>${scopeTag}</div>` : ""}`;
   /* R78 · A1c: THE FLICKER GUARD. loadDashboard calls this twice per load (once off the raw rows, once after
      buildRateErcFeed hands the collapse keys over), and from the second session paint onwards the two calls build
      BYTE-IDENTICAL markup — so the second innerHTML write repainted five tiles with themselves, which is the KPI
@@ -6523,10 +6526,10 @@ async function renderOpsStrip(cases, pre) {
   const liveStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const noAdviser = (cases || []).filter((c) => !c.assigned_to && liveStages.includes(c.stage)).length;
 
-  const chip = (id, icon, label, n, onclick, tip) => {
+  const chip = (id, icon, label, n, act, tip) => {
     // A count that could not be read says so rather than rendering a confident zero.
     const unknown = n == null;
-    return `<button type="button" class="ops-chip${!unknown && n > 0 ? " hot" : ""}" id="${id}" data-n="${unknown ? "" : n}" onclick="${onclick}" title="${esc(tip)}">
+    return `<button type="button" class="ops-chip${!unknown && n > 0 ? " hot" : ""}" id="${id}" data-n="${unknown ? "" : n}" ${actAttr(...act)} title="${esc(tip)}">
       <span aria-hidden="true">${icon}</span><span class="ops-n">${unknown ? "—" : n}</span> ${esc(label)}</button>`;
   };
   /* R69 · A2 — the six chips are wrapped in one .ops-chips element so a phone can turn THEM into
@@ -6537,23 +6540,23 @@ async function renderOpsStrip(cases, pre) {
     `<div class="ops-chips">`,
     /* R74 · A3: "emails held" while the hold is on, the same word Settings, the Emails page and Data health
        now use. The chip's id, count and destination are unchanged. */
-    chip("ops-emails-queued", "✉️", `emails ${heldWord()}`, emailsQueued, "nav('operations/emails')",
+    chip("ops-emails-queued", "✉️", `emails ${heldWord()}`, emailsQueued, ["nav", "operations/emails"],
       emailHoldOn()
         ? `Emails waiting to go out. Sending is currently ON HOLD (Settings › Email sending), so no run sends them — they are held, not lost. Opens ${OPS_EMAILS_NAME}.`
         : `Emails waiting to go out on the daily automation run. Opens ${OPS_EMAILS_NAME}. Whether they can actually send is on Settings › Email sending.`),
     /* R87 · today (01 #7): "emails failed" opens EMAILS filtered to failed, the same door the Data health
        tile itself deep-links to (dhGotoEmails). Two chips about mail now go to one page… */
-    chip("ops-emails-failed", "⚠️", "emails failed", emailsFailed, "dhGotoEmails(true)",
+    chip("ops-emails-failed", "⚠️", "emails failed", emailsFailed, ["dhGotoEmails", true],
       `Emails the sender rejected — a bad address, or a send that errored. They do not retry themselves. Opens ${OPS_EMAILS_NAME} filtered to failed messages.`),
-    chip("ops-sms-queued", "💬", "SMS queued", smsQueued, "nav('operations/emails')",
+    chip("ops-sms-queued", "💬", "SMS queued", smsQueued, ["nav", "operations/emails"],
       `Text messages waiting on the SMS run (about 08:05 UK). Opens ${OPS_EMAILS_NAME}, where the SMS queue sits under the email one.`),
-    chip("ops-leads-new", "🧲", "leads to assign", leadsNew, "opsGotoLeads()",
+    chip("ops-leads-new", "🧲", "leads to assign", leadsNew, ["opsGotoLeads"],
       "Website leads nobody has accepted yet. Opens the New leads block on My Day, below."),
-    chip("ops-unassigned", "🗂️", "cases with no adviser", noAdviser, "reportGotoAdviser('unassigned')",
+    chip("ops-unassigned", "🗂️", "cases with no adviser", noAdviser, ["reportGotoAdviser", "unassigned"],
       "Live cases nobody owns — nothing on them is anybody's job. Opens the Pipeline filtered to Unassigned."),
     /* R87 · today (01 #7) — the doc-chase call tasks sit on each case's adviser, so the chip now
        flips My Day to "All" on the way (opsGotoDocChases) instead of telling the reader to. */
-    chip("ops-docs-overdue", "📄", "document chases exhausted", docsOverdue, "opsGotoDocChases()",
+    chip("ops-docs-overdue", "📄", "document chases exhausted", docsOverdue, ["opsGotoDocChases"],
       "Cases where three document chase emails went unanswered, so the automation stopped emailing and raised a call task instead. Opens My Day on “All”, where those call tasks are."),
     `</div>`,
   ].join("");
@@ -6578,7 +6581,7 @@ const CRON_RUN_NOW_TITLE = "Runs the 8am automation now: it queues whatever is d
   + "You are shown exactly how many emails that is, and who the first few go to, before anything is sent — and while sending is held in Settings › Email sending, it queues and stamps but sends nothing.";
 function cronRunNowBtnHtml() {
   return isAdminOrOwner()
-    ? `<button type="button" class="dash-notice-run" id="dash-cron-run-btn" title="${esc(CRON_RUN_NOW_TITLE)}" onclick="dashRunCronNow(this)">▶ Run now</button>`
+    ? `<button type="button" class="dash-notice-run" id="dash-cron-run-btn" title="${esc(CRON_RUN_NOW_TITLE)}" ${actAttr("dashRunCronNow", "$this")}>▶ Run now</button>`
     : "";
 }
 window.dashRunCronNow = function (btn) {
@@ -6638,7 +6641,7 @@ function renderDashNotices() {
   if (!cronAudience) { /* adviser: no system-health banner */ }
   else if (cronKnown && !cronAt) {
     bits.push(`<div class="dash-notice" id="dash-cron-notice" data-state="never"><span class="dash-notice-msg">⏱ The 8am automation has never confirmed a run.</span>
-      <button type="button" class="dash-notice-link" onclick="nav('operations/emails')">Open Emails</button>${cronRunNowBtnHtml()}</div>`);
+      <button type="button" class="dash-notice-link" ${actAttr("nav", "operations/emails")}>Open Emails</button>${cronRunNowBtnHtml()}</div>`);
     heads.push("the 8am automation has never run");
   } else if (cronAt) {
     const ms = Date.now() - new Date(cronAt).getTime();
@@ -6648,7 +6651,7 @@ function renderDashNotices() {
          line: the headline and the two buttons are what a phone needs… */
       bits.push(`<div class="dash-notice warn" id="dash-cron-notice" data-state="stale"><span class="dash-notice-msg" title="The 8am automation last ran ${esc(fmtD(cronAt))}. Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.">⏱ <strong>The 8am automation last ran ${esc(fmtD(cronAt))} — ${days} day${days === 1 ? "" : "s"} ago.</strong>
         <span class="dash-notice-why">Emails may be silently stuck: the queue fills up and nothing on this page changes when the sender stops.</span></span>
-        <button type="button" class="dash-notice-link" onclick="nav('operations/emails')">Check the queue</button>${cronRunNowBtnHtml()}</div>`);
+        <button type="button" class="dash-notice-link" ${actAttr("nav", "operations/emails")}>Check the queue</button>${cronRunNowBtnHtml()}</div>`);
       heads.push(`the 8am automation last ran ${days} day${days === 1 ? "" : "s"} ago`);
     }
   }
@@ -6658,7 +6661,7 @@ function renderDashNotices() {
     const expKnown = Object.prototype.hasOwnProperty.call(settings, "last_full_export_at");
     const expAt = String(settings.last_full_export_at || "").trim();
     const days = expAt ? daysSinceLocal(expAt) : null;
-    const expBtn = `<button type="button" class="dash-notice-link" id="dash-export-run-btn" onclick="dashBackupNow(this)" title="${esc(isOwner()
+    const expBtn = `<button type="button" class="dash-notice-link" id="dash-export-run-btn" ${actAttr("dashBackupNow", "$this")} title="${esc(isOwner()
       ? "Runs the firm export right here — the same confirm and the same file as Settings › Data & backup, and it stamps the export date so this reminder clears."
       : "Opens Settings at the Data & backup section.")}">${isOwner() ? "💾 Export it now" : "Go to Settings"}</button>`;
     if (!expAt) {
@@ -7017,7 +7020,7 @@ function phoneActionsHtml(phone, opts) {
   /* R82 · A7: `compact`: the icons alone, the number in the title. For a cell inside a TABLE whose width is a
      contract, the printed number and the word "Text" are ~150px this layout does not have… */
   const tel = o.compact
-    ? `<span class="ret-row-tel"><a class="contact-link" href="tel:${esc(raw.replace(/[^\d+]/g, ""))}" title="Ring ${esc(raw)} — the number on their record." aria-label="Ring ${esc(raw)}" onclick="event.stopPropagation()">📞</a></span>`
+    ? `<span class="ret-row-tel"><a class="contact-link" href="tel:${esc(raw.replace(/[^\d+]/g, ""))}" title="Ring ${esc(raw)} — the number on their record." aria-label="Ring ${esc(raw)}" data-stop>📞</a></span>`
     : `<span class="ret-row-tel" title="Ring the client — the number on their record.">📞 ${telLink(raw)}</span>`;
   if (!o.sms) return tel;
   /* R82 · A7: `clients.sms_opt_out` has been a real column (and a field on the client form) since the schema was
@@ -7028,7 +7031,7 @@ function phoneActionsHtml(phone, opts) {
   /* encodeURIComponent leaves ' ! ( ) * alone — legal in a URI, but a bare apostrophe inside an href
      attribute is one more thing for a message app's own parser to get wrong… */
   const body = encodeURIComponent(smsHouseBody(o)).replace(/['()!*]/g, (ch) => "%" + ch.charCodeAt(0).toString(16).toUpperCase());
-  return tel + ` <a class="contact-link row-sms-link" href="sms:${esc(href)}?&amp;body=${esc(body)}" title="${esc(SMS_TIP)}" onclick="event.stopPropagation()">${o.compact ? "💬" : "💬 Text"}</a>`;
+  return tel + ` <a class="contact-link row-sms-link" href="sms:${esc(href)}?&amp;body=${esc(body)}" title="${esc(SMS_TIP)}" data-stop>${o.compact ? "💬" : "💬 Text"}</a>`;
 }
 /* ==========================================================================
    R70 · B2 — "LAST CONTACT", THE SAME DEFINITION THE COLD SEGMENT USES.
@@ -7132,10 +7135,9 @@ function rowLastContactHtml(a, feed, opts) {
 /* R70 · B3: THE THREE COMMONEST RATE-END OUTCOMES, ON THE ROW. Luke's idea 7. … */
 function rowOutcomeVerbs(a) {
   if (a.stage !== "completed") return [];
-  const id = jsArg(a.case_id);
   return [
-    { label: "🔄 Renewed elsewhere", cls: "ret-row-chip ret-out-chip", onclick: `retRateOutcome('${id}','renewed')`, title: "They took a new deal direct or with somebody else. Opens the rate-end outcome form on that answer — it asks for the NEW rate end date, then re-arms this case so it comes back before that one ends." },
-    { label: "🏠 Property sold", cls: "ret-row-chip ret-out-chip", onclick: `retRateOutcome('${id}','sold')`, title: "The property is sold or the mortgage redeemed. Opens the rate-end outcome form on that answer — it stops tracking this rate and marks the property SOLD on the client's record." },
+    { label: "🔄 Renewed elsewhere", cls: "ret-row-chip ret-out-chip", act: ["retRateOutcome", a.case_id, "renewed"], title: "They took a new deal direct or with somebody else. Opens the rate-end outcome form on that answer — it asks for the NEW rate end date, then re-arms this case so it comes back before that one ends." },
+    { label: "🏠 Property sold", cls: "ret-row-chip ret-out-chip", act: ["retRateOutcome", a.case_id, "sold"], title: "The property is sold or the mortgage redeemed. Opens the rate-end outcome form on that answer — it stops tracking this rate and marks the property SOLD on the client's record." },
   ];
 }
 /* R72 · A2: WHAT ACTUALLY HAPPENED AT THE END OF THE RATE (panel H5c) Daniel's question is one number: of the
@@ -7290,7 +7292,7 @@ function renderRateErcRow(a, feed, opts) {
   return `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)} ${propCtxChip(feed.ctx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
+        <div class="t" ${actAttr("openCase", a.case_id)}>${esc(a.client_name)} ${propCtxChip(feed.ctx, a.case_id, "row-prop")}${a.__dupes > 1 ? ` <span class="badge grey" title="${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.">${a.__dupes} cases</span>` : ""}</div>
         ${""}
         <div class="s">${rateErcFactHtml(a, feed, money, mny)}</div>
         ${""}
@@ -7308,10 +7310,10 @@ function renderRateErcRow(a, feed, opts) {
       ${a.stage === "completed" && rem.workable && a.rate_end_date && !retentionSourceIds.has(a.case_id)
         ? (farOut
           ? `<span class="badge grey rate-too-early" title="${esc(rateTooEarlyTip(feed))}">too early — ${Math.round(a.days_to_rate_end / 30)}mo out</span>`
-          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();startRetentionCase('${a.case_id}', event)" title="${RET_START_TIP}">🔁 Start retention case</button>`) : ""}
+          : retentionToMeHtml(a.case_id, cp) + `<button class="btn btn-sm btn-retention" data-stop ${actAttr("startRetentionCase", a.case_id, "$event")} title="${RET_START_TIP}">🔁 Start retention case</button>`) : ""}
       ${""}
       ${a.stage === "completed" && rem.workable && retentionSourceIds.has(a.case_id)
-        ? `<button class="btn btn-sm btn-retention" onclick="event.stopPropagation();markRateReminded('${a.case_id}', event)" title="${RET_MARK_TIP}">✓ Mark as reminded</button>` : ""}
+        ? `<button class="btn btn-sm btn-retention" data-stop ${actAttr("markRateReminded", a.case_id, "$event")} title="${RET_MARK_TIP}">✓ Mark as reminded</button>` : ""}
     </div>`;
 }
 /* The words both row shapes share, so the drawer and the page cannot describe one rate two ways. */
@@ -7337,7 +7339,7 @@ function retCaseChip(feed, a) {
   const base = short || [kind !== "Case" ? kind : "", a.lender || ""].filter(Boolean).join(" · ") || "Case";
   const label = base + (a.__dupes > 1 ? ` · ${a.__dupes} cases` : "");
   return {
-    label, cls: "blue ret-case-chip", onclick: `openCase('${jsArg(a.case_id)}')`,
+    label, cls: "blue ret-case-chip", act: ["openCase", a.case_id],
     title: `Open the case${addr ? ` on ${addr}` : ""} — ${STAGE_LABEL[a.stage] || a.stage || ""}.${a.__dupes > 1 ? ` ${a.__dupes} cases share this property and this rate end date — shown once, because it is one mortgage conversation.` : ""}`,
   };
 }
@@ -7350,7 +7352,6 @@ function renderRetPageRow(a, feed, opts) {
   const ctxRow = propCtxCase(feed.ctx, a.case_id);
   const clientId = a.client_id || (ctxRow && ctxRow.client_id) || null;
   const ph = clientId && o.phones ? o.phones[clientId] : null;
-  const id = jsArg(a.case_id);
   const erc = feed.ercIds.has(a.case_id);
   let status;
   if (erc) status = { label: "ERC conflict", cls: "red", title: TIP_ERC };
@@ -7358,10 +7359,10 @@ function renderRetPageRow(a, feed, opts) {
   else status = { label: STAGE_LABEL[a.stage] || stageWordFor(a.stage), cls: `${stageBadgeClass(a.stage)} stage-chip` };
   const startable = a.stage === "completed" && rem.workable && a.rate_end_date && !retentionSourceIds.has(a.case_id);
   const tooEarly = startable && rateErcFarOut(a);
-  const verbs = [{ label: "📞 Log call", cls: "ret-row-chip ret-logcall-chip", onclick: `retLogCall('${id}')`, title: "Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task." }];
-  if (startable && !tooEarly) verbs.push({ label: "🔁 Start retention case", cls: "btn-retention", onclick: `startRetentionCase('${id}', event)`, title: RET_START_TIP });
-  if (a.stage === "completed" && rem.workable && retentionSourceIds.has(a.case_id)) verbs.push({ label: "✓ Mark as reminded", cls: "btn-retention", onclick: `markRateReminded('${id}', event)`, title: RET_MARK_TIP });
-  const more = [{ label: "📅 Book review", cls: "ret-row-chip hover-quiet", onclick: `retBookReview('${id}')`, title: "Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it." }]
+  const verbs = [{ label: "📞 Log call", cls: "ret-row-chip ret-logcall-chip", act: ["retLogCall", a.case_id], title: "Log a call against this case — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task." }];
+  if (startable && !tooEarly) verbs.push({ label: "🔁 Start retention case", cls: "btn-retention", act: ["startRetentionCase", a.case_id, "$event"], title: RET_START_TIP });
+  if (a.stage === "completed" && rem.workable && retentionSourceIds.has(a.case_id)) verbs.push({ label: "✓ Mark as reminded", cls: "btn-retention", act: ["markRateReminded", a.case_id, "$event"], title: RET_MARK_TIP });
+  const more = [{ label: "📅 Book review", cls: "ret-row-chip hover-quiet", act: ["retBookReview", a.case_id], title: "Book a rate-end review in the diary, prefilled with this client, this case and the adviser who owns it." }]
     .concat(rowOutcomeVerbs(a));
   /* The one fact line, in the order a caller reads it: the rate and when it ends, who last spoke to them,
      what is recorded, then the loan (owner)… */
@@ -7375,7 +7376,7 @@ function renderRetPageRow(a, feed, opts) {
     + (hasCallPack(cp) ? ` <span class="rate-callpack" title="${CALLPACK_TIP}">· ${callPackBitsHtml(cp, rateErcEnded(a))}</span>` : "");
   const toMe = startable && !tooEarly ? retentionAssigneeFor(cp) : null;
   if (toMe && toMe.id && ME && ME.id && toMe.id !== ME.id) {
-    more.unshift({ label: "🔁 Start — assign to me", cls: "btn-retention ret-tome-verb", onclick: `startRetentionCase('${id}', event, { toMe: true })`,
+    more.unshift({ label: "🔁 Start — assign to me", cls: "btn-retention ret-tome-verb", act: ["startRetentionCase", a.case_id, "$event", { toMe: true }],
       title: `Start the retention case assigned to you. Without this it goes to ${staffName(toMe.id)} — ${toMe.why}.` });
   }
   return rowItemHtml({
@@ -7437,7 +7438,7 @@ async function renderRetentionRows(open, cap) {
   return shown.map((c) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(ctx, c.id, "row-prop")}</div>
+        <div class="t" ${actAttr("openCase", c.id)}>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(ctx, c.id, "row-prop")}</div>
         <div class="s">${lenderIcon(c.lender)}${esc(c.lender || "")} — rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</div>
       </div>
       ${stageBadge(c.stage)}
@@ -7574,7 +7575,7 @@ async function loadDashboard() {
   $("#alerts-fees").innerHTML = feesTabCaption + (feeAlerts.length ? feeAlerts.map((a) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${a.case_id}')">${esc(a.client_name)}</div>
+        <div class="t" ${actAttr("openCase", a.case_id)}>${esc(a.client_name)}</div>
         <div class="s">${fmtM(a.broker_fee)} — ${lenderIcon(a.lender)}${esc(a.lender || "")}</div>
       </div>
       <span class="badge ${a.fee_status === "requested" ? "amber" : "grey"}">${a.fee_status === "requested" ? "Requested" : "Not requested"}</span>
@@ -7607,9 +7608,9 @@ async function renderRateErcDrawer(isStale) {   // R83
   rateErcH3.innerHTML = `⚠️ Rate &amp; ERC alerts
     ${rateBook.inWindow ? `<span class="count hot" title="${esc(rateCountTip(rateBook.inWindow, rateFeed.ratesSoonAll.length, rateBookWindowWord(reminderMonths), rateScope) + ` ${rateBook.ended} of them have already ended and ${rateBook.ending} are still to end — the Retention page groups them.`)}">${rateBook.inWindow} ${rateBookWindowWord(reminderMonths)}</span>` : ""}
     ${rateBook.ercAll ? `<span class="count" style="background:#fbe9e7;color:var(--red);" title="${esc(rateCountTip(rateBook.ercAll, rateFeed.ercFlagsAll.length, "ERC conflicts", rateScope) + (rateBook.ercOnly ? ` ${rateBook.ercOnly} of them are on this list ONLY for the ERC — their rate ends beyond the window.` : ""))}">${rateBook.ercAll} ERC conflict</span>` : ""}
-    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" onclick="event.stopPropagation();toggleRateErcSort()" title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}
+    ${showMoney() ? `<button type="button" class="btn btn-sm rate-sort-btn" id="rate-erc-sort" data-stop ${actAttr("toggleRateErcSort")} title="${rateValueSort ? "Sorted by loan size — the value at risk. Click to sort by date instead." : "Sorted by rate end date. Click to sort by loan size — the value at risk."}">${rateValueSort ? "↕ By value at risk" : "↕ By date"}</button>` : ""}
     
-    <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="rate-erc-open-retention" onclick="event.stopPropagation();nav('retention')" title="The same feed, un-truncated, with the retention pipeline and the clients who have gone quiet">Open Retention page →</button>`;
+    <button type="button" class="btn btn-ghost btn-sm ret-page-link" id="rate-erc-open-retention" data-stop ${actAttr("nav", "retention")} title="The same feed, un-truncated, with the retention pipeline and the clients who have gone quiet">Open Retention page →</button>`;
   const rateSub = $("#rate-erc-sub");
   if (rateSub) {
     rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
@@ -7625,7 +7626,7 @@ async function renderRateErcDrawer(isStale) {   // R83
   if (stale()) return null;   // R78 · A5 · R83 — superseded (a newer dashboard load, or a newer scope/sort flip)
   $("#alerts-rateerc").innerHTML = rateErcMerged.length
     ? rateErcShown.map((a) => renderRateErcRow(a, rateFeed, { phones: dashPhones })).join("")
-      + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" onclick="nav('retention')">see the Retention page</button>.</div>` : "")
+      + (rateErcMerged.length > 15 ? `<div class="empty">…and ${rateErcMerged.length - 15} more — <button type="button" class="dash-notice-link" ${actAttr("nav", "retention")}>see the Retention page</button>.</div>` : "")
       + rateErcDedupeNote(rateFeed.collapsed)
     : '<div class="empty">Nothing ending in the reminder window, and no ERC conflicts. 👍</div>';
   return rateFeed;
@@ -8225,12 +8226,12 @@ async function loadRetentionRates(scope) {
     /* R88 · C — emptyState(), the house one, with the way out named: an empty chip is not an
        empty book (R64 · A2 / R75 · B2). */
     : (q
-      ? emptyState({ headline: `No retention rows for “${retSearch.trim()}”`, sub: "The search looks at client names inside the chip and the scope above.", action: { label: "Clear the search", id: "ret-empty-clear", onclick: "retClearSearch()" } })
+      ? emptyState({ headline: `No retention rows for “${retSearch.trim()}”`, sub: "The search looks at client names inside the chip and the scope above.", action: { label: "Clear the search", id: "ret-empty-clear", act: ["retClearSearch"] } })
       : outFiltered
-        ? emptyState({ headline: `No ended rate is recorded as “${RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter}” on ${rateScopeWord(scope)}`, sub: "Those outcomes have left this list with their rate-end date.", action: { label: "Show everything", id: "ret-empty-window", onclick: "retSetMonth(retMonthResolved())" } })
+        ? emptyState({ headline: `No ended rate is recorded as “${RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter}” on ${rateScopeWord(scope)}`, sub: "Those outcomes have left this list with their rate-end date.", action: { label: "Show everything", id: "ret-empty-window", act: ["retSetMonth", retMonthResolved()] } })
         : monthKey === "all"
           ? emptyState({ headline: `Nothing ending in the reminder window on ${rateScopeWord(scope)}`, sub: "And no ERC conflicts." })
-          : emptyState({ headline: `Nothing in this window on ${rateScopeWord(scope)}`, sub: `${feed.rows.length} row${feed.rows.length === 1 ? "" : "s"} under “6 months + ERC conflicts”.`, action: { label: "Show the whole window", id: "ret-empty-all", onclick: "retSetMonth('all')" } }));
+          : emptyState({ headline: `Nothing in this window on ${rateScopeWord(scope)}`, sub: `${feed.rows.length} row${feed.rows.length === 1 ? "" : "s"} under “6 months + ERC conflicts”.`, action: { label: "Show the whole window", id: "ret-empty-all", act: ["retSetMonth", "all"] } }));
   if (ordered.length) wireRetBulk();
   retFixRemKeys(listEl);
   activateAll("#ret-rates-list .kit-row .t");
@@ -8381,13 +8382,13 @@ function renderRetColdList(data, sorted, scope, seq) {
       id: `retcold-${c.id}`, cls: "ret-cold-row",
       name: { text: [c.first_name, c.last_name].filter(Boolean).join(" ") || "(no name)", clientId: c.id },
       chips: [
-        nextCase ? { label: caseTypeLabel(nextCase) + (next && next.lender ? ` · ${next.lender}` : ""), cls: "blue ret-case-chip", onclick: `openCase('${jsArg(nextCase.id)}')`, title: "Open the case whose rate matures next — the one this call is about." } : null,
+        nextCase ? { label: caseTypeLabel(nextCase) + (next && next.lender ? ` · ${next.lender}` : ""), cls: "blue ret-case-chip", act: ["openCase", nextCase.id], title: "Open the case whose rate matures next — the one this call is about." } : null,
         next && next.date <= coldRateEdge ? { label: "rate coming", cls: "amber", title: "This client has a rate maturing — a reason to ring them." } : null,
       ],
       fact: bits.join(" · "),
       /* R87 · book · C1 (04 #1) — a Book client row carries sms_opt_out. */
       contact: c.phone ? { phone: c.phone, smsOptOut: !!c.sms_opt_out, first: c.first_name || "", rateEnd: next ? next.date : null } : null,
-      verbs: nextCase ? [{ label: "📞 Log call", cls: "ret-row-chip ret-logcall-chip", onclick: `retLogCall('${jsArg(nextCase.id)}')`, title: "Log a call against the case whose rate matures next — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task." }] : [],
+      verbs: nextCase ? [{ label: "📞 Log call", cls: "ret-row-chip ret-logcall-chip", act: ["retLogCall", nextCase.id], title: "Log a call against the case whose rate matures next — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task." }] : [],
     });
   }).join("");
   $("#ret-rates-list").innerHTML = `<div id="ret-cold-list">${sorted.length
@@ -8714,6 +8715,8 @@ window.snoozeTask = async function (taskId, days) {
   toast(roll.rolled ? `Snoozed to Monday — skipped the weekend · now due ${fmtD(newDue)}` : "Snoozed — now due " + fmtD(newDue));
   snoozeRepaintAll();
 };
+/* R95 · B6: the date-pick's old inline `snoozeTaskTo(id, this.value)`, as a global the delegation kit can call. */
+window.snoozeTaskPick = function (taskId, el) { return snoozeTaskTo(taskId, el.value); };
 window.snoozeTaskTo = async function (taskId, value) {
   if (!value) return;
   const { error } = await db.from("case_tasks").update({ due_date: value }).eq("id", taskId);
@@ -8731,10 +8734,10 @@ function taskSnoozeControlsHtml(taskId, ctx) {
   return `<details class="task-snooze snooze-menu" id="snooze-menu-${p}">
       <summary class="btn btn-sm snooze-open" id="snooze-open-${p}" title="Push this task's due date on — tomorrow, 3 days, next week, or a date you pick" aria-label="Snooze task">⏰ Snooze ▾</summary>
       <span class="snooze-menu-items" role="group" aria-label="Snooze task">
-        <button type="button" class="btn btn-sm snooze-btn" id="snooze-1d-${p}" aria-label="Snooze task by 1 day" title="Push the due date on by 1 day" onclick="snoozeTask('${taskId}',1)">Tomorrow</button>
-        <button type="button" class="btn btn-sm snooze-btn" id="snooze-3d-${p}" aria-label="Snooze task by 3 days" title="Push the due date on by 3 days" onclick="snoozeTask('${taskId}',3)">3 days</button>
-        <button type="button" class="btn btn-sm snooze-btn" id="snooze-1wk-${p}" aria-label="Snooze task by 1 week" title="Push the due date on by 1 week" onclick="snoozeTask('${taskId}',7)">Next week</button>
-        <input type="date" class="snooze-date" id="snooze-pick-${p}" min="${t}" aria-label="Snooze task to a chosen date" title="Pick a new due date" onchange="snoozeTaskTo('${taskId}', this.value)">
+        <button type="button" class="btn btn-sm snooze-btn" id="snooze-1d-${p}" aria-label="Snooze task by 1 day" title="Push the due date on by 1 day" ${actAttr("snoozeTask", taskId, 1)}>Tomorrow</button>
+        <button type="button" class="btn btn-sm snooze-btn" id="snooze-3d-${p}" aria-label="Snooze task by 3 days" title="Push the due date on by 3 days" ${actAttr("snoozeTask", taskId, 3)}>3 days</button>
+        <button type="button" class="btn btn-sm snooze-btn" id="snooze-1wk-${p}" aria-label="Snooze task by 1 week" title="Push the due date on by 1 week" ${actAttr("snoozeTask", taskId, 7)}>Next week</button>
+        <input type="date" class="snooze-date" id="snooze-pick-${p}" min="${t}" aria-label="Snooze task to a chosen date" title="Pick a new due date" data-on="change" ${actAttr("snoozeTaskPick", taskId, "$this")}>
       </span>
     </details>`;
 }
@@ -8787,7 +8790,7 @@ async function loadProtection() {
   $("#protection-list").innerHTML = protTabCaption + ((opps || []).length ? opps.map((c) => `
     <div class="row-item">
       <div class="row-main">
-        <div class="t" onclick="openCase('${c.id}')">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(protCtx, c.id, "row-prop", { noStage: true })}</div>
+        <div class="t" ${actAttr("openCase", c.id)}>${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" "))} ${propCtxChip(protCtx, c.id, "row-prop", { noStage: true })}</div>
         <div class="s">${c.lender ? lenderIcon(c.lender) + esc(c.lender) + " · " : ""}${STAGE_LABEL[c.stage] || c.stage}${c.stage === "completed" ? " " + fmtD(c.completed_at) : ""}</div>
       </div>
       <span class="badge amber">discuss protection</span>
@@ -8889,25 +8892,25 @@ function apptQuickOutcomeHtml(it) {
     /* R73 · B3 (panel B#9): .btn-ghost dropped: these are the one-tap outcome on a timed appointment, and a
        borderless muted control under a heading reads as a caption rather than the verb it is. */
     + APPT_OUTCOMES.filter(([v]) => v !== "rearranged").map(([v, label, mark]) =>
-      `<button type="button" class="btn btn-sm appt-quick-btn" aria-label="Record this appointment as ${esc(label.toLowerCase())}" title="Record this appointment as ${esc(label.toLowerCase())} — no email or text is sent to anybody" onclick="quickApptOutcome('${it.appt_id}','${v}',this)">${mark} ${esc(label)}</button>`).join("")
+      `<button type="button" class="btn btn-sm appt-quick-btn" aria-label="Record this appointment as ${esc(label.toLowerCase())}" title="Record this appointment as ${esc(label.toLowerCase())} — no email or text is sent to anybody" ${actAttr("quickApptOutcome", it.appt_id, v, "$this")}>${mark} ${esc(label)}</button>`).join("")
     + `</span>`;
 }
 function briefActions(it) {
-  const open = it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open</button>` : "";
+  const open = it.case_id ? `<button class="btn btn-sm" ${actAttr("openCase", it.case_id)}>Open</button>` : "";
   switch (it.kind) {
     /* R88 · A: THE FOLDED-IN KINDS, IN MY DAY'S GRAMMAR. A check's row is Open (the case) plus the verb that
        closes it: ✓ Done (= dismiss, no reason) for a warning or an FYI… */
     case "wt_alert":
       return briefAlertVerbsHtml(it.alert, open);
     case "radar":
-      return `${open}<button class="btn btn-sm btn-primary brief-add-step" onclick="addNextStep('${jsArg(it.case_id)}')" title="Open the case at its task box — give it a next step">Add next step</button>`;
+      return `${open}<button class="btn btn-sm btn-primary brief-add-step" ${actAttr("addNextStep", it.case_id)} title="Open the case at its task box — give it a next step">Add next step</button>`;
     case "task_overdue":
     case "task_today":
-      return `${taskSnoozeControlsHtml(it.task_id, "brief")}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>${open}`;
+      return `${taskSnoozeControlsHtml(it.task_id, "brief")}<button class="btn btn-sm" ${actAttr("briefDone", it.task_id)}>✓ Done</button>${open}`;
     /* R9-3: the same two verbs as any other task, in the opposite order. "Open case" leads because the thing
        worth doing first is READING what the client said… */
     case "review_feedback":
-      return `${it.case_id ? `<button class="btn btn-sm btn-primary" onclick="openCase('${it.case_id}')" title="Read the client's own words on the case timeline, then ring them">Open case</button>` : ""}<button class="btn btn-sm" onclick="briefDone('${it.task_id}')">✓ Done</button>`;
+      return `${it.case_id ? `<button class="btn btn-sm btn-primary" ${actAttr("openCase", it.case_id)} title="Read the client's own words on the case timeline, then ring them">Open case</button>` : ""}<button class="btn btn-sm" ${actAttr("briefDone", it.task_id)}>✓ Done</button>`;
     case "lead_new":
       /* R41 · F1: Discard (✕) follows the leads drawer onto this row. It is the SECOND thing that drawer could do
          that My Day could not, and unlike the appointment outcome it is not a convenience: `discardLead` opens the
@@ -8918,39 +8921,39 @@ function briefActions(it) {
         : "")
         + leadRoutingHtml(it.lead_id)
         + `<span class="brief-lead-actions">`
-        + `<button class="btn btn-sm btn-primary" onclick="acceptLead('${it.lead_id}', event)">Accept</button>`
-        + `<button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard this enquiry — you'll be asked why, and the reason is kept" onclick="discardLead('${it.lead_id}')">✕</button>`
+        + `<button class="btn btn-sm btn-primary" ${actAttr("acceptLead", it.lead_id, "$event")}>Accept</button>`
+        + `<button class="btn btn-sm btn-danger" aria-label="Discard lead" title="Discard this enquiry — you'll be asked why, and the reason is kept" ${actAttr("discardLead", it.lead_id)}>✕</button>`
         + `</span>`;
     /* R12a K-5 — the same two verbs the Emails row offers, in the order that fixes it: the address is wrong,
        so correcting the client record comes first and re-sending second. */
     case "comms_failed":
       return (it.client_id
-        ? `<button class="btn btn-sm btn-primary" onclick="fixContactOpen('${it.fix_kind || "email"}','${jsArg(it.fix_row || "")}','${it.client_id}','${jsArg(it.fix_value || "")}')" title="Open the client record with the ${it.fix_focus === "phone" ? "phone number" : "email address"} that failed, so it can be corrected">Fix contact</button>`
-        : `<button class="btn btn-sm btn-primary" onclick="dhGotoEmails(true)" title="Open the Emails page filtered to failed messages">Fix contact</button>`)
-        + (it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : "");
+        ? `<button class="btn btn-sm btn-primary" ${actAttr("fixContactOpen", it.fix_kind || "email", it.fix_row || "", it.client_id, it.fix_value || "")} title="Open the client record with the ${it.fix_focus === "phone" ? "phone number" : "email address"} that failed, so it can be corrected">Fix contact</button>`
+        : `<button class="btn btn-sm btn-primary" ${actAttr("dhGotoEmails", true)} title="Open the Emails page filtered to failed messages">Fix contact</button>`)
+        + (it.case_id ? `<button class="btn btn-sm" ${actAttr("openCase", it.case_id)}>Open case</button>` : "");
     case "email_new":
-      return `${it.case_id ? `<button class="btn btn-sm" onclick="openCase('${it.case_id}')">Open case</button>` : ""}<button class="btn btn-sm" onclick="markEmailHandled('${it.email_id}')">Handled</button>${it.case_id ? `<button class="btn btn-sm" onclick="askAI('Draft a reply to the latest email from this client. Case id: ${it.case_id}')">Draft reply</button>` : ""}`;
+      return `${it.case_id ? `<button class="btn btn-sm" ${actAttr("openCase", it.case_id)}>Open case</button>` : ""}<button class="btn btn-sm" ${actAttr("markEmailHandled", it.email_id)}>Handled</button>${it.case_id ? `<button class="btn btn-sm" ${actAttr("askAI", `Draft a reply to the latest email from this client. Case id: ${it.case_id}`)}>Draft reply</button>` : ""}`;
     case "appt_today":
       /* Defect 27: the row title now opens the same destination (the appointment editor) as this button — a
          small secondary "Case" link is offered too when a case is linked… */
       return apptQuickOutcomeHtml(it)
         + (it.case_id ? open
-          : it.appt_id ? `<button class="btn btn-sm" onclick="openAppt('${it.appt_id}')">Open</button>` : "");
+          : it.appt_id ? `<button class="btn btn-sm" ${actAttr("openAppt", it.appt_id)}>Open</button>` : "");
     case "rate_urgent":
-      return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','rate_end_reminder', event)">Send reminder</button>` : ""}${open}`;
+      return `${(it.sub || "").includes("not contacted") ? `<button class="btn btn-sm" ${actAttr("briefQueueEmail", it.case_id, "rate_end_reminder", "$event")}>Send reminder</button>` : ""}${open}`;
     case "fee_chase":
       /* R5-28: a fee request is composed server-side from the firm's bank details, so with none set
          queueEmail refuses every one of these. The button used to be offered anyway: click, toast… */
       if (hasBankDetails === false) {
         return `<span class="badge grey" title="Fee-request emails are composed from the firm's bank details, and none are set in Settings.">fee requests blocked — no bank details</span>`
-          + (isOwner() ? `<button class="btn btn-sm" onclick="gotoSettings()" title="Add the bank details">Open Settings</button>` : "")
+          + (isOwner() ? `<button class="btn btn-sm" ${actAttr("gotoSettings")} title="Add the bank details">Open Settings</button>` : "")
           + open;
       }
-      return `<button class="btn btn-sm" onclick="briefQueueEmail('${it.case_id}','fee_request', event)">Chase fee</button>${open}`;
+      return `<button class="btn btn-sm" ${actAttr("briefQueueEmail", it.case_id, "fee_request", "$event")}>Chase fee</button>${open}`;
     case "protection_hot":
-      return `<button class="btn btn-sm" onclick="setProtStatus('${it.case_id}','quoted').then(()=>loadBriefing())">Mark quoted</button>${open}`;
+      return `<button class="btn btn-sm" ${actAttr("briefMarkQuoted", it.case_id)}>Mark quoted</button>${open}`;
     case "no_completion_date":
-      return `<button class="btn btn-sm" onclick="gotoPipelineSegment('current')">View pipeline</button>`;
+      return `<button class="btn btn-sm" ${actAttr("gotoPipelineSegment", "current")}>View pipeline</button>`;
     default:
       return open;
   }
@@ -9281,15 +9284,15 @@ function briefMoreHtml(row) {
   const bits = row.extra.map((x) => `${BRIEF_KIND_ICON[x.kind] || "•"} ${esc(briefKindShort(x.kind))}`).join(" · ");
   /* The click must not also open the case: the summary sits inside .row-main, whose .t is a
      click-through to the case, and a fold that navigated away would be unusable. */
-  return `<details class="brief-more"><summary onclick="event.stopPropagation()">+${row.extra.length} more on this case: ${bits}</summary>`
+  return `<details class="brief-more"><summary data-stop>+${row.extra.length} more on this case: ${bits}</summary>`
     + row.extra.map(briefSubRowHtml).join("")
     + `</details>`;
 }
 function briefTitleClickAttr(it) {
-  if (it.kind === "appt_today" && it.appt_id) return `onclick="openAppt('${it.appt_id}')"`;
-  if (it.case_id) return `onclick="openCase('${it.case_id}')"`;
-  if (it.client_id) return `onclick="openClient('${it.client_id}')"`;
-  if (it.goto_segment) return `onclick="gotoPipelineSegment('${it.goto_segment}')"`;
+  if (it.kind === "appt_today" && it.appt_id) return actAttr("openAppt", it.appt_id);
+  if (it.case_id) return actAttr("openCase", it.case_id);
+  if (it.client_id) return actAttr("openClient", it.client_id);
+  if (it.goto_segment) return actAttr("gotoPipelineSegment", it.goto_segment);
   return "";
 }
 /* R5-25 — the ⚠ prefix on a clashing appointment gets the diary's own explanation on hover. */
@@ -9319,19 +9322,18 @@ function briefAlertVerbsHtml(a, open, side) {
   let door = "";
   const link = R7_ALERT_LINKS[a.rule];
   if (link && link.when()) {
-    const go = typeof link.go === "function" ? link.go(a) : link.go;
-    door = `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${go}" title="${esc(link.title)}">${esc(link.label)}</button>`;
+    const go = typeof link.act === "function" ? link.act(a) : link.act;
+    door = `<button class="btn btn-sm wt-link-btn" data-stop ${actAttr(...go)} title="${esc(link.title)}">${esc(link.label)}</button>`;
   }
-  if (a.__synth) return (open || "") + (a.__go ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${a.__go}" title="Open the firm's Data health page">Data health</button>` : "");
-  const id = jsArg(a.id), cid = jsArg(a.case_id || "");
+  if (a.__synth) return (open || "") + (a.__act ? `<button class="btn btn-sm wt-link-btn" data-stop ${actAttr(...a.__act)} title="Open the firm's Data health page">Data health</button>` : "");
   const close = a.severity === "crit"
-    ? `<button class="btn btn-sm brief-wt-snooze" onclick="snoozeAlert('${id}','crit','${cid}')" title="Critical check — hide it until a date you pick. A reason is required and is written to the case.">⏰ Snooze…</button>`
-      + `<button class="btn btn-sm brief-wt-dismiss" onclick="resolveAlert('${id}','crit','${cid}')" title="Critical check — close it now. A reason is required and is written to the case; it is raised again if the problem is still there.">Dismiss</button>`
+    ? `<button class="btn btn-sm brief-wt-snooze" ${actAttr("snoozeAlert", a.id, "crit", a.case_id || "")} title="Critical check — hide it until a date you pick. A reason is required and is written to the case.">⏰ Snooze…</button>`
+      + `<button class="btn btn-sm brief-wt-dismiss" ${actAttr("resolveAlert", a.id, "crit", a.case_id || "")} title="Critical check — close it now. A reason is required and is written to the case; it is raised again if the problem is still there.">Dismiss</button>`
     /* R91 · 5: on a SUB-LINE the same close reads "Clear" — ✓ Done is the row's own verb, and a task-headed row
        carrying a warning showed two ✓ Done that did different things. */
     : side
-      ? `<button class="btn btn-sm brief-wt-done" onclick="wtDoneAlert('${id}')" title="Clear — closes this check. It is raised again on the next run if the problem is still there.">Clear</button>`
-      : `<button class="btn btn-sm brief-wt-done" onclick="wtDoneAlert('${id}')" title="Done — closes this check. It is raised again on the next run if the problem is still there.">✓ Done</button>`;
+      ? `<button class="btn btn-sm brief-wt-done" ${actAttr("wtDoneAlert", a.id)} title="Clear — closes this check. It is raised again on the next run if the problem is still there.">Clear</button>`
+      : `<button class="btn btn-sm brief-wt-done" ${actAttr("wtDoneAlert", a.id)} title="Done — closes this check. It is raised again on the next run if the problem is still there.">✓ Done</button>`;
   return (open || "") + door + close;
 }
 /* R88 · A: ONE SUB-LINE for a folded-in item on a row that already exists for its case: what it is in a few
@@ -9341,7 +9343,7 @@ function briefSideHtml(it) {
   if (it.kind === "radar") {
     return `<div class="s brief-side brief-side-radar" data-radar="${esc(it.case_id)}" data-radar-rank="${it.radarRank}"${it.stale ? ` title="${esc(STALE_TASK_TIP)}"` : ""}>`
       + `<span class="brief-side-t">🕰️ ${it.stale ? "Stale task only" : "No next action"} · ${esc(it.sub || "")}${it.__subHtml || ""}</span>`
-      + `<span class="brief-side-acts"><button class="btn btn-sm brief-add-step" onclick="addNextStep('${jsArg(it.case_id)}')" title="Open the case at its task box — give it a next step">Add next step</button></span></div>`;
+      + `<span class="brief-side-acts"><button class="btn btn-sm brief-add-step" ${actAttr("addNextStep", it.case_id)} title="Open the case at its task box — give it a next step">Add next step</button></span></div>`;
   }
   const a = it.alert || {};
   const sev = wtSevKey(a);
@@ -9394,6 +9396,8 @@ function briefRowHtml(row) {
 /* Renders from the cached lastBriefItems (no refetch) — used both after a fresh load and when a group's
    expand toggle changes. The count badge stays on the real item total. R61 — MY DAY IN BANDS. */
 window.briefFoldOpen = window.briefFoldOpen || {};
+window.briefFoldToggle = function (key, el) { briefFoldOpen[key] = el.open; };   // R95 · B6: was an inline ontoggle
+window.briefMarkQuoted = function (caseId) { return setProtStatus(caseId, "quoted").then(() => loadBriefing()); };   // R95 · B6
 const BRIEF_BAND_CAP = 10;
 /* R73 · A1: TODAY FIRST (Daniel's decision, 28 Aug 2026). The bands used to render Urgent → Today → Worth doing,
    i.e. in priority-number order, which put a run of seventeen months-old ended rates above the 10 o'clock
@@ -9606,7 +9610,7 @@ function renderBriefing() {
   let unfoldedRows = 0;
   /* R88 · A — the radar's R70 tail, named once at the foot of the band it sits in. */
   const tailHtml = radarTail
-    ? `<div class="brief-tail unactioned-more cs-muted">…and ${radarTail} more with no next action — <button type="button" class="dash-notice-link" onclick="nav('pipeline')">open Pipeline</button> to work the rest.</div>`
+    ? `<div class="brief-tail unactioned-more cs-muted">…and ${radarTail} more with no next action — <button type="button" class="dash-notice-link" ${actAttr("nav", "pipeline")}>open Pipeline</button> to work the rest.</div>`
     : "";
   if (!rows.length) {
     html = '<div class="empty">All clear — nothing needs you right now 🎉</div>';   // .empty kept: every suite's boot waits on it
@@ -9623,7 +9627,7 @@ function renderBriefing() {
          it say what they are. The same words survive as the header's title, for the hover that asks. */
       return `<div class="brief-sec brief-sec-${b.key}" title="${esc(b.label + ": " + b.why)}"><span class="brief-sec-ic" aria-hidden="true">${b.icon}</span>${b.label} ${briefBandCountHtml(b.rows)}</div>`
         + shown.map(briefRowHtml).join("")
-        + (folded.length ? `<details class="brief-fold"${briefFoldOpen[b.key] ? " open" : ""} ontoggle="briefFoldOpen['${b.key}']=this.open">
+        + (folded.length ? `<details class="brief-fold"${briefFoldOpen[b.key] ? " open" : ""} data-on="toggle" ${actAttr("briefFoldToggle", b.key, "$this")}>
             <summary>Show the other ${folded.length} ${b.label.toLowerCase()} item${folded.length === 1 ? "" : "s"}</summary>
             ${folded.map(briefRowHtml).join("")}
           </details>` : "")
@@ -9808,13 +9812,13 @@ $("#brief-scope-all").addEventListener("click", () => setBriefScope("all"));
 /* Watchtower R7 — the round-7 rules and the screen each one is worked on. Keyed by watch_alerts.rule, so a
    rule the database doesn't emit simply never matches and nothing appears. */
 const R7_ALERT_LINKS = {
-  fee_aging_60: { when: () => showMoney(), go: "gotoMoneyOwed()", label: "Money owed →",
+  fee_aging_60: { when: () => showMoney(), act: ["gotoMoneyOwed"], label: "Money owed →",
                   title: "Open the full Money owed list on Reports — every unpaid fee, aged from its completion date." },
-  protection_quote_stale: { when: () => true, go: "nav('protection')", label: "Protection →",
+  protection_quote_stale: { when: () => true, act: ["nav", "protection"], label: "Protection →",
                   title: "Open the Protection page, where every quote carries its age." },
   /* R7-5: a slow lead is worked in one place: My Day, at the top of this same screen. The link scrolls to the
      enquiry's own row, because "lead_slow" alerts and the lead they are about were two unconnected lists… */
-  lead_slow: { when: () => true, go: (a) => `gotoLeadInbox('${jsArg((a && a.lead_id) || "")}')`, label: "Lead inbox →",
+  lead_slow: { when: () => true, act: (a) => ["gotoLeadInbox", (a && a.lead_id) || ""], label: "Lead inbox →",
                   title: "Open this enquiry's row in My Day on Today, where it can be accepted." },
   /* R74 · B6 (panel A#5) — THE LAST TWO RULES WITHOUT A DOOR.
      `retention_gap` and `workload` are the only two rules whose work happens somewhere else than
@@ -9831,9 +9835,9 @@ const R7_ALERT_LINKS = {
          My Day under All is the one screen that lists overdue tasks as rows, each one carrying
          its owner's name. So the link takes you there and puts you on that person's work rather
          than inventing a fourth list. `staff_id` is the column the rule already writes. */
-  retention_gap: { when: () => true, go: "nav('retention')", label: "Retention →",
+  retention_gap: { when: () => true, act: ["nav", "retention"], label: "Retention →",
                   title: "Open the Retention page — every rate ending, with what has been started against it." },
-  workload: { when: () => true, go: (a) => `gotoStaffOverdue('${jsArg((a && a.staff_id) || "")}')`, label: "Their day →",
+  workload: { when: () => true, act: (a) => ["gotoStaffOverdue", (a && a.staff_id) || ""], label: "Their day →",
                   title: "Open My Day on Today showing everyone's work, on this person's first row." },
   /* R65: THE TWO NEW DATE RULES GET NO ENTRY HERE, ON PURPOSE. `offer_before_completion` and
      `erc_before_completion` are both fixed in ONE place: the case itself, where the offer expiry and the expected
@@ -10138,7 +10142,7 @@ async function loadMyDataHealthAlerts(existingAlerts) {
     const extra = rows.length - WT_MY_DH_CAP;
     const capped = rows.slice(0, WT_MY_DH_CAP);
     capped.push({
-      __synth: true, __go: "nav('operations/data')", id: "synth:my_data_health:more", rule: "my_data_health",
+      __synth: true, __act: ["nav", "operations/data"], id: "synth:my_data_health:more", rule: "my_data_health",
       severity: "info", case_id: null, client_id: null,
       title: `Your data health — …and ${extra} more to fix`,
       detail: `${rows.length} of your cases have a missing email address or a missing rate-end date. The whole list, with the rest of the firm's, is on Data health.`,
@@ -10172,7 +10176,7 @@ function renderWatchtower() {
   const chips = $("#wt-filters");
   if (chips) {
     chips.innerHTML = WT_SEV_CHIPS.map(([k, label]) =>
-      `<button type="button" class="seg-btn wt-sev-chip${wtSevFilter === k ? " active" : ""}" id="wt-sev-${k}" data-sev="${k}" aria-pressed="${wtSevFilter === k}" onclick="wtSetSevFilter('${k}')" title="${k === "all" ? "Show every open alert" : `Show only ${label.toLowerCase()} alerts`} — this only filters what is on screen, nothing is dismissed or hidden permanently">${label} <span class="seg-count">${sevCounts[k]}</span></button>`
+      `<button type="button" class="seg-btn wt-sev-chip${wtSevFilter === k ? " active" : ""}" id="wt-sev-${k}" data-sev="${k}" aria-pressed="${wtSevFilter === k}" ${actAttr("wtSetSevFilter", k)} title="${k === "all" ? "Show every open alert" : `Show only ${label.toLowerCase()} alerts`} — this only filters what is on screen, nothing is dismissed or hidden permanently">${label} <span class="seg-count">${sevCounts[k]}</span></button>`
     ).join("");
   }
   const shown = wtSevFilter === "all" ? alerts : alerts.filter((a) => wtSevKey(a) === wtSevFilter);
@@ -10208,9 +10212,9 @@ function renderWatchtower() {
   });
 
   const rowHtml = (a) => {
-    const openClick = a.case_id ? `onclick="openCase('${a.case_id}')"` : a.client_id ? `onclick="openClient('${a.client_id}')"` : "";
-    const openBtn = a.case_id ? `<button class="btn btn-sm" onclick="openCase('${a.case_id}')">Open</button>`
-      : a.client_id ? `<button class="btn btn-sm" onclick="openClient('${a.client_id}')">Open</button>` : "";
+    const openClick = a.case_id ? actAttr("openCase", a.case_id) : a.client_id ? actAttr("openClient", a.client_id) : "";
+    const openBtn = a.case_id ? `<button class="btn btn-sm" ${actAttr("openCase", a.case_id)}>Open</button>`
+      : a.client_id ? `<button class="btn btn-sm" ${actAttr("openClient", a.client_id)}>Open</button>` : "";
     const wtCase = propCtxCase(wtCtx, a.case_id);
     const wtTag = wtCase ? caseIdentityHtml(wtCase, { fallback: true, cls: "row-prop" }) : "";
     /* R6-B4 (D6-22 / LR-17) — 14 consecutive rows at identical type weight, identical height and identical
@@ -10220,18 +10224,18 @@ function renderWatchtower() {
        thing you actually do with it is work the whole ageing list, so the alert now carries a door to it. */
     const wtLink = R7_ALERT_LINKS[a.rule];
     // `go` may be a fixed expression or one built from the alert row (lead_slow needs its lead id).
-    const wtGo = wtLink ? (typeof wtLink.go === "function" ? wtLink.go(a) : wtLink.go) : "";
-    const wtLinkBtn = wtLink && wtLink.when() ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${wtGo}" title="${esc(wtLink.title)}">${esc(wtLink.label)}</button>` : "";
+    const wtGo = wtLink ? (typeof wtLink.act === "function" ? wtLink.act(a) : wtLink.act) : null;
+    const wtLinkBtn = wtLink && wtLink.when() ? `<button class="btn btn-sm wt-link-btn" data-stop ${actAttr(...wtGo)} title="${esc(wtLink.title)}">${esc(wtLink.label)}</button>` : "";
     /* R34 · Part 4 — a client-side row has no watch_alerts row behind it, so Snooze and Dismiss would both be
        lies. It carries the Open action alone — and, for the "…and N more" tail… */
-    const synthGoBtn = a.__synth && a.__go ? `<button class="btn btn-sm wt-link-btn" onclick="event.stopPropagation();${a.__go}" title="Open the firm's Data health page">Data health</button>` : "";
+    const synthGoBtn = a.__synth && a.__act ? `<button class="btn btn-sm wt-link-btn" data-stop ${actAttr(...a.__act)}" title="Open the firm's Data health page">Data health</button>` : "";
     const rowActions = a.__synth ? synthGoBtn
-      : `<button class="btn btn-sm" onclick="snoozeAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Snooze…</button>
-      <button class="btn btn-sm" onclick="resolveAlert('${a.id}','${a.severity}','${a.case_id || ""}')">Dismiss</button>`;
+      : `<button class="btn btn-sm" ${actAttr("snoozeAlert", a.id, a.severity, a.case_id || "")}>Snooze…</button>
+      <button class="btn btn-sm" ${actAttr("resolveAlert", a.id, a.severity, a.case_id || "")}>Dismiss</button>`;
     /* R72 · B2 (H5b): THE TICK BOX. Only on a row backed by a real watch_alerts row: a synthetic R34 row has
        nothing to update, exactly as it has no Snooze and no Dismiss. */
     const wtCb = a.__synth ? ""
-      : `<input type="checkbox" class="wt-cb" data-id="${esc(a.id)}" data-rule="${esc(a.rule || "other")}" aria-label="Select this alert for bulk triage"${wtSel.has(a.id) ? " checked" : ""} onclick="event.stopPropagation()">`;
+      : `<input type="checkbox" class="wt-cb" data-id="${esc(a.id)}" data-rule="${esc(a.rule || "other")}" aria-label="Select this alert for bulk triage"${wtSel.has(a.id) ? " checked" : ""} data-stop>`;
     // A synthetic row is a statement about the record as it is RIGHT NOW, not an event with a
     // date, so it shows no "created" date rather than a misleading one.
     const wtWhen = a.__synth ? "" : `<span class="wt-when">${fmtD(a.created_at)}</span>`;
@@ -10261,7 +10265,7 @@ function renderWatchtower() {
       : "";
     return `<div class="wt-group wt-group-${g.sev}${g.open ? "" : " wt-folded"}" data-wt-key="${esc(g.key)}">
       <div class="wt-group-headrow">
-      <button type="button" class="wt-group-head" aria-expanded="${g.open}" onclick="wtToggleGroup('${jsArg(g.key)}', this)" title="${g.open ? "Hide" : "Show"} the ${g.items.length} ${esc(wtGroupUnit(g.rule, g.items.length))}${esc(wtGroupTitleSuffix(g.label))}">
+      <button type="button" class="wt-group-head" aria-expanded="${g.open}" ${actAttr("wtToggleGroup", g.key, "$this")} title="${g.open ? "Hide" : "Show"} the ${g.items.length} ${esc(wtGroupUnit(g.rule, g.items.length))}${esc(wtGroupTitleSuffix(g.label))}">
         <span class="wt-group-caret" aria-hidden="true"></span>
         <span class="wt-group-label">${esc(g.label)}</span>
         <span class="wt-group-n">${g.items.length}</span>
@@ -10289,7 +10293,7 @@ function renderWatchtower() {
     /* Two different kinds of empty, and they must not read the same: nothing wrong at all, versus
        plenty wrong but none of it matching the chip you pressed. */
     : (alerts.length
-      ? `<div class="empty" id="watchtower-filter-empty">No ${esc((WT_SEV_CHIPS.find(([k]) => k === wtSevFilter) || [, wtSevFilter])[1]).toLowerCase()} alerts right now — ${alerts.length} other open alert${alerts.length === 1 ? " is" : "s are"} hidden by this filter. <button type="button" class="btn btn-sm" onclick="wtSetSevFilter('all')">Show all</button></div>`
+      ? `<div class="empty" id="watchtower-filter-empty">No ${esc((WT_SEV_CHIPS.find(([k]) => k === wtSevFilter) || [, wtSevFilter])[1]).toLowerCase()} alerts right now — ${alerts.length} other open alert${alerts.length === 1 ? " is" : "s are"} hidden by this filter. <button type="button" class="btn btn-sm" ${actAttr("wtSetSevFilter", "all")}>Show all</button></div>`
       : '<div class="empty">No problems detected 🎉</div>'));
   /* R7 — if the ceiling ever bites, the panel says which subset it is showing rather than
      under-reporting in silence. Appended to the list, so it cannot be mistaken for an alert. */
@@ -10571,7 +10575,7 @@ function renderSnoozedWatchAlerts(snoozed) {
         <div class="t">${esc(a.title)}</div>
         <div class="s">Snoozed until ${fmtD(a.snoozed_until)}${a.snoozed_by ? " by " + esc(staffName(a.snoozed_by)) : ""}${a.snooze_note ? " — " + esc(a.snooze_note) : ""}</div>
       </div>
-      <button class="btn btn-sm" onclick="unsnoozeAlert('${a.id}')">Unsnooze</button>
+      <button class="btn btn-sm" ${actAttr("unsnoozeAlert", a.id)}>Unsnooze</button>
     </div>`).join("");
   /* R87 · today (A6): the toggle now lives in My Day's ⋯ menu, above a drawer that may be collapsed. Showing
      the snoozed list opens the drawer and brings it into view; hiding the list leaves the drawer as it is. */
@@ -11267,7 +11271,7 @@ function boardCardHtml(c, ctx) {
         const dupeHint = dupeNameClients.has(c.client_id)
           ? `<span class="badge amber card-dupe-hint" title="Another CLIENT RECORD shares this client's email address or exact name — possible duplicate. Check it in Data health → duplicate review before adding anything to this case, so the note or task lands on the record the firm keeps.">dupe?</span>`
           : "";
-        return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" data-stage="${c.stage}" onclick="openCase('${c.id}')">
+        return `<div class="card${age.level ? " age-" + age.level : ""}" draggable="true" data-id="${c.id}" data-stage="${c.stage}" ${actAttr("openCase", c.id)}>
           <div class="cn" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span class="cn-name" title="${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "")}">${esc([c.clients?.first_name, c.clients?.last_name].filter(Boolean).join(" ") || "—")}</span><span style="display:flex;align-items:center;gap:6px;flex:0 0 auto;">${dupeHint}${c.assigned_to ? `<span class="chip" title="${esc(staffName(c.assigned_to))}">${initials(c.assigned_to)}</span>` : ""}</span></div>
           
           
@@ -11288,7 +11292,7 @@ function boardCardHtml(c, ctx) {
           </div>
           ${age.text ? `<div class="age-line" title="${esc(age.basis)}">${age.text}</div>` : ""}
           
-          <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" onclick="event.stopPropagation()" onchange="moveCaseToStage('${c.id}', this.value, {expectedStage:'${c.stage}'})">
+          <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" data-stop data-on="change" ${actAttr("cardStageMove", c.id, "$this", c.stage)}>
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
           </select>
         </div>`;
@@ -11762,7 +11766,7 @@ async function loadPipeline() {
       subHtml: why.length
         ? `Clear ${why.join(" or ")} to see the rest of the board.`
         : `Cases appear here as soon as one reaches a stage in ${segName}.`,
-      action: why.length ? { label: "Clear filters", id: "board-empty-clear", onclick: "clearBoardFilters()" } : null,
+      action: why.length ? { label: "Clear filters", id: "board-empty-clear", act: ["clearBoardFilters"] } : null,
     });
     updateBoardScrollHint();
     return;
@@ -11805,7 +11809,7 @@ async function loadPipeline() {
           return "";
         }
       }).join("")}
-      ${hiddenCount > 0 ? `<button type="button" class="board-show-more" onclick="window.boardShowMore('${k}')">Show ${hiddenCount} more</button>` : ""}
+      ${hiddenCount > 0 ? `<button type="button" class="board-show-more" ${actAttr("boardShowMore", k)}>Show ${hiddenCount} more</button>` : ""}
     </div>`;
   }).join("");
   $("#board").innerHTML = boardHtml + (boardSkipped > 0
@@ -11826,36 +11830,6 @@ function updateBoardScrollHint() {
   const max = board.scrollWidth - board.clientWidth;
   wrap.classList.toggle("can-scroll-right", board.scrollLeft < max - 4);
   wrap.classList.toggle("can-scroll-left", board.scrollLeft > 4);
-}
-/* R73 · A5 (panel D#6): THE TAB STRIPS SAY THEY SCROLL. Reports has 22 jump chips and Settings 14, in a strip
-   that is a horizontal scroller with `scrollbar-width: thin` — which on a trackpad is no scrollbar at all. */
-// eslint-disable-next-line no-unused-vars -- R94 · B3: no caller left, but its classes keep admin.css rules live (r87_shell D12); delete both in R95.
-function wireChipStripOverflow(barId, wrapId) {
-  const bar = document.getElementById(barId), wrap = document.getElementById(wrapId);
-  if (!bar || !wrap) return;
-  let arrow = bar.querySelector(".chip-scroll-arrow");
-  if (!arrow) {
-    arrow = document.createElement("button");
-    arrow.type = "button";
-    arrow.className = "board-scroll-arrow chip-scroll-arrow";
-    arrow.setAttribute("aria-label", "Scroll these tabs to the right");
-    arrow.title = "More tabs this way";
-    arrow.textContent = "›";
-    bar.appendChild(arrow);
-  }
-  const sync = () => {
-    const over = wrap.scrollWidth > wrap.clientWidth + 1;
-    const atEnd = wrap.scrollWidth - wrap.clientWidth <= wrap.scrollLeft + 2;
-    bar.classList.toggle("is-scrollable", over);
-    bar.classList.toggle("chip-at-end", over && atEnd);
-  };
-  arrow.onclick = () => wrap.scrollBy({ left: Math.round(wrap.clientWidth * 0.7), behavior: "smooth" });
-  wrap.onscroll = sync;
-  if (!wrap.__chipRo && typeof ResizeObserver === "function") {
-    try { (wrap.__chipRo = new ResizeObserver(sync)).observe(wrap); } catch (e) { /* older engine */ }
-  }
-  if (!bar.__chipResize) { bar.__chipResize = true; window.addEventListener("resize", sync, { passive: true }); }
-  sync();
 }
 /* ==========================================================================
    R73 · A4 (panel #8 / C#3) — WIDE TABLES BECOME CARDS ON A PHONE.
@@ -12440,7 +12414,7 @@ function caseStageChecklistHtml(c, tasks) {
       </div>
       ${added
         ? '<span class="badge green playbook-done" title="A matching open task already exists on this case">✓ added</span>'
-        : `<button type="button" class="btn btn-sm playbook-add" aria-label="Add task: ${esc(p.title)}" title="Add this task — due ${fmtD(due)}, assigned to the case adviser" onclick="playbookAdd('${c.id}','${c.stage}','${c.case_kind}',${i})">+ Add</button>`}
+        : `<button type="button" class="btn btn-sm playbook-add" aria-label="Add task: ${esc(p.title)}" title="Add this task — due ${fmtD(due)}, assigned to the case adviser" ${actAttr("playbookAdd", c.id, c.stage, c.case_kind, i)}>+ Add</button>`}
     </div>`;
   });
   const anyToAdd = plan.some((p) => !isOn(p));
@@ -12451,7 +12425,7 @@ function caseStageChecklistHtml(c, tasks) {
         ? `These steps were added to the task list automatically when this case reached ${esc(stageLbl)}. Anything still showing “+ Add” was not — it has been done and closed, or the case got here before automatic stage tasks were switched on — and one click puts it back on the list.`
         : "Advisory — automatic stage tasks are switched <strong>off</strong> in Settings, so nothing is added until you press Add."}</p>
       <div id="stage-checklist-items">${rows.join("")}</div>
-      ${anyToAdd ? `<button type="button" class="btn btn-sm" id="playbook-add-all" title="Add every suggested task not already on the list" onclick="playbookAddAll('${c.id}','${c.stage}','${c.case_kind}')">+ Add all</button>` : ""}
+      ${anyToAdd ? `<button type="button" class="btn btn-sm" id="playbook-add-all" title="Add every suggested task not already on the list" ${actAttr("playbookAddAll", c.id, c.stage, c.case_kind)}>+ Add all</button>` : ""}
     </div>`;
 }
 /* One suggested task → a real case_tasks row. Re-reads the case's open tasks at click time so a parallel add
@@ -12756,8 +12730,8 @@ async function loadCaseReferrals(caseId) {
     const meta = REFERRAL_META[r.kind] || REFERRAL_META.other;
     const b = REFERRAL_STATUS_BADGE[r.status] || ["grey", esc(String(r.status))];
     const acts = r.status === "made"
-      ? `<button type="button" class="btn btn-sm" onclick="window.refSetStatus('${r.id}','${caseId}','completed')">Mark completed</button>
-         <button type="button" class="btn btn-sm" onclick="window.refSetStatus('${r.id}','${caseId}','declined')">Declined</button>`
+      ? `<button type="button" class="btn btn-sm" ${actAttr("refSetStatus", r.id, caseId, "completed")}>Mark completed</button>
+         <button type="button" class="btn btn-sm" ${actAttr("refSetStatus", r.id, caseId, "declined")}>Declined</button>`
       : "";
     return `<div class="ref-row" data-ref-id="${r.id}" data-ref-status="${esc(r.status)}">
       <span class="ref-ic" aria-hidden="true">${meta.icon}</span>
@@ -13491,6 +13465,8 @@ async function promptCompletedEntry(cRow, caseName) {
 
 /* Move a case to a new stage. Shared by desktop drag-and-drop (the drop handler above) and the per-card "Move
    to stage" dropdown, which gives touch/mobile users — for whom HTML5 drag-and-drop does not fire… */
+/* R95 · B6: a board card's stage <select>, formerly inline `moveCaseToStage(id, this.value, {expectedStage})`. */
+window.cardStageMove = function (caseId, el, expectedStage) { return moveCaseToStage(caseId, el.value, { expectedStage }); };
 window.moveCaseToStage = async function (caseId, targetStage, opts = {}) {
   const { silent = false, skipReload = false, skipConfirm = false, cRow: preRow = null } = opts;
   if (!caseId || !targetStage) return "noop";
@@ -14861,7 +14837,7 @@ function renderPipelineTable(filtered, stageEntry = {}, opts = {}) {
   // "select-all" and the action bar only ever act on the rows on screen.
   const rowIds = new Set(rows.map((c) => c.id));
   [...pipeSel].forEach((id) => { if (!rowIds.has(id)) pipeSel.delete(id); });
-  const cbCell = (c) => `<td class="bulk-col" onclick="event.stopPropagation()"><input type="checkbox" class="bulk-cb" data-id="${c.id}" aria-label="Select this case"${pipeSel.has(c.id) ? " checked" : ""}></td>`;
+  const cbCell = (c) => `<td class="bulk-col" data-stop><input type="checkbox" class="bulk-cb" data-id="${c.id}" aria-label="Select this case"${pipeSel.has(c.id) ? " checked" : ""}></td>`;
 
 /* R62: the Fee-status column, weighted by what the word still means. "waived" and "not requested" repeated
    down a 995-row completed table is grey wallpaper… */
@@ -14908,7 +14884,7 @@ function feeStatusCellHtml(c) {
       default: return "<td></td>";
     }
   };
-  const bodyRows = rows.map((c) => `<tr onclick="openCase('${c.id}')">
+  const bodyRows = rows.map((c) => `<tr ${actAttr("openCase", c.id)}>
         ${cbCell(c)}${cols.map(([k]) => pipeCellHtml(c, k)).join("")}
       </tr>`).join("");
   /* R65 · L9: BELOW 700px THE TABLE IS A CARD LIST. Sixteen columns inside a horizontal scroller on a 390px phone
@@ -15475,14 +15451,13 @@ function protRowHtml(g, ctx) {
     + ownerBit
     + (top.has_email ? "" : ` · <span class="badge grey prot-noemail">no email</span>`);
   const ph = g.client_id ? (ctx.phones || {})[g.client_id] : null;
-  const cid = jsArg(top.case_id);
   return rowItemHtml({
     id: `prot-${g.client_id || top.case_id}`, cls: "prot-row",
     cb: { name: "prot-cb", value: key, checked: picked },
     name: g.client_id ? { text: g.client_name, clientId: g.client_id } : { text: g.client_name },
     chips: [
       { label: `#${g.rank}`, cls: "grey prot-rank", title: protScoreTitle(top, g.rank) },
-      { label: protCaseLabel(top) + (g.cases.length > 1 ? ` +${g.cases.length - 1}` : ""), cls: `${stageBadgeClass(top.stage)} prot-case-chip`, onclick: `openCase('${cid}')`,
+      { label: protCaseLabel(top) + (g.cases.length > 1 ? ` +${g.cases.length - 1}` : ""), cls: `${stageBadgeClass(top.stage)} prot-case-chip`, act: ["openCase", top.case_id],
         title: `Open the case — ${protCaseLabel(top)}${top.lender ? " · " + top.lender : ""}.${g.cases.length > 1 ? ` ${g.cases.length} of this client's cases are open opportunities; More ▾ opens each.` : ""}` },
     ],
     fact,
@@ -15490,11 +15465,11 @@ function protRowHtml(g, ctx) {
     verbs: [
       /* R87 · book (04 #9) — 📝, not a second 📞: the dial glyph beside the name rings the client;
          this opens the form (and, since R88 · C, the protection and GI status selects). */
-      { label: "📝 Log call", cls: "prot-logcall", onclick: `protLogCall('${cid}')`, title: "Log a call — note, outcome, protection tick, follow-up — and set the protection or GI status." },
-      { label: "Task", onclick: `protCallTask('${cid}')`, title: "Add a “Protection call” task for tomorrow on this case's adviser." },
-      top.has_email ? { label: "Email", cls: "prot-email", onclick: `protQueueEmail('${cid}', event)`, title: "Queue the protection intro email to this client." } : null,
+      { label: "📝 Log call", cls: "prot-logcall", act: ["protLogCall", top.case_id], title: "Log a call — note, outcome, protection tick, follow-up — and set the protection or GI status." },
+      { label: "Task", act: ["protCallTask", top.case_id], title: "Add a “Protection call” task for tomorrow on this case's adviser." },
+      top.has_email ? { label: "Email", cls: "prot-email", act: ["protQueueEmail", top.case_id, "$event"], title: "Queue the protection intro email to this client." } : null,
     ].filter(Boolean),
-    more: g.cases.map((r) => ({ label: `Open · ${protCaseLabel(r)}`, onclick: `openCase('${jsArg(r.case_id)}')`, title: `${r.lender || ""} · ${fmtM(r.loan_amount)}` })),
+    more: g.cases.map((r) => ({ label: `Open · ${protCaseLabel(r)}`, act: ["openCase", r.case_id], title: `${r.lender || ""} · ${fmtM(r.loan_amount)}` })),
     moreTitle: "Open each of this client's cases",
   });
 }
@@ -15574,7 +15549,7 @@ function renderProtectionPage(cache) {
       ? emptyState({
           headline: `No protection rows for “${protSearch.trim()}”`,
           sub: "The search looks at client names inside the current scope and chip, so one of those three is hiding the row you want.",
-          action: { label: "Clear the search", id: "prot-empty-clear", onclick: "clearProtSearch()" },
+          action: { label: "Clear the search", id: "prot-empty-clear", act: ["clearProtSearch"] },
         })
       : emptyState({
           headline: "No protection or GI opportunities in this view",
@@ -15660,13 +15635,13 @@ function renderClawbackWindow(pre) {
     ? `<strong id="prot-clawback-nodate-n">${noDate.length} polic${noDate.length === 1 ? "y has" : "ies have"} no start date recorded</strong> — add it on the case (Protection section); they are listed below the table.`
     : rows.length ? `Every policy taken has a start date recorded. 👍` : "";
   const rowHtml = (r) => `<tr data-case="${esc(r.id)}">
-      <td><span class="prot-client" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))}</span></td>
+      <td><span class="prot-client" ${actAttr("openCase", r.id)}>${esc(nameOf(r))}</span></td>
       <td>${fmtD(r.policy_start_date)}</td>
       <td class="clawback-months">${r.months} of ${CLAWBACK_MONTHS}</td>
       <td class="clawback-months${CLAWBACK_MONTHS - r.months <= 3 ? " clawback-left-hot" : ""}">${CLAWBACK_MONTHS - r.months}</td>
       ${money ? `<td class="num">${r.protection_commission > 0 ? fmtM(r.protection_commission) : '<span class="cs-muted">none recorded</span>'}</td>` : ""}
       <td>${r.assigned_to ? esc(staffName(r.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</td>
-      <td class="clawback-open"><button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">Open</button></td>
+      <td class="clawback-open"><button class="btn btn-sm" ${actAttr("openCase", r.id)}>Open</button></td>
     </tr>`;
   $("#prot-clawback-list").innerHTML = (inWindow.length ? `<table class="imp-table" id="prot-clawback-table">
       <tr><th>Client</th><th>Policy started</th><th>Months elapsed</th><th>Months left in window</th>${money ? "<th>Commission</th>" : ""}<th>Adviser</th><th></th></tr>
@@ -15674,7 +15649,7 @@ function renderClawbackWindow(pre) {
     </table>` : emptyState({ headline: `No policy started in the last ${CLAWBACK_MONTHS} months`, sub: rows.length ? "Nothing is inside a clawback window." : "" }))
     + (noDate.length ? `<div class="dq-notice" id="prot-clawback-nodate-list">
       <strong>No start date — window cannot be watched:</strong>
-      ${noDate.map((r) => `<button type="button" class="btn btn-sm" onclick="openCase('${jsArg(r.id)}')">${esc(nameOf(r))}</button>`).join(" ")}
+      ${noDate.map((r) => `<button type="button" class="btn btn-sm" ${actAttr("openCase", r.id)}>${esc(nameOf(r))}</button>`).join(" ")}
     </div>` : "");
 }
 /* R7-3 / R80 · A3: the two call lists, as predicates "Completed, no protection outcome" (the cases that got all the
@@ -16752,7 +16727,7 @@ function securityCardHtml(c, caseClient, secClient) {
   // focuses the date-of-birth field on the client record. Only offered when we know the client id.
   const dobRow = dob
     ? secRow("Date of birth", fmtD(dob))
-    : secRow("Date of birth", null, { noCopy: true, rawHtml: `<span class="sec-empty">—</span>${c.client_id ? ` <a href="#" class="sec-dob-add" onclick="event.preventDefault();openClient('${jsArg(c.client_id)}','dob')" title="Add this client's date of birth">(add DOB)</a>` : ""}` });
+    : secRow("Date of birth", null, { noCopy: true, rawHtml: `<span class="sec-empty">—</span>${c.client_id ? ` <a href="#" class="sec-dob-add" ${actAttr("openClient", c.client_id, "dob")} title="Add this client's date of birth">(add DOB)</a>` : ""}` });
   const propAddr = c.property_address || null;
   const homeAddr = secClient && secClient.address ? secClient.address : null;
   /* R14b: the mortgage / account number. Reads c.mortgage_account_number directly: on a database without the
@@ -17114,7 +17089,7 @@ function caseSharedHtml(k) {
   return sharedHolders.length
     ? `<span class="cs-shared" id="cs-shared-prop" title="${esc(`This property is on ${sharedHolders.length} other client${sharedHolders.length === 1 ? "'s" : "s'"} file${sharedHolders.length === 1 ? "" : "s"}: ${sharedHolders.map((h) => `${h.who} (${h.what})`).join(", ")}. That is legitimate — a sale advised on both sides, or a transfer between owners — but check you are on the right file before you act.`)}">`
       + `⚠ also held by ${sharedHolders.length} other client${sharedHolders.length === 1 ? "" : "s"} — `
-      + sharedHolders.map((h) => `<a href="#" class="cs-shared-link" data-case="${esc(h.caseId)}" onclick="event.preventDefault();openCase('${esc(h.caseId)}')">${esc(h.who)}</a>`).join(", ")
+      + sharedHolders.map((h) => `<a href="#" class="cs-shared-link" data-case="${esc(h.caseId)}" ${actAttr("openCase", h.caseId)}>${esc(h.who)}</a>`).join(", ")
       + `</span>`
     : "";
 }
@@ -17211,7 +17186,7 @@ function renderCaseSummary(k) {
       <div class="cs-top">
         <div class="cs-id">
           
-          <div class="cs-name">${c.client_id ? `<a href="#client/${esc(c.client_id)}" class="cs-name-link" id="cs-client-link" title="Open ${esc(clientName || "the client")}'s record" onclick="event.preventDefault(); openClient('${jsArg(c.client_id)}', null, null, '${jsArg(id)}')">${esc(clientName) || "Client"}</a>` : (esc(clientName) || "Client")} ${careChipsHtml(caseCare, { id: "cs-care-chips" })}</div>
+          <div class="cs-name">${c.client_id ? `<a href="#client/${esc(c.client_id)}" class="cs-name-link" id="cs-client-link" title="Open ${esc(clientName || "the client")}'s record" data-prevent ${actAttr("openClient", c.client_id, null, null, id)}>${esc(clientName) || "Client"}</a>` : (esc(clientName) || "Client")} ${careChipsHtml(caseCare, { id: "cs-care-chips" })}</div>
           
           <div class="cs-identity">
             ${identityChip}
@@ -17232,7 +17207,7 @@ function renderCaseSummary(k) {
             ${sharedHtml}
             
             ${c.referrer_client_id && referrerName
-              ? `<span class="cs-referrer" id="cs-referrer" title="${esc(referrerName)} referred this client. Open their record to see everyone they have sent.">🤝 Referred by <a href="#" class="cs-referrer-link" data-client="${esc(c.referrer_client_id)}" onclick="event.preventDefault();openClient('${jsArg(c.referrer_client_id)}')">${esc(referrerName)}</a></span>` : ""}
+              ? `<span class="cs-referrer" id="cs-referrer" title="${esc(referrerName)} referred this client. Open their record to see everyone they have sent.">🤝 Referred by <a href="#" class="cs-referrer-link" data-client="${esc(c.referrer_client_id)}" ${actAttr("openClient", c.referrer_client_id)}>${esc(referrerName)}</a></span>` : ""}
           </div>
           ${caseClient && (caseClient.phone || caseClient.email) ? `<div class="cs-contact">${caseClient.phone ? "📞 " + telLink(caseClient.phone) : ""}${caseClient.email ? "✉️ " + mailLink(caseClient.email) : ""}</div>` : ""}
           
@@ -17257,7 +17232,7 @@ function renderCaseSummary(k) {
       ${upliftLineHtml(c, "cs-uplift")}
       <div class="cs-lines">
         <div class="cs-line"><span class="cs-lbl">Next task</span><span id="cs-task-val">${nextTask ? `<span class="${taskOverdue ? "cs-danger-txt" : ""}">${esc(nextTask.title)}${nextTask.due_date ? " · " + (taskOverdue ? "overdue " : "due ") + fmtD(nextTask.due_date) : ""}</span>${nextTaskStale ? ` <span class="cs-muted cs-task-stale" id="cs-task-stale" title="${esc(STALE_TASK_TIP)}">(from an earlier stage)</span>` : ""}` : '<span class="cs-muted">none open</span>'}</span></div>
-        ${nextAppt ? `<div class="cs-line" id="cs-appt-line"><span class="cs-lbl">${nextApptIsAhead ? "Next appointment" : "Earlier today"}</span><span id="cs-appt-val"><a href="#" class="cs-appt-link" data-appt="${esc(nextAppt.id)}" title="${esc(`Open this appointment${nextAppt.staff_id ? ` — ${staffName(nextAppt.staff_id)}` : ""}${nextAppt.location ? ` · ${nextAppt.location}` : ""}`)}" onclick="event.preventDefault();openApptFromCase('${jsArg(nextAppt.id)}','${jsArg(id)}')">${esc(nextAppt.title || "Appointment")} · ${esc(apptWhenLabel(nextAppt))}${nextAppt.staff_id ? " · " + esc(staffName(nextAppt.staff_id)) : ""}</a>${apptOutcomeChipHtml(nextAppt.outcome)}</span></div>` : ""}
+        ${nextAppt ? `<div class="cs-line" id="cs-appt-line"><span class="cs-lbl">${nextApptIsAhead ? "Next appointment" : "Earlier today"}</span><span id="cs-appt-val"><a href="#" class="cs-appt-link" data-appt="${esc(nextAppt.id)}" title="${esc(`Open this appointment${nextAppt.staff_id ? ` — ${staffName(nextAppt.staff_id)}` : ""}${nextAppt.location ? ` · ${nextAppt.location}` : ""}`)}" data-prevent ${actAttr("openApptFromCase", nextAppt.id, id)}>${esc(nextAppt.title || "Appointment")} · ${esc(apptWhenLabel(nextAppt))}${nextAppt.staff_id ? " · " + esc(staffName(nextAppt.staff_id)) : ""}</a>${apptOutcomeChipHtml(nextAppt.outcome)}</span></div>` : ""}
         <div class="cs-line"><span class="cs-lbl">Last note</span><span id="cs-note-val">${lastNote ? `${esc(noteSnip(lastNote.body))} <span class="cs-muted">· ${fmtAgo(lastNote.created_at)}</span>` : '<span class="cs-muted">no notes yet</span>'}</span></div>
       </div>
       
@@ -17493,12 +17468,12 @@ function renderCaseStickyActions(k) {
 function renderCaseBanners(k) {
   const { id, c, lastNote, noteSnip, summaryHeader } = k;
   return `${summaryHeader}
-    ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" onclick="openCase('${c.retention_source_case_id}')">View original case</span></p>` : ""}
+    ${c.retention_source_case_id ? `<p class="panel-sub" style="margin-top:-8px;">🔁 Retention opportunity — linked to a completed case. <span class="t" style="cursor:pointer;text-decoration:underline;" ${actAttr("openCase", c.retention_source_case_id)}>View original case</span></p>` : ""}
     
     ${id && c.stage === "not_proceeding" ? `<p class="panel-sub case-lost-banner" style="margin-top:-8px;color:var(--red);">🚫 Not proceeding${
         c.lost_reason ? ` — <strong>${esc(LOST_REASON_LABEL[c.lost_reason] || String(c.lost_reason).replace(/_/g, " "))}</strong>${c.lost_detail ? ": " + esc(c.lost_detail) : ""}`
         : lastNote ? ` — <span class="cs-muted">last note:</span> ${esc(noteSnip(lastNote.body))}`
-        : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" onclick="event.preventDefault();var b=document.getElementById('act-record-reason');if(b)b.click();">record reason</a></p>` : ""}
+        : " — <span class=\"cs-muted\">no reason recorded.</span>"} <a href="#" class="t" style="text-decoration:underline;" title="Record or correct why this case did not proceed" ${actAttr("clickRecordReason")}>record reason</a></p>` : ""}
     ${c.nps_score != null ? `<p class="panel-sub" style="margin-top:-8px;">Client review score: <strong style="color:${c.nps_score >= 9 ? "var(--green)" : c.nps_score >= 7 ? "var(--amber)" : "var(--red)"};">${c.nps_score}/10</strong></p>` : ""}`;
 }
 /* R90 · B — Tasks: composer + list. */
@@ -17533,8 +17508,8 @@ function renderCaseTasks(k) {
           </div>
           
           ${t.done_at ? assigneeChipHtml(t.assigned_to) : taskAssigneeHtml(t.id, t.assigned_to, "")}${t.done_at
-            ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" onclick="reopenTaskInCase('${t.id}','${id}')">↺ Reopen</button>`
-            : `<button class="btn btn-sm${stale ? " task-stale-done" : ""}" aria-label="Mark task done" title="${stale ? esc("Mark this earlier-stage step done. It is what the case header is showing as the next task, and it is what is keeping this case off the No-next-action radar.") : "Mark task done"}" onclick="doneTaskInCase('${t.id}','${id}')">${stale ? "✓ Done" : "✓"}</button>`}
+            ? `<button class="btn btn-sm task-reopen" aria-label="Reopen this task" title="Put this task back on the list — it was marked done" ${actAttr("reopenTaskInCase", t.id, id)}>↺ Reopen</button>`
+            : `<button class="btn btn-sm${stale ? " task-stale-done" : ""}" aria-label="Mark task done" title="${stale ? esc("Mark this earlier-stage step done. It is what the case header is showing as the next task, and it is what is keeping this case off the No-next-action radar.") : "Mark task done"}" ${actAttr("doneTaskInCase", t.id, id)}>${stale ? "✓ Done" : "✓"}</button>`}
         </div>`; }).join("") || '<div class="empty">No tasks.</div>'}</div>
     </div>`;
 }
@@ -18147,7 +18122,7 @@ function wireCaseTasks(k) {
       row.style.padding = "7px 4px";
       row.innerHTML = `<div class="row-main"><div>${esc(title)}</div><div class="s">${due ? "due " + fmtD(due) : ""}</div></div>`
         + taskAssigneeHtml(tid, assignee, "")
-        + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
+        + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" ${actAttr("doneTaskInCase", tid, id)}>✓</button>`;
       list.appendChild(row);
       toast(pickedDue
         ? `Task added — due ${fmtD(due)}`
@@ -18209,7 +18184,7 @@ function buildCaseLogCallHooks(k, prependCaseTlNote) {
             trow.style.padding = "7px 4px";
             trow.innerHTML = `<div class="row-main"><div>${esc(task.title)}</div><div class="s">${task.due ? "due " + fmtD(task.due) : ""}</div></div>`
               + taskAssigneeHtml(tid, task.assignee, "")
-              + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" onclick="doneTaskInCase('${tid}','${id}')">✓</button>`;
+              + `<button class="btn btn-sm" aria-label="Mark task done" title="Mark task done" ${actAttr("doneTaskInCase", tid, id)}>✓</button>`;
             tlist.appendChild(trow);
           }
           // If there was no open task before, surface this one in the summary line.
@@ -19409,7 +19384,7 @@ async function loadClients(filter = "", opts = {}) {
       : clientSegment !== "all" ? `No clients${esc(advWord)} fall in this segment — nothing to do here.`
       : advWord ? `Nobody on the book is${esc(advWord)}.`
       : "Add your first client with the button above, or bring a spreadsheet in through Import.",
-    action: clientFiltered ? { label: "Clear filters", id: "client-empty-clear", onclick: "clearClientFilters()" } : null,
+    action: clientFiltered ? { label: "Clear filters", id: "client-empty-clear", act: ["clearClientFilters"] } : null,
   });
   const showDob = clientSegment === "no_dob";
   /* R11-6: which extra fact the row carries. A rate-end segment names the rate it selected the client for;
@@ -19471,13 +19446,13 @@ async function loadClients(filter = "", opts = {}) {
     const caseChip = {
       label: `${cases.length} case${cases.length === 1 ? "" : "s"}${active ? ` (${active} active)` : ""}`,
       cls: `${active ? "blue" : "grey"} client-case-chip`,
-      onclick: soleLive ? `openCase('${jsArg(soleLive.id)}')` : "",
+      act: soleLive ? ["openCase", soleLive.id] : null,
       title: soleLive ? "Open the live case" : "",
     };
     const propsChip = propBadge ? { label: `${propN} properties`, cls: "grey client-prop-n", title: "This client's cases sit on " + propN + " different properties. Open the record to see them grouped by building." } : null;
     /* R8-3 — the DOB is on the ROW in the segment that exists because it is missing, with the
        one-click way to put it right. Everywhere else it stays off the row. */
-    const dobBit = showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="javascript:void(0)" class="client-dob-add" onclick="event.stopPropagation();openClient('${jsArg(c.id)}','dob')">add</a>` : "";
+    const dobBit = showDob ? ` · <span class="client-dob-missing">DOB: —</span> <a href="#" class="client-dob-add" data-stop ${actAttr("openClient", c.id, "dob")}>add</a>` : "";
     const coldBit = clientSegment === "cold" ? ` · <span class="client-lastcontact">${lc ? `last contact ${fmtD(String(lc.at).slice(0, 10))} (${esc(lc.what)})` : "no contact on record"}</span>` : "";
     const fact = `${c.email ? mailLink(c.email) : "no email"}${dobBit}${coldBit}${lcAge}${rateBit}${nextBit}`;
     return rowItemHtml({
@@ -20061,7 +20036,7 @@ async function buildClientTimeline(clientId, cases) {
   inbound.forEach((m) => {
     const snippet = String(m.snippet || "").trim();
     const handleChip = m.id && m.triage_status === "new"
-      ? ` <button type="button" class="btn btn-xs tl-mark-handled" onclick="event.stopPropagation(); tlMarkEmailHandled('${m.id}', this)">Mark handled</button>`
+      ? ` <button type="button" class="btn btn-xs tl-mark-handled" data-stop ${actAttr("tlMarkEmailHandled", m.id, "$this")}>Mark handled</button>`
       : "";
     push(m.received_at || m.created_at, "email", "\ud83d\udce5",
       esc(m.subject || snippet || "Email from client") + ' <span class="tl-muted">\u00b7 from client</span>' + handleChip
@@ -20620,7 +20595,7 @@ function clientCaseRowHtml(x, opts = {}) {
     : "";
   const sold = Object.prototype.hasOwnProperty.call(x, "property_sold_at") && x.property_sold_at;
   return `<div class="row-item cl-card${sold ? " cl-card-sold" : ""}"><span class="cl-card-icon" aria-hidden="true">${KIND_ICON[x.case_kind] || KIND_ICON.other}</span><div class="row-main">
-        <div class="t" onclick="closeModal();openCase('${x.id}')">${lenderIcon(x.lender)}${esc(title)}</div>
+        <div class="t" ${actAttr("closeModalOpenCase", x.id)}>${lenderIcon(x.lender)}${esc(title)}</div>
         ${money}
         <div class="s">${chip}${chip ? " " : ""}Started ${fmtD(x.created_at)}${x.rate_end_date ? " · rate ends " + fmtD(x.rate_end_date) : ""}</div></div>
         ${caseRateStatusHtml(x)}
@@ -20644,7 +20619,7 @@ function clientProtGapCardHtml(cases) {
   if (!undecided.length) return ""; // every case was asked and declined, or referred on — a decision, not a gap
   const target = undecided[0]; // caller passes cases newest-first
   return `<div class="row-item cl-card cl-gap-card"><span class="cl-card-icon" aria-hidden="true">🛡️</span><div class="row-main">
-        <div class="t" onclick="closeModal();openCase('${target.id}')">No protection recorded on this book</div>
+        <div class="t" ${actAttr("closeModalOpenCase", target.id)}>No protection recorded on this book</div>
         <div class="s">No case on this record has a protection policy recorded — open the newest live case to record the conversation or start a quote.</div></div>
         <span class="badge amber" title="Shown while no case on this client carries a protection policy">gap</span></div>`;
 }
@@ -20685,7 +20660,7 @@ function clientCaseMiniRowHtml(x) {
   const stillLive = x.stage !== "completed" && x.stage !== "not_proceeding";
   return `<div class="row-item cl-mini" title="${stillLive ? "Another LIVE case on this property — click to open it" : "An earlier case on this property — click to open it"}">
       <span class="cl-mini-icon" aria-hidden="true">${KIND_ICON[x.case_kind] || KIND_ICON.other}</span>
-      <div class="row-main"><div class="t" onclick="closeModal();openCase('${x.id}')">${esc(title)}${x.loan_amount ? ` <span class="cl-mini-loan">· ${esc(fmtM(x.loan_amount))}</span>` : ""}</div></div>
+      <div class="row-main"><div class="t" ${actAttr("closeModalOpenCase", x.id)}>${esc(title)}${x.loan_amount ? ` <span class="cl-mini-loan">· ${esc(fmtM(x.loan_amount))}</span>` : ""}</div></div>
       <span class="cl-mini-hint">${esc(hint)}</span>${clientCaseProtChipHtml(x)}</div>`;
 }
 /* The rows of one property: the CURRENT case as the full card, everything older folded into a "previous"
@@ -20895,7 +20870,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       ? `<strong>Referred ${advocacy.referredN} client${advocacy.referredN === 1 ? "" : "s"}</strong>${advocacy.convertedN ? ` <span class="cs-muted">(${advocacy.convertedN} case${advocacy.convertedN === 1 ? "" : "s"} completed)</span>` : ""}`
       : "",
     advocacy.referredBy.length
-      ? "Referred by " + advocacy.referredBy.map((r) => `<a href="#" class="client-referrer-link" data-client="${esc(r.id)}" onclick="event.preventDefault();openClient('${jsArg(r.id)}')">${esc(r.name)}</a>`).join(", ")
+      ? "Referred by " + advocacy.referredBy.map((r) => `<a href="#" class="client-referrer-link" data-client="${esc(r.id)}" ${actAttr("openClient", r.id)}>${esc(r.name)}</a>`).join(", ")
       : "",
   ].filter(Boolean).join(" · ")}</p>` : "";
   /* R12b · W-21 — read off the SAME timeline items already built above (newest first), so this
@@ -20980,7 +20955,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     ${advocacyHtml}
     
     ${dupOf ? (isAdminOrOwner()
-      ? `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — <a href="javascript:void(0)" onclick="openMergeClients('${esc(id)}','${esc(dupOf.id)}','${jsArg(dupOf.reason)}',${Number(dupOf.score) || 0})">Review &amp; merge</a></p>`
+      ? `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — <a href="#" ${actAttr("openMergeClients", id, dupOf.id, dupOf.reason, Number(dupOf.score) || 0)}>Review &amp; merge</a></p>`
       : `<p class="dup-hint">Possible duplicate of <strong>${esc(dupOf.name)}</strong> — ask an Administrator or the Owner to merge them.</p>`) : ""}
     ${foldTimeline ? casesBlockHtml + timelineHtml : timelineHtml}
     <details class="case-details client-details" ${id && !focus ? "" : "open"}>
@@ -21581,7 +21556,7 @@ function emailPreviewFoldHtml(e, ctx) {
      composed subject for a template email, the stored subject where the stored body wins. */
   const subject = composed ? String(composed.subject || "").trim() : String(e.subject || "").trim();
   return `<details class="em-fold" data-em-preview="${esc(e.id)}">
-      <summary onclick="event.stopPropagation()">Preview this email</summary>
+      <summary data-stop>Preview this email</summary>
       <div class="em-prev">
         <div class="em-prev-subject"><span class="em-prev-lbl">Subject:</span> ${subject ? esc(subject) : '<span class="cs-muted">no subject stored yet — the sending run composes one from the template</span>'}</div>
         ${bodyHtml
@@ -21905,9 +21880,9 @@ async function loadEmails() {
        mortgages were one line repeated five times, and cancel/retry was a coin flip. */
     const leadRow = e.lead_id ? emailLeads[e.lead_id] : null;
     const titleClick = noContact
-      ? ` onclick="fixContactOpen('email','${jsArg(e.id)}','${e.client_id}','${jsArg(e.to_email)}')"`
-      : (e.case_id ? ` onclick="openCase('${e.case_id}')"` : "")
-        || (e.lead_id ? ` onclick="openLeadInToday('${jsArg(e.lead_id)}')" title="Open this enquiry's row in My Day on Today"` : "");
+      ? " " + actAttr("fixContactOpen", "email", e.id, e.client_id, e.to_email)
+      : (e.case_id ? " " + actAttr("openCase", e.case_id) : "")
+        || (e.lead_id ? ` ${actAttr("openLeadInToday", e.lead_id)} title="Open this enquiry's row in My Day on Today"` : "");
     const whoTxt = e.clients ? e.clients.first_name + " " + e.clients.last_name : (leadRow && leadRow.name) || e.to_email || "";
     return `
     <div class="row-item qrow-${e.status}"${e.lead_id ? ` data-lead-email="${esc(e.lead_id)}"` : ""}>
@@ -21921,11 +21896,11 @@ async function loadEmails() {
       </div>
       ${staleAddr ? `<span class="badge amber" title="Queued to ${esc(e.to_email)}, but this client's email is now ${esc(curEmail)}">address changed since queued</span>` : ""}
       <span class="badge ${badge[e.status]}">${e.status}</span>
-      ${staleAddr ? `<button class="btn btn-sm btn-primary" onclick="useCurrentEmailAddress('${e.id}','${e.client_id}')" title="Re-address this queued email to ${esc(curEmail)}">Use current address</button>` : ""}
-      ${fixContact ? `<button class="btn btn-sm btn-ghost" onclick="fixContactOpen('email','${jsArg(e.id)}','${e.client_id}','${jsArg(e.to_email)}')" title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
-      ${failed ? `<button class="btn btn-sm" onclick="retryEmail('${e.id}')">Retry</button>` : ""}
+      ${staleAddr ? `<button class="btn btn-sm btn-primary" ${actAttr("useCurrentEmailAddress", e.id, e.client_id)} title="Re-address this queued email to ${esc(curEmail)}">Use current address</button>` : ""}
+      ${fixContact ? `<button class="btn btn-sm btn-ghost" ${actAttr("fixContactOpen", "email", e.id, e.client_id, e.to_email)} title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
+      ${failed ? `<button class="btn btn-sm" ${actAttr("retryEmail", e.id)}>Retry</button>` : ""}
       
-      ${e.status === "queued" || failed ? `<button class="btn btn-sm em-cancel" data-id="${esc(e.id)}" onclick="cancelQueuedEmail('${e.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this email before the 8am run picks it up — it never sends"}">Cancel</button>` : ""}
+      ${e.status === "queued" || failed ? `<button class="btn btn-sm em-cancel" data-id="${esc(e.id)}" ${actAttr("cancelQueuedEmail", e.id)} title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this email before the 8am run picks it up — it never sends"}">Cancel</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${emailStatusFilter !== "all" ? `No ${esc(emailStatusFilter)} emails in the newest ${EMAIL_ROW_LIMIT} rows.` : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
   emQ.wire();
@@ -21964,13 +21939,13 @@ async function loadEmails() {
     <div class="row-item qrow-${s.status}">
       ${smsQ.cb(s)}
       <div class="row-main">
-        <div class="t${clickable ? " u-pointer" : ""}"${clickable ? ` onclick="openCase('${s.case_id}')"` : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")} ${propCtxChip(smsCtx, s.case_id, "row-prop")}</div>
+        <div class="t${clickable ? " u-pointer" : ""}"${clickable ? " " + actAttr("openCase", s.case_id) : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")} ${propCtxChip(smsCtx, s.case_id, "row-prop")}</div>
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${errLine}</div>
       </div>
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
-      ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" onclick="fixContactOpen('sms','${jsArg(s.id)}','${s.client_id}','${jsArg(s.to_phone)}')" title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
-      ${failed ? `<button class="btn btn-sm" onclick="retrySms('${s.id}')">Retry</button>` : ""}
-      ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" onclick="cancelQueuedSms('${s.id}')" title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before the 8:05am run picks it up — it never sends"}">Cancel</button>` : ""}
+      ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" ${actAttr("fixContactOpen", "sms", s.id, s.client_id, s.to_phone)} title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
+      ${failed ? `<button class="btn btn-sm" ${actAttr("retrySms", s.id)}>Retry</button>` : ""}
+      ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" ${actAttr("cancelQueuedSms", s.id)} title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before the 8:05am run picks it up — it never sends"}">Cancel</button>` : ""}
     </div>`;
   }).join("") : `<div class="empty">${smsStatusFilter !== "all" ? `No ${esc(smsStatusFilter)} SMS in the newest ${EMAIL_ROW_LIMIT} rows.` : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
   smsQ.wire();
@@ -22169,9 +22144,9 @@ function queueTable(kind) {
     </div>`,
     // Retry-all-failed (defect 28) — only on the Failed view, so it never fires against queued/sent/cancelled rows.
     retryAll: (show, n) => show && n
-      ? `<div class="row-item u-jc-end"><button class="btn btn-sm btn-primary" onclick="${K.retryAllFn}()">Retry all failed (${n})</button></div>` : "",
+      ? `<div class="row-item u-jc-end"><button class="btn btn-sm btn-primary" ${actAttr(K.retryAllFn)}>Retry all failed (${n})</button></div>` : "",
     cb: (r) => QUEUE_SELECTABLE.includes(r.status)
-      ? `<input type="checkbox" class="${K.cb}" data-id="${esc(r.id)}" data-status="${esc(r.status)}" aria-label="Select this ${esc(r.status)} ${K.noun}"${sel.has(r.id) ? " checked" : ""} onclick="event.stopPropagation()">`
+      ? `<input type="checkbox" class="${K.cb}" data-id="${esc(r.id)}" data-status="${esc(r.status)}" aria-label="Select this ${esc(r.status)} ${K.noun}"${sel.has(r.id) ? " checked" : ""} data-stop>`
       : `<span class="${K.gap}" aria-hidden="true"></span>`,
     // Imperative, no reload on toggle; the bar reflects the selection in place.
     wire: () => {
@@ -23470,7 +23445,7 @@ async function buildEvidencePack(caseId) {
       table{border-collapse:collapse;width:100%;} td,th{padding:5px 10px;border-bottom:1px solid #eee;text-align:left;vertical-align:top;}
       .muted{color:#777;} @media print {.noprint{display:none}}
     </style></head><body>
-    <button class="noprint" onclick="window.print()" style="padding:8px 16px;">Print / Save as PDF</button>
+    <button class="noprint" style="padding:8px 16px;">Print / Save as PDF</button>
     <h1>Case evidence pack — ${esc(name)}${packProp ? ` — ${esc(packProp)}` : ""}</h1>
     
     <h2 style="margin-top:14px;">Security property</h2>
@@ -23539,6 +23514,9 @@ async function buildEvidencePack(caseId) {
   if (!w) return toast("Pop-up blocked — allow pop-ups for this page.");
   w.document.write(html);
   w.document.close();
+  /* R95 · B5: the written page inherits this page's CSP, so its Print button is wired from here, not inline. */
+  const printBtn = w.document.querySelector("button.noprint");
+  if (printBtn) printBtn.addEventListener("click", () => w.print());
 }
 
 /* Reports + Monday money The ENTIRE Reports + Money page family — loadReports, loadMoneyPage, every
@@ -24055,19 +24033,19 @@ async function loadDataHealth() {
       ? "Emails are queued, sending is not held and the sender is live, so they should have gone. Today's banner and the Emails page carry the detail."
       : heldNow
         ? "Emails are held: sending is switched off (Settings › Email sending), so nothing has gone out and nothing is wrong. Releasing the hold is what sends them. The Emails page carries the detail."
-        : "Emails are queued and no sender is configured yet, so nothing has gone out. The Emails page carries the detail."}">${live ? "⚠ " : ""}${n} ${live ? "stuck" : heldNow ? "held" : "queued, not sent"} — <button type="button" class="dash-notice-link" id="dh-stuck-link" onclick="event.stopPropagation(); dhGotoEmails(false)">see Emails</button></div>`;
+        : "Emails are queued and no sender is configured yet, so nothing has gone out. The Emails page carries the detail."}">${live ? "⚠ " : ""}${n} ${live ? "stuck" : heldNow ? "held" : "queued, not sent"} — <button type="button" class="dash-notice-link" id="dh-stuck-link">see Emails</button></div>`;
   }
 
   const mutedSub = "color:var(--muted);font-size:12px;margin-top:2px;";
   // B6 / M4 — every staff member (not just Owner/Admin) can say "not a duplicate"; the destructive
   // Merge action stays gated above.
   const notDupBtn = (d) =>
-    `<button class="btn btn-sm" onclick="dismissDuplicate('${d.a_id}','${d.b_id}','${jsArg(d.a_name)}','${jsArg(d.b_name)}')">Not a duplicate</button>`;
+    `<button class="btn btn-sm" ${actAttr("dismissDuplicate", d.a_id, d.b_id, d.a_name, d.b_name)}>Not a duplicate</button>`;
   const clientNameById = new Map(allClients.map((cl) => [cl.id, clName(cl)]));
   const dismissedFooter = dismissedRows.length ? `
     <div class="panel-sub" style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
       <span>${dismissedRows.length} pair${dismissedRows.length === 1 ? "" : "s"} marked not-duplicates</span>
-      <a href="javascript:void(0)" onclick="toggleDismissedDupsPanel()">show/hide</a>
+      <a href="#" ${actAttr("toggleDismissedDupsPanel")}>show/hide</a>
     </div>
     <div id="dh-dismissed-list" class="hidden u-mt-6">
       ${dismissedRows.map((r) => `
@@ -24076,7 +24054,7 @@ async function loadDataHealth() {
             <div class="t">${esc(clientNameById.get(r.a_id) || r.a_id)} / ${esc(clientNameById.get(r.b_id) || r.b_id)}</div>
             <div class="s">${r.reason ? esc(r.reason) + " · " : ""}by ${esc(staffName(r.dismissed_by))} · ${fmtD(r.created_at)}</div>
           </div>
-          ${isAdminOrOwner() ? `<button class="btn btn-sm" onclick="undoDismissDuplicate('${r.id}')">Undo</button>` : '<span class="badge grey">undo: Owner / Admin</span>'}
+          ${isAdminOrOwner() ? `<button class="btn btn-sm" ${actAttr("undoDismissDuplicate", r.id)}>Undo</button>` : '<span class="badge grey">undo: Owner / Admin</span>'}
         </div>`).join("")}
     </div>` : "";
   const dupPanel = `<div class="panel" id="dh-dup-panel">
@@ -24089,7 +24067,7 @@ async function loadDataHealth() {
         <td>${esc(d.b_name)}<div style="${mutedSub}">${esc(d.b_email || "no email")}</div></td>
         <td>${esc(d.reason)}</td>
         <td>${Math.round((Number(d.score) || 0) * 100)}%</td>
-        <td class="u-nowrap"><button class="btn btn-sm" onclick="openClient('${d.a_id}')">Open A</button> <button class="btn btn-sm" onclick="openClient('${d.b_id}')">Open B</button> ${isAdminOrOwner() ? `<button class="btn btn-sm ${(Number(d.score) || 0) < 0.9 ? "" : "btn-primary"}" onclick="openMergeClients('${d.a_id}','${d.b_id}','${jsArg(d.reason)}',${Number(d.score) || 0})">Merge…</button>` : '<span class="badge grey">merge: Owner / Admin</span>'} ${notDupBtn(d)}</td>
+        <td class="u-nowrap"><button class="btn btn-sm" ${actAttr("openClient", d.a_id)}>Open A</button> <button class="btn btn-sm" ${actAttr("openClient", d.b_id)}>Open B</button> ${isAdminOrOwner() ? `<button class="btn btn-sm ${(Number(d.score) || 0) < 0.9 ? "" : "btn-primary"}" ${actAttr("openMergeClients", d.a_id, d.b_id, d.reason, Number(d.score) || 0)}>Merge…</button>` : '<span class="badge grey">merge: Owner / Admin</span>'} ${notDupBtn(d)}</td>
       </tr>`).join("")}
     </table>` : '<div class="empty">No likely duplicates found. 👍</div>'}
     ${dismissedFooter}
@@ -24109,7 +24087,7 @@ async function loadDataHealth() {
             <td>${esc(caseName(cs))}</td>
             <td>${esc([caseTypeLabel(cs), cs.lender, cs.stage ? (STAGE_LABEL[cs.stage] || cs.stage) : null].filter(Boolean).join(" · "))}</td>
             <td class="u-nowrap">${fmtD(cs.created_at)}${i === 0 ? ' <span class="badge blue" title="The most recent case on this address — normally the current owner">newest</span>' : ""}</td>
-            <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" onclick="openCase('${cs.id}')">Open case</button> <button class="btn btn-sm" onclick="openClient('${cs.client_id}',null,null,'${cs.id}')">Client</button></td>
+            <td style="text-align:right;white-space:nowrap;"><button class="btn btn-sm" ${actAttr("openCase", cs.id)}>Open case</button> <button class="btn btn-sm" ${actAttr("openClient", cs.client_id, null, null, cs.id)}>Client</button></td>
           </tr>`).join("")}
         </table>
       </div>`).join("") : '<div class="empty">No address appears on more than one client\'s cases. 👍</div>'}
@@ -24122,9 +24100,9 @@ async function loadDataHealth() {
   /* R89 · A: THE FIX LISTS ARE KIT ROWS (KIT.md). A row's name opens the CLIENT (kit rule 1) — a case row
      finds its client off the book's rows; the case itself is the row's first verb ("Open")… */
   const dhClientOfCase = new Map(allCases.map((cs) => [cs.id, cs.client_id]));
-  const dhOpenCaseVerb = (id) => ({ label: "Open", title: "Open the case", onclick: `openCase('${jsArg(id)}')` });
+  const dhOpenCaseVerb = (id) => ({ label: "Open", title: "Open the case", act: ["openCase", id] });
   const dhCaseRow = (c, o) => rowItemHtml(Object.assign({
-    name: { text: c.name, clientId: c.client_id || dhClientOfCase.get(c.case_id) || null, onclick: `openCase('${jsArg(c.case_id)}')` },
+    name: { text: c.name, clientId: c.client_id || dhClientOfCase.get(c.case_id) || null, act: ["openCase", c.case_id] },
     verbs: [dhOpenCaseVerb(c.case_id)],
   }, o || {}));
   const dhClientRow = (c, o) => rowItemHtml(Object.assign({ name: { text: c.name, clientId: c.id } }, o || {}));
@@ -24140,7 +24118,7 @@ async function loadDataHealth() {
     return `<div class="dh-fix" data-case="${esc(r.case_id)}" data-col="${esc(col)}">
       <input class="dh-fix-input" type="${type}"${o.step ? ` step="${o.step}"` : ""}${o.min ? ` min="${o.min}"` : ""}${o.max ? ` max="${esc(o.max)}"` : ""}${o.placeholder ? ` placeholder="${esc(o.placeholder)}"` : ""} aria-label="${esc(o.label || col)} for ${esc(r.name)}">
       <button type="button" class="btn btn-sm dh-fix-save" data-name="${esc(r.name)}" title="${esc(o.saveTitle || "Save this value onto the case. Nothing else on the case is touched.")}">Save</button>
-      <button class="btn btn-sm" onclick="openCase('${jsArg(r.case_id)}')">Open</button>
+      <button class="btn btn-sm" ${actAttr("openCase", r.case_id)}>Open</button>
     </div>`;
   };
   /* ========================================================================
@@ -24170,7 +24148,7 @@ async function loadDataHealth() {
     return `<div class="dh-fix" data-client="${esc(r.id)}" data-col="${esc(col)}">
       <input class="dh-fix-input" type="${col === "email" ? "email" : "tel"}"${o.placeholder ? ` placeholder="${esc(o.placeholder)}"` : ""}${o.value ? ` value="${esc(o.value)}"` : ""} aria-label="${esc(o.label || col)} for ${esc(r.name)}">
       <button type="button" class="btn btn-sm dh-fix-save" data-name="${esc(r.name)}" title="${esc(o.saveTitle || "Save this value onto the client's record. Nothing else on the record is touched.")}">Save</button>
-      <button class="btn btn-sm" onclick="openClient('${jsArg(r.id)}'${o.focus ? `,'${o.focus}'` : ""})">Open</button>
+      <button class="btn btn-sm" ${actAttr("openClient", r.id, ...(o.focus ? [o.focus] : []))}>Open</button>
     </div>`;
   };
 
@@ -24308,7 +24286,7 @@ async function loadDataHealth() {
     <div class="panel-sub">Completions from the last 6 months missing a checklist, fact find or case papers — a <strong>register to read, not a queue to work</strong>. ${howFold({ id: "dh-completedfiles-how", title: "More", html: `<p>Cases that reached <strong>Completed</strong> in the last 6 months whose file is missing at least one of the three durable artefacts an AR or network file-check asks to see — the <strong>document checklist</strong>, the <strong>fact find</strong>, the firm's own <strong>case papers</strong>. Same single measure as the live tile above (caseCompleteness), asked at the case's pre-completion requirements; who-we-were-waiting-on and the expected completion date are progress questions and are not asked of a finished case. This is a <strong>register to read, not a queue to work</strong>: it never counts toward the headline above, nothing here is coloured as a fault, and there is deliberately no chase button — what closes a row is the missing artefact landing on the case. Newest completion first.</p>` })}</div>
     ${completedGaps.length ? completedGaps.slice(0, DH_PANEL_CAP).map((c) => dhCaseRow(c, {
         fact: `${esc([c.lender, "completed " + fmtD(c.completedAt)].filter(Boolean).join(" · "))} · <strong>${esc(c.have)}/${esc(c.of)}</strong> · missing: ${esc(c.missing.join(", "))}`,
-        verbs: [{ label: "Open case", onclick: `openCase('${jsArg(c.case_id)}')` }, { label: "Client", onclick: `openClient('${jsArg(c.client_id)}',null,null,'${jsArg(c.case_id)}')` }],
+        verbs: [{ label: "Open case", act: ["openCase", c.case_id] }, { label: "Client", act: ["openClient", c.client_id, null, null, c.case_id] }],
       })).join("") + dhMoreNote(completedGaps.length) : '<div class="empty">Every case completed in the last 6 months carries its checklist, fact find and case papers. 👍</div>'}
   </div>`;
 
@@ -24316,7 +24294,7 @@ async function loadDataHealth() {
   const bothPanel = `<div class="panel hidden" id="dh-both-panel">
     <h3>Clients with no email and no phone</h3>
     ${missingBoth.length ? missingBoth.slice(0, DH_PANEL_CAP).map((c) => dhClientRow(c, {
-        verbs: [{ label: "Open", title: "Open the client to add an email or a phone number", onclick: `openClient('${jsArg(c.id)}')` }],
+        verbs: [{ label: "Open", title: "Open the client to add an email or a phone number", act: ["openClient", c.id] }],
       })).join("") + dhMoreNote(missingBoth.length) : '<div class="empty">Every client has at least one way to reach them. 👍</div>'}
   </div>`;
 
@@ -24390,10 +24368,10 @@ async function loadDataHealth() {
         
         <td class="dh-wd-acts">
           
-          <button class="btn btn-sm" onclick="openCase('${jsArg(r.id)}', { scrollTo: 'docs' })" title="Open this case with the Documents checklist in view">Open case</button>
+          <button class="btn btn-sm" ${actAttr("openCase", r.id, { scrollTo: "docs" })} title="Open this case with the Documents checklist in view">Open case</button>
           ${blocked
             ? `<span class="badge grey" title="${esc(spent ? `${r.chases} of ${DOC_CHASE_MAX} chases have already gone. The fourth email is not the one that works — the automation raises a call task instead, and so should you.` : "This client has no email address on file, so nothing can be sent to them. Open the case and add one.")}">${esc(blocked)}</span>`
-            : `<button class="btn btn-sm${r.cool ? " btn-cooldown" : ""}" onclick="dhSendDocsChase('${jsArg(r.id)}', event)" title="${esc(r.cool ? `${r.cool.sentence} Sending now goes out anyway and restarts the window — you will be asked to confirm.` : "Queue the document-request email for this case. It lists only the items still outstanding. Nothing else in the queue is sent.")}">${r.cool ? "⏳" : "✉️"} Chase now</button>`}
+            : `<button class="btn btn-sm${r.cool ? " btn-cooldown" : ""}" ${actAttr("dhSendDocsChase", r.id, "$event")} title="${esc(r.cool ? `${r.cool.sentence} Sending now goes out anyway and restarts the window — you will be asked to confirm.` : "Queue the document-request email for this case. It lists only the items still outstanding. Nothing else in the queue is sent.")}">${r.cool ? "⏳" : "✉️"} Chase now</button>`}
         </td>
       </tr>`;
       }).join("")}
@@ -25155,7 +25133,7 @@ async function loadIntroducers() {
       </div>
       ${hasLogin.has(i.id) ? '<span class="badge green">portal login active</span>'
         : !canInvite ? '<span class="badge grey">no portal login — Owner only</span>'
-        : (i.email ? `<button class="btn btn-sm" onclick="inviteIntroducer('${i.id}')">Create portal login</button>` : '<span class="badge grey">add email to invite</span>')}
+        : (i.email ? `<button class="btn btn-sm" ${actAttr("inviteIntroducer", i.id)}>Create portal login</button>` : '<span class="badge grey">add email to invite</span>')}
     </div>`).join("") : '<div class="empty">No introducers yet.</div>';
   renderInviteRoleHint();
 }
@@ -25272,7 +25250,7 @@ function rosterSelfContactHtml(p) {
   const signoff = String(p.email_signoff || "").split(/\n+/).map((x) => x.trim()).filter(Boolean).join(" · ");
   return `<div class="team-contact team-contact-self" data-self-contact="${esc(p.id)}">
     <span class="team-contact-ro" id="team-self-contact">📞 ${p.phone ? esc(p.phone) : "no phone"} · sign-off: ${signoff ? esc(signoff) : "none"}</span>
-    <button type="button" class="btn btn-sm btn-ghost" id="team-self-edit" onclick="settingsGotoMyDetails()">Edit in My details</button>
+    <button type="button" class="btn btn-sm btn-ghost" id="team-self-edit" ${actAttr("settingsGotoMyDetails")}>Edit in My details</button>
   </div>`;
 }
 async function renderTeamRoster() {
@@ -25897,6 +25875,9 @@ function openModal() {
   const f = modalFocusable().filter((el) => !el.classList.contains("modal-close"));
   if (f.length) f[0].focus();
 }
+/* R95 · B6: two former inline multi-statement handlers, as globals the delegation kit can name. */
+window.closeModalOpenCase = function (caseId) { closeModal(); openCase(caseId); };
+window.clickRecordReason = function () { const b = document.getElementById("act-record-reason"); if (b) b.click(); };
 window.closeModal = function () {
   // Defect 5 — pop the history entry this modal pushed, unless the browser already did. Nulling currentModal
   // alone left a dead entry, so the first Back after a Save/Cancel appeared to do nothing.
