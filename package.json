@@ -7,12 +7,12 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "esbuild": "0.24.2",
-    "eslint": "9.39.5",
-    "espree": "10.4.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.13.0",
+    "espree": "11.2.0",
     "globals": "17.13.0",
-    "marked": "15.0.12",
-    "typescript": "5.9.3",
+    "marked": "18.1.1",
+    "typescript": "7.0.2",
     "xlsx": "0.18.5"
   }
 }
