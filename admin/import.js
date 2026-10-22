@@ -1104,7 +1104,7 @@ async function runImport() {
         ${undecided.length ? `<div class="dq-notice bad" id="import-undecided"><strong>${undecided.length} row${undecided.length === 1 ? "" : "s"} created a NEW client despite a possible match</strong> — nobody chose Attach or New client, so nothing was attached on a guess:
           <ul style="margin:6px 0 0 18px;">${undecided.map((u) => `<li>${esc(u.row)} — looked like ${esc(u.candidate)}</li>`).join("")}</ul>
           Check Data health's duplicate list if that was wrong.</div>` : ""}
-        <div class="row-list">${names.map(([id, name]) => `<div class="row-item"><div class="row-main"><a href="#" class="t" onclick="event.preventDefault();openClient('${id}')">${esc(name)}</a></div></div>`).join("")}</div>
+        <div class="row-list">${names.map(([id, name]) => `<div class="row-item"><div class="row-main"><a href="#" class="t" ${actAttr("openClient", id)}>${esc(name)}</a></div></div>`).join("")}</div>
       </div>` : "";
   }
 }
@@ -2278,7 +2278,7 @@ async function revApply() {
       <tbody>${log.map((l) => `<tr data-row="${l.row}" data-outcome="${esc(l.outcome)}"><td>${l.row}</td><td>${esc(l.name)}</td>
         <td>${l.outcome === "FAILED" ? `<span class="badge red">failed</span>` : l.outcome === "no change" ? `<span class="badge grey">no change</span>` : `<span class="badge green">${esc(l.outcome)}</span>`}</td>
         <td>${esc(l.detail)}</td></tr>`).join("")}</tbody></table>
-    ${touched.size ? `<div class="row-list">${[...touched.entries()].map(([id, n]) => `<div class="row-item"><div class="row-main"><a href="#" class="t" onclick="event.preventDefault();openClient('${id}')">${esc(n)}</a></div></div>`).join("")}</div>` : ""}
+    ${touched.size ? `<div class="row-list">${[...touched.entries()].map(([id, n]) => `<div class="row-item"><div class="row-main"><a href="#" class="t" ${actAttr("openClient", id)}>${esc(n)}</a></div></div>`).join("")}</div>` : ""}
   </div>`;
   // Re-derive every row against what is now stored: a second press writes nothing. The "changed since you
   // looked" marks are carried ACROSS that re-derive on purpose…

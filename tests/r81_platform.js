@@ -165,11 +165,17 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
         const im = html.indexOf('<script src="/admin/import.js">');
         const va = html.indexOf('<script src="/admin/vault.js">');
         const si = html.indexOf('<script src="/admin/site.js">');   // R93 · F — site.js between vault.js and app.js
+        /* R95 · C — boot.js is the FIRST script tag; nine tags in all, none inline (strict CSP). */
+        const bo = html.indexOf('<script src="/admin/boot.js">');
+        const firstScript = html.indexOf("<script");
+        ok(`A1 (R95 · C) · ${label}: /admin/boot.js is the first <script> and precedes core.js`, bo >= 0 && bo === firstScript && core > bo, `boot@${bo} first@${firstScript} core@${core}`);
+        eq(`A1 (R95 · C) · ${label}: nine <script> tags`, (html.match(/<script\b/g) || []).length, 9);
+        eq(`A1 (R95 · C) · ${label}: no inline <script> and no inline on*= handler`, (html.match(/<script>|\son[a-z]+="/g) || []).length, 0);
         ok(`A1 (R90 · F / R93 · F) · ${label} order is core → reports-money → diary → import → vault → site → app`,
           core >= 0 && rm > core && di > rm && im > di && va > im && si > va && app > si, `core@${core} rm@${rm} diary@${di} import@${im} vault@${va} site@${si} app@${app}`);
       }
       // The served set is the repo's set — md5 over HTTP vs md5 on disk, all six files (R90 · F: was three).
-      for (const f of ["core.js", "reports-money.js", "diary.js", "import.js", "vault.js", "site.js", "app.js"]) {   // R93 · F — seven files
+      for (const f of ["boot.js", "core.js", "reports-money.js", "diary.js", "import.js", "vault.js", "site.js", "app.js"]) {   // R93 · F — seven files; R95 · C + boot.js
         const disk = md5(fs.readFileSync(path.join(REPO, "admin", f)));
         const got = await fetchBytes(`/admin/${f}`);
         ok(`A1 · served /admin/${f} is byte-identical to the repo copy (md5 ${disk.slice(0, 8)}…)`,
@@ -258,7 +264,7 @@ const netRead = (page) => page.evaluate(() => ({ waves: window.__net.waves, call
       // Merge-time catch: the tag literals in the SOURCE files are equal.
       // R90 · F — seven places now (was four): + diary.js / import.js / vault.js.
       const files = {
-        "index.html": /window\.NX_BUILD_TAG\s*=\s*"([^"]+)"/,
+        "boot.js": /window\.NX_BUILD_TAG\s*=\s*"([^"]+)"/,   // R95 · C — moved out of index.html (no inline script)
         "core.js": /window\.__nxTag_core\s*=\s*"([^"]+)"/,
         "reports-money.js": /window\.__nxTag_reportsmoney\s*=\s*"([^"]+)"/,
         "diary.js": /window\.__nxTag_diary\s*=\s*"([^"]+)"/,

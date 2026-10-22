@@ -223,7 +223,7 @@ function renderVault() {
       ? emptyState({
           headline: "No entries match your search",
           sub: `Nothing in the vault matches “${vaultSearchTerm()}”. It searches the name, the owner and the username — not the secrets themselves.`,
-          action: { label: "Clear the search", id: "vault-empty-clear", onclick: "clearVaultSearch()" },
+          action: { label: "Clear the search", id: "vault-empty-clear", act: ["clearVaultSearch"] },
         })
       : emptyState({
           headline: "The vault is empty",
