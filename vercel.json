@@ -154,6 +154,21 @@
       "source": "/careers/:slug+",
       "destination": "/about",
       "statusCode": 301
+    },
+    {
+      "source": "/careers",
+      "destination": "/about",
+      "statusCode": 301
+    },
+    {
+      "source": "/faqs",
+      "destination": "/faq",
+      "statusCode": 301
+    },
+    {
+      "source": "/privacy-policy",
+      "destination": "/privacy",
+      "statusCode": 301
     }
   ],
   "headers": [
