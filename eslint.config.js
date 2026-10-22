@@ -150,6 +150,7 @@ const CORE_RULES = {
 module.exports = [
   { ignores: ["admin/mock-supabase.js", "admin/mock.html", "dist/**", "tests/**", "node_modules/**", "docs/**", "supabase/**", "edge/**"] },
   { files: ["**/*.js"], linterOptions: { reportUnusedDisableDirectives: "error" }, rules: CORE_RULES },
+  { files: ["admin/introducer.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.browser, supabase: "readonly" } } },   // R95 · E: the introducer portal's own script, not one of the seven
   // One block per script: its globals are every shared name EXCEPT its own declarations
   // (otherwise no-redeclare reads each declaration as shadowing a configured global).
   ...SCRIPTS.map((s) => {
@@ -158,8 +159,7 @@ module.exports = [
     return { files: ["admin/" + s.file], plugins: { nx: nxPlugin }, languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: g }, rules: { "nx/load-order": "error", "nx/shared-use": "error" } };
   }),
   { files: ["admin/sw.js", "admin/sw-kill.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.serviceworker } } },
-  { files: ["admin/introducer.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.browser, supabase: "readonly" } } },   // R95 · E: the introducer portal's own script, not one of the seven
-  { files: ["enhance.js"], languageOptions:{ ecmaVersion: 2022, sourceType: "script", globals: { ...globals.browser } } },
+  { files: ["enhance.js"], languageOptions: { ecmaVersion: 2022, sourceType: "script", globals: { ...globals.browser } } },
   { files: ["build.js", "smoke.js", "eslint.config.js", "db/*.js"], languageOptions: { ecmaVersion: 2022, sourceType: "commonjs", globals: { ...globals.node } } },
   // smoke.js and the drift check drive Playwright: their page.evaluate(() => …) callbacks run IN the page.
   { files: ["smoke.js", "db/check-schema-drift.js"], languageOptions: { globals: { window: "readonly", document: "readonly" } } },
