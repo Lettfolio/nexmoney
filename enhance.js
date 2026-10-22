@@ -19,6 +19,45 @@
     else doc.addEventListener('DOMContentLoaded', fn);
   }
 
+  /* ---- 0. Delegation kit (the R95 data-act convention) ----
+     R95 · D2: the site's CSP has no 'unsafe-inline', so no on*= attributes. An element names
+     its handler: data-act="fn", data-on="input" (default click; a space-separated list is
+     allowed, e.g. "mouseover mouseout"), data-args='["$event","$this",…]' (JSON). fn is a
+     site action below or a global from the page's /js/<page>.js. */
+  var ACTS = {
+    navToggle: function (btn) {
+      var n = doc.getElementById('mainNav');
+      btn.setAttribute('aria-expanded', n.classList.toggle('open'));
+    },
+    hoverStyle: function (ev, el, prop, over, out) {
+      el.style[prop] = ev.type === 'mouseover' ? over : out;
+    }
+  };
+  var actWarned = {};
+  function onAct(ev) {
+    var t = ev.target;
+    var el = t && t.nodeType === 1 ? t : t && t.parentElement;
+    for (; el && el !== doc.documentElement; el = el.parentElement) {
+      if (!el.hasAttribute('data-act')) continue;
+      if ((el.getAttribute('data-on') || 'click').split(/\s+/).indexOf(ev.type) === -1) continue;
+      var name = el.getAttribute('data-act');
+      var fn = ACTS[name] || window[name];
+      if (typeof fn !== 'function') {
+        if (!actWarned[name]) { actWarned[name] = 1; console.error('data-act: no function ' + name); }
+        return;
+      }
+      if (ev.type === 'submit' || (ev.type === 'click' && el.tagName === 'A' && el.getAttribute('href') === '#')) ev.preventDefault();
+      var args = JSON.parse(el.getAttribute('data-args') || '[]').map(function (a) {
+        return a === '$event' ? ev : (a === '$this' ? el : a);
+      });
+      fn.apply(el, args);
+      return;
+    }
+  }
+  ['click', 'input', 'change', 'submit', 'keydown', 'mouseover', 'mouseout'].forEach(function (type) {
+    doc.addEventListener(type, onAct);
+  });
+
   ready(function () {
     /* ---- 1. Scroll-reveal ----------------------------------- */
     var revealSel = [
