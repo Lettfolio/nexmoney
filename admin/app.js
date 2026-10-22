@@ -10228,7 +10228,7 @@ function renderWatchtower() {
     const wtLinkBtn = wtLink && wtLink.when() ? `<button class="btn btn-sm wt-link-btn" data-stop ${actAttr(...wtGo)} title="${esc(wtLink.title)}">${esc(wtLink.label)}</button>` : "";
     /* R34 · Part 4 — a client-side row has no watch_alerts row behind it, so Snooze and Dismiss would both be
        lies. It carries the Open action alone — and, for the "…and N more" tail… */
-    const synthGoBtn = a.__synth && a.__act ? `<button class="btn btn-sm wt-link-btn" data-stop ${actAttr(...a.__act)}" title="Open the firm's Data health page">Data health</button>` : "";
+    const synthGoBtn = a.__synth && a.__act ? `<button class="btn btn-sm wt-link-btn" data-stop ${actAttr(...a.__act)} title="Open the firm's Data health page">Data health</button>` : "";
     const rowActions = a.__synth ? synthGoBtn
       : `<button class="btn btn-sm" ${actAttr("snoozeAlert", a.id, a.severity, a.case_id || "")}>Snooze…</button>
       <button class="btn btn-sm" ${actAttr("resolveAlert", a.id, a.severity, a.case_id || "")}>Dismiss</button>`;
