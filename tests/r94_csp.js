@@ -130,7 +130,7 @@ async function ensureServer() {
   const extStyles = (html) => [...html.matchAll(/<link\b[^>]*>/g)].map((m) => m[0]).filter((t) => /rel="stylesheet"/.test(t))
     .map((t) => (t.match(/href="(https?:\/\/[^"]+)"/) || [])[1]).filter(Boolean);
   const adminHtml = ["admin/index.html", "admin/introducer.html"];
-  const adminJs = ["core", "reports-money", "diary", "import", "vault", "site", "app"].map((f) => `admin/${f}.js`);
+  const adminJs = ["boot", "core", "reports-money", "diary", "import", "vault", "site", "app", "introducer"].map((f) => `admin/${f}.js`);   // R95: + boot.js and introducer.js (its inline script moved out)
   const adminScripts = adminHtml.flatMap((f) => extScripts(read(f)))
     .concat(adminJs.flatMap((f) => [...read(f).matchAll(/\.src\s*=\s*"(https:\/\/[^"]+)"/g)].map((m) => m[1])));
   ok("A10 · admin: every external script (supabase-js tag, SheetJS lazy loader) is in script-src",

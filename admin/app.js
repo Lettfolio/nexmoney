@@ -515,9 +515,6 @@ async function dupClientGate(q, opts) {
   return { action: "cancel" };
 }
 
-// Inline-onclick-safe string argument: escape for the JS string literal first, then for the HTML
-// attribute (esc() turns ' into &#39;, which the parser hands back to JS as a bare quote).
-const jsArg = (v) => esc(String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/'/g, "\\'"));
 /* IN_CHUNK/inChunks (R64-HF1) + READ_PAGE/readAll (R69-HF1) — MOVED to admin/core.js (R78 · A7). The rules
    stand: any feed-sized .in() goes through inChunks; any big-table read through readAll. */
 const telLink = (p) => { if (!p) return ""; const raw = String(p).trim(); const href = raw.replace(/[^\d+]/g, ""); return `<a class="contact-link" href="tel:${esc(href)}">${esc(raw)}</a>`; };

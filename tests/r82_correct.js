@@ -954,7 +954,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       const html = fs.readFileSync(path.join(REPO, "admin/index.html"), "utf8");
       const css = fs.readFileSync(path.join(REPO, "admin/admin.css"), "utf8");
       ok("J1a · the Google Fonts stylesheet no longer blocks the render",
-        /fonts\.googleapis\.com\/css2[^>]*rel="stylesheet" media="print" onload="this\.media='all'"/.test(html), "media=print onload swap");
+        /fonts\.googleapis\.com\/css2[^>]*rel="stylesheet" media="print" data-swap="1"/.test(html) && /l\.media = "all"/.test(fs.readFileSync(path.join(REPO, "admin/boot.js"), "utf8")), "media=print + boot.js swap (R95)");
       ok("J1b · …and a JS-off browser still gets the face", /<noscript><link href="https:\/\/fonts\.googleapis\.com/.test(html), "noscript fallback");
       ok("J1c · the URL still carries &display=swap, so text paints in the fallback rather than hiding",
         /fonts\.googleapis\.com\/css2\?family=Inter[^"]*&display=swap/.test(html), "display=swap");
@@ -964,7 +964,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
          tag — so the harness must be carrying the change too, or the two have forked. */
       const mock = fs.readFileSync(path.join(REPO, "admin/mock.html"), "utf8");
       ok("J1e · mock.html carries it too (it is regenerated from index.html)",
-        /media="print" onload="this\.media='all'"/.test(mock), "mock.html");
+        /media="print" data-swap="1"/.test(mock), "mock.html");
 
       const page = await boot(browser, "p1");
       const painted = await page.evaluate(() => ({

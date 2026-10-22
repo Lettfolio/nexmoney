@@ -1619,7 +1619,6 @@ function miCsv(filename, header, rows) {
 }
 
 /* R95 · C1: the drill-down's "Open" row button was two inline calls; data-act names one global. */
-function repCloseModalOpenCase(id) { closeModal(); openCase(id); }
 /* R20: the reusable drill-down modal. Reuses the existing #modal / openModal() infra (same pattern as the
    merge/appointment modals: set #modal.innerHTML, then openModal()). */
 function miDrilldown(title, cases) {
@@ -1634,7 +1633,7 @@ function miDrilldown(title, cases) {
       <td>${esc(STAGE_LABEL[c.stage] || c.stage)}</td>
       <td>${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">Unassigned</span>'}</td>
       <td class="num">${fmtM(feeOf(c))}</td>
-      <td><button type="button" class="btn btn-sm" ${actAttr("repCloseModalOpenCase", c.id)}>Open</button></td>
+      <td><button type="button" class="btn btn-sm" ${actAttr("closeModalOpenCase", c.id)}>Open</button></td>
     </tr>`).join("")}
   </table>` : '<div class="empty">No cases match.</div>';
   $("#modal").innerHTML = `<div id="mi-drilldown" class="mi-drilldown">

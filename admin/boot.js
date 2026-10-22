@@ -7,7 +7,7 @@
 window.NX_BUILD_TAG = "r94";
 
 /* The Inter stylesheet is fetched as media="print" (non-blocking) and switched to all media once it has
-   loaded — what the old inline onload="this.media='all'" did. boot.js runs at the end of <body>, so the
+   loaded — what the old inline load-handler media swap did. boot.js runs at the end of <body>, so the
    sheet may already be in: switch now if so, else on its load event. */
 (function () {
   var l = document.querySelector("link[data-swap]");
