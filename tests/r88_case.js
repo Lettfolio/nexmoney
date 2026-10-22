@@ -106,7 +106,7 @@ const snap = (page) => page.evaluate(() => {
   const all = [...m.querySelectorAll("*")];
   const pos = {};
   order.forEach((s) => { const el = m.querySelector(s); pos[s] = el ? all.indexOf(el) : -1; });
-  const ctrls = [...m.querySelectorAll("button, select, input:not([type=hidden]), textarea, a[href], [data-act]")].filter(vis);
+  const ctrls = [...m.querySelectorAll("button, select, input:not([type=hidden]), textarea, a[href], [data-act]:not([data-on=\"error\"])")].filter(vis);   // R95: the lender favicon's error fallback is not a control
   const firstScreen = ctrls.filter((c) => c.getBoundingClientRect().top < innerHeight);
   const folds = {};
   m.querySelectorAll("details.case-fold").forEach((d) => { folds[d.dataset.fold || d.id] = { open: d.open, hidden: getComputedStyle(d).display === "none" }; });
