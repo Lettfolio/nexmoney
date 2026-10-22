@@ -555,7 +555,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       const dueLineText = async (page, caseId, taskId) => {
         await openCase(page, caseId);
         return page.evaluate((tid) => {
-          const row = [...document.querySelectorAll("#tasks-inline .row-item")].find((r) => r.querySelector(`[onclick*="'${tid}'"]`));
+          const row = [...document.querySelectorAll("#tasks-inline .row-item")].find((r) => r.querySelector(`[data-args*='"${tid}"']`));
           return row ? row.querySelector(".s").textContent : null;
         }, taskId);
       };
@@ -640,7 +640,7 @@ const isoDaysAgo = (n) => new Date(Date.now() - n * DAY_MS).toISOString();
       // Put it back to due TODAY (the exact function the date-pick calls) and confirm it REAPPEARS.
       await page.evaluate(({ id, v }) => window.snoozeTaskTo(id, v), { id: d5task, v: todayStr });
       await wait(page, 700);
-      const backOnBrief = await page.evaluate((s) => !!document.querySelector(s), `[onclick^="briefDone('${d5task}'"]`);
+      const backOnBrief = await page.evaluate((s) => !!document.querySelector(s), `[data-act="briefDone"][data-args^='["${d5task}"']`);
       ok("D5 · …and REAPPEARS on My Day once its due date is back to today — reappears per horizon", backOnBrief);
 
       ok("D · no console errors", noNewErr(errBefore), JSON.stringify(page.__err));

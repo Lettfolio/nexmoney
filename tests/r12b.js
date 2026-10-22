@@ -89,7 +89,7 @@ async function r87SkipEntry(page) {
     const box = document.querySelector("#overlay-modal");
     box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
     box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
-    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change", { bubbles: true })); });
   });
   await page.click("#se-ok");
 }
@@ -320,12 +320,12 @@ async function readRows(page, table, filters) {
       }, { clientId });
 
       await goto(page, "clients", 1200);
-      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p2");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
+      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); }, "p2");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 500);
       const underP2 = await page.$(`.client-row[data-client="${clientId}"]`);
       ok("A3 · the dual-adviser client appears under Wayne's (p2) filter", !!underP2);
 
-      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
+      await page.$eval("#client-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 500);
       const underP3 = await page.$(`.client-row[data-client="${clientId}"]`);
       ok("A3 · …and ALSO appears under Luke's (p3) filter — this is correct, not a bug", !!underP3);
@@ -390,7 +390,7 @@ async function readRows(page, table, filters) {
       });
       await goto(page, "dashboard", 1000);
 
-      await page.click(`#briefing-list [onclick^="acceptLead('${leadA}'"]`);
+      await page.click(`#briefing-list [data-act="acceptLead"][data-args^='["${leadA}"']`);
       await wait(page, 1200);
       const toastA = await toastText(page);
       const caseA = await page.evaluate(async (id) => {
@@ -403,7 +403,7 @@ async function readRows(page, table, filters) {
       ok("A4 · W-28 · the accept toast names the parsed figure", /property value/.test(toastA) && /£450,000/.test(toastA), toastA);
       ok("A4 · W-28 · no figures hint, so the case does NOT auto-open", !toastA.includes("worth capturing on the case now"), toastA);
 
-      await page.click(`#briefing-list [onclick^="acceptLead('${leadB}'"]`);
+      await page.click(`#briefing-list [data-act="acceptLead"][data-args^='["${leadB}"']`);
       await wait(page, 1200);
       const toastB = await toastText(page);
       const linkB = await page.evaluate(async (id) => {
@@ -659,7 +659,7 @@ async function readRows(page, table, filters) {
       const todayStart = new Date(Date.now() - 5 * 60000);   // 5 minutes ago — started, unjudged
       const todayId = await mkAppt(page, { client_id: gt.clientId, case_id: gt.caseId, title: "Today appt", starts_at: todayStart.toISOString(), ends_at: todayStart.toISOString(), staff_id: "p4" });
       await goto(page, "dashboard", 900);
-      const quickBtn = `#briefing-list .appt-quick-btn[onclick^="quickApptOutcome('${todayId}','attended'"]`;
+      const quickBtn = `#briefing-list .appt-quick-btn[data-act="quickApptOutcome"][data-args^='["${todayId}","attended"']`;
       const hasQuick = await page.$(quickBtn);
       ok("B3 · My Day's row offers the one-click ✓/✗ pair for a started, unjudged appointment", !!hasQuick);
       if (hasQuick) {
@@ -695,7 +695,7 @@ async function readRows(page, table, filters) {
       for (let i = 0; i < monthsBack; i++) { await page.click("#diary-prev"); await wait(page, 500); }
       await wait(page, 900);
       const hasOutcomeBadge = await page.evaluate((apptId) => {
-        const el = document.querySelector(`.appt[onclick*="${apptId}"]`);
+        const el = document.querySelector(`.appt[data-appt="${apptId}"]`);
         return !!(el && el.classList.contains("has-outcome"));
       }, pastId);
       ok("B3 · a diary month tile carries the has-outcome class once recorded", hasOutcomeBadge);

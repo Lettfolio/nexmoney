@@ -188,7 +188,7 @@ async function panelRows(page) {
   return page.$$eval("#dh-milestone-panel .row-item", (els) =>
     els.map((el) => {
       const btn = el.querySelector("button");
-      const onclick = btn ? btn.getAttribute("onclick") || "" : "";
+      const onclick = btn ? ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn) || "" : "";
       const m = onclick.match(/openCase\('([^']+)'\)/);
       const s = el.querySelector(".s");
       return { id: m ? m[1] : null, text: s ? s.textContent.trim() : "" };

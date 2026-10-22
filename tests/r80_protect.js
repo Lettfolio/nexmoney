@@ -508,7 +508,7 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
       await page.evaluate(() => {
         const sel = document.querySelector("#prot-logcall-prot.prot-status-set");
         sel.value = "discussed";
-        sel.dispatchEvent(new Event("change"));
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
       });
       const repainted = await waitFor(page, (id) => {
         const c = document.querySelector(`#prot-list .prot-fact-case[data-case="${id}"] .prot-status-badge`);
@@ -534,7 +534,7 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
       await page.waitForTimeout(600);
       const giTarget = await page.evaluate(() => {
         const btn = document.querySelector("#prot-list .prot-row .row-acts .prot-logcall");
-        return btn ? (btn.getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1] : null;
+        return btn ? (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn).match(/protLogCall\('([^']+)'/) || [])[1] : null;
       });
       ok("E8 · found a GI-chip row to quick-set", !!giTarget, String(giTarget));
       await page.evaluate((id) => { protLogCall(id); }, giTarget);
@@ -542,7 +542,7 @@ const bandOf = (loan) => { const l = Number(loan || 0); return l < 100000 ? 0.7 
       await page.evaluate(() => {
         const sel = document.querySelector("#prot-logcall-gi.prot-gi-set");
         sel.value = "not_applicable";
-        sel.dispatchEvent(new Event("change"));
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
       });
       const giGone = await waitFor(page, (id) => document.querySelector(`#prot-list .prot-fact-case[data-case="${id}"]`) ? null : true, giTarget);
       const giProof = await page.evaluate(async (id) => {

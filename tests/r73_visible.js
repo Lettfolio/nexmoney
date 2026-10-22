@@ -251,8 +251,8 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
        r15 re-implements CASE_ACTION_RULES rather than importing it. */
     const leads = await page.evaluate(async () => {
       const btn = document.querySelector("#leads-accept-all");
-      const rowsEl = [...document.querySelectorAll('#briefing-list [onclick^="acceptLead("]')];
-      const ids = rowsEl.map((b) => (b.getAttribute("onclick").match(/acceptLead\('([^']+)'/) || [])[1]).filter(Boolean);
+      const rowsEl = [...document.querySelectorAll('#briefing-list [data-act="acceptLead"]')];
+      const ids = rowsEl.map((b) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b).match(/acceptLead\('([^']+)'/) || [])[1]).filter(Boolean);
       if (!btn || ids.length < 2) return { absent: true, n: ids.length };
       const { data: rows } = await window.__mockDb.from("leads").select("*").in("id", ids);
       const { data: clients } = await window.__mockDb.from("clients").select("id,email").order("id");

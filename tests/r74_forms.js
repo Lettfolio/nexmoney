@@ -749,8 +749,8 @@ const tasksFor = (page, caseId) => page.evaluate(async (id) => {
         [...document.querySelectorAll("#watchtower-list .wt-row, #watch-list .wt-row, .wt-row")].forEach((row) => {
           const t = (row.querySelector(".t") || {}).textContent || "";
           const b = row.querySelector(".wt-link-btn");
-          if (/rate-end gap/i.test(t)) out.retention = b ? { label: b.textContent.trim(), go: b.getAttribute("onclick") || "" } : null;
-          if (/R74 workload probe/i.test(t)) out.workload = b ? { label: b.textContent.trim(), go: b.getAttribute("onclick") || "" } : null;
+          if (/rate-end gap/i.test(t)) out.retention = b ? { label: b.textContent.trim(), go: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || "" } : null;
+          if (/R74 workload probe/i.test(t)) out.workload = b ? { label: b.textContent.trim(), go: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || "" } : null;
         });
         return out;
       });

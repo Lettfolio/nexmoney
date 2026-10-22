@@ -250,7 +250,7 @@ async function mkClientCase(page, opts) {
         const { data } = await window.__mockDb.from("profiles").select("full_name").eq("id", id).single();
         return data && data.full_name;
       }, notRr);
-      await page.click(`#briefing-list [onclick^="acceptLead('${leadIds.a}'"]`);
+      await page.click(`#briefing-list [data-act="acceptLead"][data-args^='["${leadIds.a}"']`);
       await wait(page, 1200);
       const toastA = await toastText(page);
       ok("D1 · Accept uses the stored choice", toastA.includes(`Case created for Freddie Ashcombe`) && toastA.includes(`→ ${nameOfA}`), toastA);
@@ -271,7 +271,7 @@ async function mkClientCase(page, opts) {
       }, notRrB);
       await page.selectOption(`#briefing-list select.lead-adviser[data-lead="${leadIds.b}"]`, notRrB);
       await wait(page, 200);
-      await page.click(`#briefing-list [onclick^="acceptLead('${leadIds.b}'"]`);
+      await page.click(`#briefing-list [data-act="acceptLead"][data-args^='["${leadIds.b}"']`);
       await wait(page, 1200);
       const toastB = await toastText(page);
       ok("D1 · Accept for a second lead also uses its own stored choice", toastB.includes("Case created for Nadia Whitlock") && toastB.includes(`→ ${nameOfB}`), toastB);
@@ -987,7 +987,7 @@ async function mkClientCase(page, opts) {
 
       await page.evaluate((id) => window.openCase(id), caseId);
       await wait(page, 900);
-      await page.click(`[onclick="doneTaskInCase('${taskId}','${caseId}')"]`);
+      await page.click(`[data-act="doneTaskInCase"][data-args='["${taskId}","${caseId}"]']`);
       await wait(page, 600);
       const t1 = await page.evaluate(async (id) => (await window.__mockDb.from("case_tasks").select("done_at").eq("id", id).single()).data, taskId);
       ok("D12 · marking done stamps done_at", !!t1.done_at, JSON.stringify(t1));
@@ -995,20 +995,20 @@ async function mkClientCase(page, opts) {
       const toastActionLabel = await page.$eval("#toast-action", (e) => e.textContent).catch(() => null);
       eq("D12 · the toast reads \"Task done\"", toastMsg, "Task done");
       eq("D12 · ...with an Undo action", toastActionLabel, "Undo");
-      const reopenBtnAfterDone = await page.$$eval(`[onclick="reopenTaskInCase('${taskId}','${caseId}')"]`, (els) => els.length);
+      const reopenBtnAfterDone = await page.$$eval(`[data-act="reopenTaskInCase"][data-args='["${taskId}","${caseId}"]']`, (els) => els.length);
       eq("D12 · the case-modal row now shows a ↺ Reopen button in place of ✓", reopenBtnAfterDone, 1);
 
       await page.click("#toast-action");
       await wait(page, 600);
       const t2 = await page.evaluate(async (id) => (await window.__mockDb.from("case_tasks").select("done_at").eq("id", id).single()).data, taskId);
       eq("D12 · clicking Undo reverts done_at to null", t2.done_at, null);
-      const doneBtnAfterUndo = await page.$$eval(`[onclick="doneTaskInCase('${taskId}','${caseId}')"]`, (els) => els.length);
+      const doneBtnAfterUndo = await page.$$eval(`[data-act="doneTaskInCase"][data-args='["${taskId}","${caseId}"]']`, (els) => els.length);
       eq("D12 · ...and the case modal repaints back to a ✓ button", doneBtnAfterUndo, 1);
 
       // Now do it again, but reopen via the case modal's own button rather than the toast.
-      await page.click(`[onclick="doneTaskInCase('${taskId}','${caseId}')"]`);
+      await page.click(`[data-act="doneTaskInCase"][data-args='["${taskId}","${caseId}"]']`);
       await wait(page, 600);
-      await page.click(`[onclick="reopenTaskInCase('${taskId}','${caseId}')"]`);
+      await page.click(`[data-act="reopenTaskInCase"][data-args='["${taskId}","${caseId}"]']`);
       await wait(page, 600);
       const t3 = await page.evaluate(async (id) => (await window.__mockDb.from("case_tasks").select("done_at").eq("id", id).single()).data, taskId);
       eq("D12 · reopening directly from the case modal (not the toast) also clears done_at", t3.done_at, null);
@@ -1035,7 +1035,7 @@ async function mkClientCase(page, opts) {
       await wait(page, 900);
       const before = await page.$eval("#briefing-list", (e) => e.textContent);
       ok("D12 · the fresh task is on My Day before it is done", before.includes("Confirm rate switch"), before);
-      await page.click(`[onclick="briefDone('${taskId2}')"]`);
+      await page.click(`[data-act="briefDone"][data-args='["${taskId2}"]']`);
       await wait(page, 700);
       const afterDone = await page.$eval("#briefing-list", (e) => e.textContent);
       ok("D12 · marking it done from My Day removes it from that list", !afterDone.includes("Confirm rate switch"), afterDone);

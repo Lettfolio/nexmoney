@@ -67,7 +67,7 @@ async function r87SkipEntry(page) {
     const box = document.querySelector("#overlay-modal");
     box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
     box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
-    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change", { bubbles: true })); });
   });
   await page.click("#se-ok");
 }
@@ -332,7 +332,7 @@ const radarRowText = (page, name) => page.evaluate((n) => { const r = [...docume
       await wait(page, 250);
       const nowA = await page.evaluate(() => Date.now());
       // The real button on the real row (same selector shape tests/r41.js uses for Accept/Discard).
-      await page.click(`#briefing-list [onclick^="acceptLead('${leadId}'"]`, { timeout: 10000 });
+      await page.click(`#briefing-list [data-act="acceptLead"][data-args^='["${leadId}"']`, { timeout: 10000 });
       await wait(page, 2600);
 
       const acceptedCaseId = await page.evaluate(async (id) => {
@@ -644,7 +644,7 @@ const radarRowText = (page, name) => page.evaluate((n) => { const r = [...docume
           rows: rows.length, stale: stale.length,
           chipText: chip ? chip.textContent.trim() : null,
           btnText: btn ? btn.textContent.trim() : null,
-          btnOnclick: btn ? btn.getAttribute("onclick") : null,
+          btnOnclick: btn ? ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn) : null,
         };
       });
       eq("C2 · exactly one task row is flagged as an earlier-stage leftover", [c2.rows, c2.stale], [1, 1]);

@@ -320,10 +320,10 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
         if (!r) return null;
         return {
           hasSelect: !!sel,
-          hasAccept: !!r.querySelector(`.brief-lead-actions [onclick^="acceptLead('${id}'"]`),
-          hasDiscard: !!r.querySelector(`.brief-lead-actions [onclick^="discardLead('${id}'"]`),
-          discardText: (r.querySelector(`.brief-lead-actions [onclick^="discardLead('${id}'"]`) || {}).textContent,
-          discardAriaLabel: (r.querySelector(`.brief-lead-actions [onclick^="discardLead('${id}'"]`) || {}).getAttribute && r.querySelector(`.brief-lead-actions [onclick^="discardLead('${id}'"]`).getAttribute("aria-label"),
+          hasAccept: !!r.querySelector(`.brief-lead-actions [data-act="acceptLead"][data-args^='["${id}"']`),
+          hasDiscard: !!r.querySelector(`.brief-lead-actions [data-act="discardLead"][data-args^='["${id}"']`),
+          discardText: (r.querySelector(`.brief-lead-actions [data-act="discardLead"][data-args^='["${id}"']`) || {}).textContent,
+          discardAriaLabel: (r.querySelector(`.brief-lead-actions [data-act="discardLead"][data-args^='["${id}"']`) || {}).getAttribute && r.querySelector(`.brief-lead-actions [data-act="discardLead"][data-args^='["${id}"']`).getAttribute("aria-label"),
         };
       }, leadId);
       ok("§B1a · the row has the adviser select", row && row.hasSelect, JSON.stringify(row));
@@ -348,7 +348,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       const preClick = await page.evaluate((id) => !!document.querySelector(`#briefing-list select.lead-adviser[data-lead="${id}"]`), leadId);
       ok("§B2a · the lead's row is on My Day before discarding", preClick);
 
-      await page.click(`#briefing-list [onclick^="discardLead('${leadId}'"]`);
+      await page.click(`#briefing-list [data-act="discardLead"][data-args^='["${leadId}"']`);
       await wait(page, 500);
       const dialogUp = await page.evaluate(() => ({
         heading: (document.querySelector("#overlay-modal h3") || {}).textContent || "",
@@ -400,7 +400,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
         snooze3d: !!document.getElementById(`snooze-3d-brief-${id}`),
         snooze1wk: !!document.getElementById(`snooze-1wk-brief-${id}`),
         pick: !!document.getElementById(`snooze-pick-brief-${id}`),
-        done: !!document.querySelector(`[onclick="briefDone('${id}')"]`),
+        done: !!document.querySelector(`[data-act="briefDone"][data-args='["${id}"]']`),
       }), taskId);
       ok("§C1 · the row carries the full snooze cluster + ✓ Done", Object.values(controlsPresent).every(Boolean), JSON.stringify(controlsPresent));
 
@@ -420,7 +420,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       await goto(page, "dashboard", 1200);
       const beforeDone = await page.$eval("#briefing-list", (e) => e.textContent);
       ok("§C4 · fixture · the fresh task is on My Day", beforeDone.includes("Confirm ID docs"), beforeDone.slice(0, 200));
-      await page.click(`[onclick="briefDone('${taskId2}')"]`);
+      await page.click(`[data-act="briefDone"][data-args='["${taskId2}"]']`);
       await wait(page, 700);
       const afterDone = await readRow(page, "case_tasks", taskId2);
       ok("§C5 · Done stamped done_at", !!afterDone.done_at, JSON.stringify(afterDone));
@@ -449,21 +449,21 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       await goto(page, "dashboard", 1500);
 
       const both = await page.evaluate((id) => ({
-        attended: !!document.querySelector(`#briefing-list .appt-quick-btn[onclick^="quickApptOutcome('${id}','attended'"]`),
-        noShow: !!document.querySelector(`#briefing-list .appt-quick-btn[onclick^="quickApptOutcome('${id}','no_show'"]`),
-        rearranged: !!document.querySelector(`#briefing-list .appt-quick-btn[onclick^="quickApptOutcome('${id}','rearranged'"]`),
+        attended: !!document.querySelector(`#briefing-list .appt-quick-btn[data-act="quickApptOutcome"][data-args^='["${id}","attended"']`),
+        noShow: !!document.querySelector(`#briefing-list .appt-quick-btn[data-act="quickApptOutcome"][data-args^='["${id}","no_show"']`),
+        rearranged: !!document.querySelector(`#briefing-list .appt-quick-btn[data-act="quickApptOutcome"][data-args^='["${id}","rearranged"']`),
       }), apptId);
       ok("§D1a · a past, unset appointment offers Attended", both.attended, JSON.stringify(both));
       ok("§D1b · …and No-show", both.noShow, JSON.stringify(both));
       ok("§D1c · …but never Rearranged (that stays editor-only)", !both.rearranged, JSON.stringify(both));
 
       page.__dialogAnswer = "dismiss"; // no-show would ask about a call-back task; this click is Attended so it never fires, but stay defensive
-      await page.click(`#briefing-list .appt-quick-btn[onclick^="quickApptOutcome('${apptId}','attended'"]`);
+      await page.click(`#briefing-list .appt-quick-btn[data-act="quickApptOutcome"][data-args^='["${apptId}","attended"']`);
       await wait(page, 800);
       const afterClick = await readRow(page, "appointments", apptId);
       eq("§D2a · the outcome persisted", afterClick.outcome, "attended");
       const badge = await page.evaluate((id) => {
-        const row = document.querySelector(`#briefing-list [onclick^="openAppt('${id}'"]`);
+        const row = document.querySelector(`#briefing-list [data-act="openAppt"][data-args^='["${id}"']`);
         const r = row && row.closest(".row-item");
         const chip = r && r.querySelector(".appt-outcome.appt-outcome-attended");
         const buttons = r ? r.querySelectorAll(".appt-quick-btn").length : -1;
@@ -478,7 +478,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       await wait(page, 800);
       const afterUndo = await readRow(page, "appointments", apptId);
       eq("§D2e · Undo clears the outcome back to unrecorded", afterUndo.outcome, null);
-      const backToButtons = await page.evaluate((id) => !!document.querySelector(`#briefing-list .appt-quick-btn[onclick^="quickApptOutcome('${id}','attended'"]`), apptId);
+      const backToButtons = await page.evaluate((id) => !!document.querySelector(`#briefing-list .appt-quick-btn[data-act="quickApptOutcome"][data-args^='["${id}","attended"']`), apptId);
       ok("§D2f · …and the button pair is back on the row", backToButtons);
 
       ok("§D1/D2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
@@ -503,7 +503,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       await goto(page, "dashboard", 1500);
 
       const rowState = await page.evaluate((id) => {
-        const row = document.querySelector(`#briefing-list [onclick^="openAppt('${id}'"]`);
+        const row = document.querySelector(`#briefing-list [data-act="openAppt"][data-args^='["${id}"']`);
         const r = row && row.closest(".row-item");
         return {
           rowPresent: !!r,
@@ -531,7 +531,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       await goto(page, "dashboard", 1500);
 
       const escaped = await page.evaluate((id) => {
-        const row = document.querySelector(`#briefing-list [onclick^="openAppt('${id}'"]`);
+        const row = document.querySelector(`#briefing-list [data-act="openAppt"][data-args^='["${id}"']`);
         return {
           hasImg: !!(row && row.querySelector("img")),
           hasImgAnywhereOnPanel: document.querySelectorAll("#briefing-panel img").length,
@@ -737,8 +737,8 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       // R88 · C: the Gone-quiet panel is the "Gone quiet" chip on the rates list's strip — press it.
       await page.evaluate(() => document.querySelector('#ret-segs .seg-btn[data-seg="cold"]').click());
       await page.waitForTimeout(2000);
-      const order = await page.evaluate(() => [...document.querySelectorAll("#ret-cold-list .row-item .t[onclick]")].map((e) => {
-        const m = e.getAttribute("onclick").match(/openClient\('([^']+)'\)/);
+      const order = await page.evaluate(() => [...document.querySelectorAll("#ret-cold-list .row-item .t[data-act]")].map((e) => {
+        const m = ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(e).match(/openClient\('([^']+)'\)/);
         return m ? m[1] : null;
       }));
       const idxOf = (clientId) => order.indexOf(clientId);
@@ -750,7 +750,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
       // The badge/sub-line on the soonest-rate row actually names that date — the sort is visible
       // ON the row it sorted, not a fact only the test computed independently.
       const soonRowText = await page.evaluate((id) => {
-        const t = document.querySelector(`#ret-cold-list .t[onclick="openClient('${id}')"]`);
+        const t = document.querySelector(`#ret-cold-list .t[data-act="openClient"][data-args='["${id}"]']`);
         const row = t && t.closest(".row-item");
         return row ? row.textContent : null;
       }, soon.clientId);

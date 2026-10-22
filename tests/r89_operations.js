@@ -142,7 +142,7 @@ const readDH = (page) => page.evaluate(() => {
       ok(`B1 · nav("${alias}") lands on Operations › ${tab}`, w.page === "operations" && w.tab === tab && w.hash === "#operations/" + tab, JSON.stringify(w));
     }
     await go(p4, "dashboard", 3000);
-    const chips = await p4.evaluate(() => ["ops-emails-queued", "ops-emails-failed", "ops-sms-queued"].map((id) => { const b = document.getElementById(id); return b ? { id, title: b.title, on: b.getAttribute("onclick") } : null; }));
+    const chips = await p4.evaluate(() => ["ops-emails-queued", "ops-emails-failed", "ops-sms-queued"].map((id) => { const b = document.getElementById(id); return b ? { id, title: b.title, on: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) } : null; }));
     ok("B2 · the three mail chips exist on Today", chips.every(Boolean), JSON.stringify(chips));
     ok("B3 · …each names its destination as 'Operations › Emails & SMS'", chips.every((c) => c && /Operations › Emails & SMS/.test(c.title)), JSON.stringify(chips.map((c) => c && c.title)));
     ok("B3b · …and none still says 'the Emails page'", chips.every((c) => c && !/the Emails page/.test(c.title)));
@@ -187,7 +187,7 @@ const readDH = (page) => page.evaluate(() => {
     ok("C13 · faults come first, worst first", (() => { const f = d.checks.filter((c) => c.band === "counted" && !c.clean).map((c) => c.n); return f.length > 1 && f.every((n, i) => i === 0 || f[i - 1] >= n) && d.checks.findIndex((c) => c.band !== "counted") > d.checks.map((c) => c.band).lastIndexOf("counted"); })(), JSON.stringify(d.checks.map((c) => [c.band, c.n])));
     const listRows = d.checks.filter((c) => c.rows > 0 && !["dh-dup-panel", "dh-waitingdocs-panel", "dh-sharedprop-panel"].includes(c.panel));
     ok("C14 · client / case rows are kit rows (rowItemHtml)", listRows.length > 5 && listRows.every((c) => c.kit === c.rows), JSON.stringify(listRows.map((c) => [c.panel, c.kit, c.rows])));
-    const nameOpensClient = await p4.evaluate(() => [...document.querySelectorAll("#dh-readiness .kit-row .t")].slice(0, 40).every((t) => /openClient\(/.test(t.getAttribute("onclick") || "")));
+    const nameOpensClient = await p4.evaluate(() => [...document.querySelectorAll("#dh-readiness .kit-row .t")].slice(0, 40).every((t) => /openClient\(/.test(((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t) || "")));
     ok("C15 · a row's name opens the client (kit rule 1)", nameOpensClient);
     ok("C16 · the aria-expanded on every head agrees with its fold", d.checks.every((c) => (c.expanded === "true") === (c.hidden === false)), JSON.stringify(d.checks.map((c) => [c.panel, c.expanded, c.hidden])));
     /* fold / unfold by the head */

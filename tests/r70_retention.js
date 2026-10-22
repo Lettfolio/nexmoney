@@ -152,13 +152,13 @@ async function mkClientCase(page, opts) {
 /* The ids currently painted, in the order they are painted — the order IS the assertion in §B. */
 const pageRowIds = (page) => page.evaluate(() =>
   /* R88 · C: the kit row's name opens the CLIENT; the case is the chip (.ret-case-chip). */
-  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]
-    .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
+  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[data-act]")]
+    .map((el) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el).match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
 
 const rowOf = (page, id, root) => page.evaluate((o) => {
   const r = [...document.querySelectorAll(`${o.root} .row-item`)].find((x) => {
-    const t = x.querySelector(".ret-case-chip[onclick], .t[onclick*='openCase']");   // R88 · C: page → chip; drawer → name
-    return t && t.getAttribute("onclick").includes(`'${o.id}'`);
+    const t = x.querySelector(".ret-case-chip[data-act], .t[data-act='openCase']");   // R88 · C: page → chip; drawer → name
+    return t && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t).includes(`'${o.id}'`);
   });
   if (!r) return null;
   const b = r.querySelector(".ret-rem-badge");
@@ -167,8 +167,8 @@ const rowOf = (page, id, root) => page.evaluate((o) => {
     key: b ? b.dataset.rem : null,
     cls: b ? b.className : null,
     title: b ? b.getAttribute("title") : null,
-    start: !!r.querySelector("button[onclick*='startRetentionCase']"),
-    mark: !!r.querySelector("button[onclick*='markRateReminded']"),
+    start: !!r.querySelector("button[data-act='startRetentionCase']"),
+    mark: !!r.querySelector("button[data-act='markRateReminded']"),
   };
 }, { id, root: root || "#ret-rates-list" });
 
@@ -462,8 +462,8 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     const drawerBadges = await page.evaluate(() => {
       const out = {};
       [...document.querySelectorAll("#alerts-rateerc .row-item")].forEach((r) => {
-        const t = r.querySelector(".t[onclick]"), b = r.querySelector(".ret-rem-badge");
-        const id = t && (t.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1];
+        const t = r.querySelector(".t[data-act]"), b = r.querySelector(".ret-rem-badge");
+        const id = t && (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t).match(/openCase\('([^']+)'\)/) || [])[1];
         if (id && b) out[id] = b.textContent.trim();
       });
       return out;
@@ -474,8 +474,8 @@ const toastText = (page) => page.evaluate(() => (document.getElementById("toast"
     const pageBadges = await page.evaluate((ids) => {
       const out = {};
       [...document.querySelectorAll("#ret-rates-list .row-item")].forEach((r) => {
-        const t = r.querySelector(".ret-case-chip[onclick]"), b = r.querySelector(".ret-rem-badge");   // R88 · C: the case is the chip
-        const id = t && (t.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1];
+        const t = r.querySelector(".ret-case-chip[data-act]"), b = r.querySelector(".ret-rem-badge");   // R88 · C: the case is the chip
+        const id = t && (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t).match(/openCase\('([^']+)'\)/) || [])[1];
         if (id && b && ids.includes(id)) out[id] = b.textContent.trim();
       });
       return out;

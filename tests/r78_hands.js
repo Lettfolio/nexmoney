@@ -585,7 +585,7 @@ async function mkCase(page, opts) {
       await page.waitForTimeout(2000);
       const badges = await page.evaluate((ids) => {
         const rowOf = (cid) => {
-          const t = document.querySelector(`#ret-cold-list .t[onclick="openClient('${cid}')"]`);
+          const t = document.querySelector(`#ret-cold-list .t[data-act="openClient"][data-args='["${cid}"]']`);
           return t ? t.closest(".row-item") : null;
         };
         const read = (cid) => {

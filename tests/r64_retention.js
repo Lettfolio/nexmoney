@@ -119,8 +119,8 @@ const daysFrom = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(
 
 const pageRowIds = (page) => page.evaluate(() =>
   /* R88 · C: the kit row's NAME opens the client; the CASE is the chip (.ret-case-chip). */
-  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[onclick]")]
-    .map((el) => (el.getAttribute("onclick").match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
+  [...document.querySelectorAll("#ret-rates-list .row-item .ret-case-chip[data-act]")]
+    .map((el) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el).match(/openCase\('([^']+)'\)/) || [])[1]).filter(Boolean));
 
 async function selectRows(page, ids) {
   await page.evaluate((list) => {
@@ -412,8 +412,8 @@ async function selectRows(page, ids) {
         tel: tel ? tel.getAttribute("href") : null,
         telText: tel ? tel.textContent : null,
         noTel: r2 ? !r2.querySelector(".ret-row-tel") : null,
-        logcall: !!(r1 && r1.querySelector("button[onclick*='retLogCall']")),
-        book: !!(r1 && r1.querySelector("button[onclick*='retBookReview']")),
+        logcall: !!(r1 && r1.querySelector("button[data-act='retLogCall']")),
+        book: !!(r1 && r1.querySelector("button[data-act='retBookReview']")),
         /* R73: the quiet treatment moved OFF the cluster and onto the ONE verb it was
            meant for. R64 put Log call, Book review and the three outcome chips together
            in a .hover-quiet container at opacity 0.28 — which the R73 panel found is what
@@ -422,8 +422,8 @@ async function selectRows(page, ids) {
            asking for), the outcome chips are full weight (the funnel points at them), and
            only Book review keeps the card-advance manners. Same classes, same handlers,
            same order — the assertion re-points at where quiet now lives. */
-        quietOnBookReview: !!(r1 && r1.querySelector("button[onclick*='retBookReview'].hover-quiet")),
-        logcallLoud: !!(r1 && r1.querySelector("button[onclick*='retLogCall']:not(.hover-quiet)")),
+        quietOnBookReview: !!(r1 && r1.querySelector("button[data-act='retBookReview'].hover-quiet")),
+        logcallLoud: !!(r1 && r1.querySelector("button[data-act='retLogCall']:not(.hover-quiet)")),
       };
     }, { a: withPhone.caseId, b: noPhone.caseId });
     eq("§C1a · a client with a number gets a real tel: link on the row", rowBits.tel, "tel:07700900321");
@@ -434,7 +434,7 @@ async function selectRows(page, ids) {
       rowBits.quietOnBookReview && rowBits.logcallLoud, JSON.stringify(rowBits));
 
     /* --- Log call, from the row --- */
-    await page.click(`#ret-rates-list button[onclick*="retLogCall('${withPhone.caseId}')"]`);
+    await page.click(`#ret-rates-list button[data-act="retLogCall"][data-args*='"${withPhone.caseId}"']`);
     await page.waitForTimeout(1200);
     const overlay = await page.evaluate(() => ({
       panel: !!document.getElementById("ret-logcall-panel"),
@@ -499,7 +499,7 @@ async function selectRows(page, ids) {
     /* R87 · book (C3): Book review sits behind the row's "More ▾" (a native <details>) — open it
        first; the button, its class and its handler are unchanged. */
     await page.evaluate(() => document.querySelectorAll("#ret-rates-list details.row-more").forEach((d) => { d.open = true; }));
-    await page.click(`#ret-rates-list button[onclick*="retBookReview('${withPhone.caseId}')"]`);
+    await page.click(`#ret-rates-list button[data-act="retBookReview"][data-args*='"${withPhone.caseId}"']`);
     await page.waitForTimeout(2000);
     const prefill = await page.evaluate(() => {
       const f = document.getElementById("appt-form");
@@ -543,15 +543,15 @@ async function selectRows(page, ids) {
     await page.waitForTimeout(2600);
     const drawer = await page.evaluate((id) => {
       const row = [...document.querySelectorAll("#alerts-rateerc .row-item")]
-        .find((r) => (r.querySelector(".t[onclick]") || {}).getAttribute && r.querySelector(".t[onclick]").getAttribute("onclick").includes(`'${id}'`));
+        .find((r) => (r.querySelector(".t[data-act]") || {}).getAttribute && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".t[data-act]")).includes(`'${id}'`));
       if (!row) return null;
       return {
         html: row.outerHTML,
         main: row.querySelector(".row-main").innerHTML,
         cbs: document.querySelectorAll("#alerts-rateerc .ret-cb").length,
         acts: document.querySelectorAll("#alerts-rateerc .ret-row-acts").length,
-        logcall: document.querySelectorAll("#alerts-rateerc button[onclick*='retLogCall']").length,
-        book: document.querySelectorAll("#alerts-rateerc button[onclick*='retBookReview']").length,
+        logcall: document.querySelectorAll("#alerts-rateerc button[data-act='retLogCall']").length,
+        book: document.querySelectorAll("#alerts-rateerc button[data-act='retBookReview']").length,
         bar: !!document.querySelector("#alerts-rateerc .bulk-bar"),
       };
     }, both.caseId);

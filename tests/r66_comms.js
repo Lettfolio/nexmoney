@@ -410,7 +410,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   // The Protection page: badge + its own R61 band.
   await page.evaluate(() => { location.hash = "#protection"; });
   await page.waitForTimeout(SETTLE + 600);
-  await page.evaluate(() => { const s = document.querySelector("#prot-filter"); if (s) { s.value = "all"; s.dispatchEvent(new Event("change")); } });
+  await page.evaluate(() => { const s = document.querySelector("#prot-filter"); if (s) { s.value = "all"; s.dispatchEvent(new Event("change", { bubbles: true })); } });
   await page.waitForTimeout(1400);
   /* R80: RE-POINTED — R61's status bands are retired (the rewritten RPC returns the book's best
      candidates score-desc and the table preserves that order; r80_protect.js §B pins it). What
@@ -505,7 +505,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
 
   await page.evaluate((mv) => { const p = document.querySelector("#report-month"); if (p) p.value = mv; location.hash = "#reports/referrals"; }, thisMonth);   // R89 · B: was "#reports" — Referrals out is a tab, painted when shown
   await page.waitForTimeout(SETTLE + 900);
-  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); if (p && p.value !== mv) { p.value = mv; p.dispatchEvent(new Event("change")); } });
+  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); if (p && p.value !== mv) { p.value = mv; p.dispatchEvent(new Event("change", { bubbles: true })); } });
   await page.waitForTimeout(1600);
 
   /* R89 · B — CONTRACT CHANGE: the sixth section is a TAB (#reports-tabs-referrals) with its panel,
@@ -553,7 +553,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   ok("C7 · …and the drawer carries its own row count like the other five ledgers", /referral/.test(cList.ledgerN), JSON.stringify(cList.ledgerN));
 
   // Period filter.
-  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); p.value = mv; p.dispatchEvent(new Event("change")); }, lastMonth);
+  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); p.value = mv; p.dispatchEvent(new Event("change", { bubbles: true })); }, lastMonth);
   await page.waitForTimeout(2000);
   const cLast = await page.evaluate(async (mv) => {
     const { data } = await window.__mockDb.from("referrals").select("created_at");
@@ -565,7 +565,7 @@ const closeModal = async (page) => { await page.evaluate(() => window.closeModal
   }, lastMonth);
   eq("C8 · the month picker scopes the report", cLast.rendered, cLast.expected);
   ok("C8b · …and the basis line names the month it is showing", /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/.test(cLast.basis), JSON.stringify(cLast.basis.slice(0, 120)));
-  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); p.value = mv; p.dispatchEvent(new Event("change")); }, thisMonth);
+  await page.evaluate((mv) => { const p = document.querySelector("#report-month"); p.value = mv; p.dispatchEvent(new Event("change", { bubbles: true })); }, thisMonth);
   await page.waitForTimeout(2000);
 
   // Mine / All.

@@ -1990,13 +1990,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   border-bottom: 1px solid var(--border);
 }
 .rep-nav[hidden] { display: none; }
-.rep-nav.is-scrollable { position: sticky; }
-.rep-nav.is-scrollable::after {
-  content: "";
-  position: absolute; top: 0; right: 0; bottom: 0; width: 44px;
-  pointer-events: none;
-  background: linear-gradient(90deg, rgba(246,248,251,0), var(--canvas) 72%);
-}
 .rep-nav-chips {
   position: relative;
   display: flex; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
@@ -2770,14 +2763,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 /* Nothing scrolled to inside the modal may land under the pinned bar. */
 .modal h3, .modal h4, #case-form label, #case-form input, #case-form select, #case-form textarea,
 #new-note, #cs-logcall-panel { scroll-margin-top: 74px; }
-/* A5 · OVERFLOW YOU CAN SEE, AND A GRID THAT FITS (panel D#6, D#11, E#4). */
-.chip-scroll-arrow { top: 50%; right: 4px; transform: translateY(-50%); width: 28px; height: 28px; font-size: 17px; }
-.chip-scroll-arrow:hover { transform: translateY(-50%) scale(1.08); }
-.rep-nav.is-scrollable .chip-scroll-arrow { opacity: 1; pointer-events: auto; }
-/* At the right-hand end there is nothing left to hint at: both the fade and the arrow go, which is the signal that the strip has ended. */
-.rep-nav.is-scrollable::after { opacity: 1; transition: opacity .2s ease; }
-.rep-nav.chip-at-end::after { opacity: 0; }
-.rep-nav.chip-at-end .chip-scroll-arrow { opacity: 0; pointer-events: none; }
+/* A5 · A GRID THAT FITS (panel D#11, E#4). */
 #report-advocacy-panel .adv-grid { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
 .board-scroll-wrap { position: relative; }
 .board-scroll-arrow-left {
@@ -3673,7 +3659,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
      negative margins keep the row it sits in the same height */
   main input[type="checkbox"], .modal input[type="checkbox"] { height: 44px; margin-top: -10px; margin-bottom: -10px; }
   /* A list row's clickable name: same trick, the text does not move */
-  main .row-main > .t[onclick], main .row-head > .t[onclick] { padding: 13px 0; margin: -13px 0; }
+  main .row-main > .t[data-act], main .row-head > .t[data-act] { padding: 13px 0; margin: -13px 0; }
   /* R87 fixer (09 8d, P3) — the Today ⋯ menu button is 44px wide as well as tall, and every
      howFold / how-fold summary is a 44px-tall tap target (it was 19–23px). */
   details.hdr-more > summary { min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
@@ -3728,7 +3714,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
    phone card list must not grow a second scrollbar — R65 · L9). */
 .pipe-table-head-l { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; }
 .pipe-table-head-l > .list-selall { padding: 0; }
-#pipe-table tr[onclick], #pipe-table th[data-k] { cursor: pointer; }
+#pipe-table tr[data-act], #pipe-table th[data-k] { cursor: pointer; }
 #pipe-scroll { overflow-x: auto; }
 #pipe-scroll.is-cards { overflow-x: visible; }
 .bulk-bar > .bulk-bar-select { margin: 0; }

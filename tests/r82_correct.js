@@ -159,7 +159,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
          top case (the 📝 Log call verb's argument). */
       const rowPairs = await page.evaluate(() => [...document.querySelectorAll("#prot-list .prot-row")].map((r) => ({
         client: r.querySelector(".prot-cb").dataset.id,
-        caseId: ((r.querySelector(".prot-logcall") || { getAttribute: () => "" }).getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1],
+        caseId: (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)((r.querySelector(".prot-logcall") || { getAttribute: () => "" })).match(/protLogCall\('([^']+)'/) || [])[1],
       })));
       const rowIds = rowPairs.map((p) => p.caseId);
       ok("A0b · the call list has rows to act on", rowIds.length >= 2, String(rowIds.length));
@@ -293,7 +293,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
         const s = c.querySelector(".card-stage-move");
         if (!s) return { err: "no move control" };
         s.value = to;
-        s.dispatchEvent(new Event("change"));
+        s.dispatchEvent(new Event("change", { bubbles: true }));
         return { pressedFrom: c.dataset.stage };
       }, { id, to });
 
@@ -350,7 +350,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       await goPage(page, "protection", 2500);
       const pick = await page.evaluate(() => {
         // R88 · C: the top row's top case — the case its 📝 Log call acts on
-        const b = document.querySelector("#prot-list .prot-row .prot-logcall"); return b ? (b.getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1] : null;
+        const b = document.querySelector("#prot-list .prot-row .prot-logcall"); return b ? (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b).match(/protLogCall\('([^']+)'/) || [])[1] : null;
       });
       ok("C0 · the ranked call list is offering a case", !!pick, String(pick));
 
@@ -383,7 +383,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
 
       await setPromos(page, true);   // so the promo gate is not what refuses below
       const pick2 = await page.evaluate(() => {
-        const b = document.querySelector("#prot-list .prot-row .prot-logcall"); return b ? (b.getAttribute("onclick").match(/protLogCall\('([^']+)'/) || [])[1] : null;
+        const b = document.querySelector("#prot-list .prot-row .prot-logcall"); return b ? (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b).match(/protLogCall\('([^']+)'/) || [])[1] : null;
       });
       await page.evaluate((id) => {
         const row = window.__mock.db.cases.filter((c) => c.id === id)[0];
@@ -575,7 +575,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
     {
       const page = await boot(browser, "p2");
       await goPage(page, "pipeline", 2000);
-      await page.$eval("#board-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
+      await page.$eval("#board-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await page.waitForTimeout(1200);
       const keys = await page.evaluate(() => ({
         namespaced: localStorage.getItem("nx_board_adviser_p2"),
@@ -768,7 +768,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
 
       /* Every row on screen must actually be his — the repro was five strangers. */
       const owners = await page.evaluate(async () => {
-        const ids = [...document.querySelectorAll("#protection-list .row-item .t")].map((t) => (t.getAttribute("onclick") || "").match(/openCase\('([^']+)'\)/)).filter(Boolean).map((m) => m[1]);
+        const ids = [...document.querySelectorAll("#protection-list .row-item .t")].map((t) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t) || "").match(/openCase\('([^']+)'\)/)).filter(Boolean).map((m) => m[1]);
         if (!ids.length) return [];
         const { data } = await window.__mockDb.from("cases").select("id,assigned_to").in("id", ids);
         return [...new Set((data || []).map((c) => c.assigned_to))];
@@ -803,7 +803,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
          takes through the R78 choke point. */
       const planted = await page.evaluate(async () => {
         const ids = [...document.querySelectorAll("#prot-list .prot-row .row-head > .t")]   // R88 · C: the kit row's name
-          .map((el) => ((el.getAttribute("onclick") || "").match(/openClient\('([^']+)'\)/) || [])[1])
+          .map((el) => ((((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el) || "").match(/openClient\('([^']+)'\)/) || [])[1])
           .filter(Boolean);
         const uniq = [...new Set(ids)];
         if (uniq.length < 2) return null;
@@ -822,7 +822,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
          the table). */
       const table = await page.evaluate((p) => {
         const cell = (cid) => {
-          const link = [...document.querySelectorAll("#prot-list .prot-row .row-head > .t")].find((el) => (el.getAttribute("onclick") || "").includes(cid));
+          const link = [...document.querySelectorAll("#prot-list .prot-row .row-head > .t")].find((el) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el) || "").includes(cid));
           return link ? link.closest(".prot-row") : null;
         };
         const read = (cid) => {
@@ -907,7 +907,7 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
           label: el.textContent.replace(/\s+/g, " ").trim(),
           text: el.getAttribute("title") || "",
           n: el.getAttribute("data-ahead-n") || "",
-          go: (el.getAttribute("onclick") || "").includes("diary"),
+          go: (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el) || "").includes("diary"),
           inHeading: !!el.closest("#briefing-panel h3"),
         } : null;
       });

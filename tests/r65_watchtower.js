@@ -202,7 +202,7 @@ const wtGroups = (page) => page.$$eval("#watchtower-list .wt-group", (els) => el
   rows: [...g.querySelectorAll(".wt-row")].map((r) => ({
     title: (r.querySelector(".t") || {}).textContent || "",
     detail: (r.querySelector(".s") || {}).textContent || "",
-    openAttr: [...r.querySelectorAll("button")].map((b) => b.getAttribute("onclick") || "").filter((s) => /openCase\(/.test(s))[0] || "",
+    openAttr: [...r.querySelectorAll("button")].map((b) => ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || "").filter((s) => /openCase\(/.test(s))[0] || "",
     buttons: [...r.querySelectorAll("button")].map((b) => b.textContent.trim()),
   })),
 })));
@@ -469,7 +469,7 @@ const openWatchtower = async (page) => {
         eq("C2e · the row's detail is the alert's detail, unmangled (no ISO rewrite to do)", row.detail.trim(), target.detail);
         /* Clicked for real, off the rendered row, rather than calling openCase() by hand — the
            point of the assertion is that THIS BUTTON leads to THAT case. */
-        await c.click(`#watchtower-list .wt-row button[onclick*="openCase('${target.case_id}')"]`);
+        await c.click(`#watchtower-list .wt-row button[data-act="openCase"][data-args*='"${target.case_id}"']`);
         await wait(c, 1400);
         /* The CASE modal is `#modal` behind `#modal-backdrop` — `#overlay-modal` is the second,
            stacked layer (snooze prompts and the like) and is empty here. */

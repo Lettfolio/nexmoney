@@ -239,11 +239,11 @@ const PROT_RECOUNT = async (scope) => {
         return rows.map((r) => {
           const cb = r.querySelector(".ret-cb");
           const t = r.querySelector(".row-head > .t");
-          const m = /openClient\('([^']+)'\)/.exec(t.getAttribute("onclick") || "");
+          const m = /openClient\('([^']+)'\)/.exec(((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t) || "");
           return {
             caseId: cb && cb.dataset.id,
             clientOk: !!m && m[1] === owner[cb && cb.dataset.id],
-            caseChip: !!r.querySelector(`.row-chips .row-chip[onclick*="openCase('${cb && cb.dataset.id}')"]`),
+            caseChip: !!r.querySelector(`.row-chips .row-chip[data-act="openCase"][data-args*='"${cb && cb.dataset.id}"']`),
             chips: r.querySelectorAll(".row-chips > *").length,
             verbs: r.querySelectorAll(".row-acts > .btn").length,
             factLines: r.querySelectorAll(".row-fact").length,
@@ -306,7 +306,7 @@ const PROT_RECOUNT = async (scope) => {
       const chipN = await page.evaluate(() => Number(document.querySelector('#ret-segs .seg-btn[data-seg="cold"] .seg-count').textContent));
       await pressSeg(page, "ret-segs", "cold", 2400);
       const got = await page.evaluate(() => ({
-        ids: [...document.querySelectorAll("#ret-cold-list .kit-row .row-head > .t")].map((t) => (/openClient\('([^']+)'\)/.exec(t.getAttribute("onclick") || "") || [])[1]).sort(),
+        ids: [...document.querySelectorAll("#ret-cold-list .kit-row .row-head > .t")].map((t) => (/openClient\('([^']+)'\)/.exec(((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t) || "") || [])[1]).sort(),
         pressed: [...document.querySelectorAll("#ret-segs .seg-btn")].filter((x) => x.getAttribute("aria-pressed") === "true").map((x) => x.dataset.seg),
         rates: document.querySelectorAll("#ret-rates-list .ret-row").length,
         goto: !!document.querySelector("#ret-cold-goto"),
@@ -351,7 +351,7 @@ const PROT_RECOUNT = async (scope) => {
         await page.click(`#prot-scope-${sc}`);
         await page.waitForTimeout(900);
         const got = await page.evaluate(() => {
-          const ids = [...document.querySelectorAll("#prot-list .kit-row.prot-row .row-head > .t")].map((t) => (/openClient\('([^']+)'\)/.exec(t.getAttribute("onclick") || "") || [])[1] || t.textContent);
+          const ids = [...document.querySelectorAll("#prot-list .kit-row.prot-row .row-head > .t")].map((t) => (/openClient\('([^']+)'\)/.exec(((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t) || "") || [])[1] || t.textContent);
           const chips = Object.fromEntries([...document.querySelectorAll("#prot-segs .seg-btn")].map((b) => [b.dataset.seg, Number((b.querySelector(".seg-count") || {}).textContent)]));
           return {
             ids, dupes: ids.filter((x, i) => ids.indexOf(x) !== i),
@@ -386,8 +386,8 @@ const PROT_RECOUNT = async (scope) => {
 
       // Rows: name → client, case chip, docked bar
       const rows = await page.evaluate(() => [...document.querySelectorAll("#prot-list .kit-row")].map((r) => ({
-        name: /^openClient\(/.test(r.querySelector(".row-head > .t").getAttribute("onclick") || ""),
-        caseChip: !!r.querySelector(".row-chips .row-chip[onclick^=\"event.stopPropagation();openCase(\"]"),
+        name: /^openClient\(/.test(((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".row-head > .t")) || ""),
+        caseChip: !!r.querySelector(".row-chips .row-chip[data-stop][data-act=\"openCase\"]"),
         cases: r.querySelectorAll(".row-fact .prot-fact-case").length,
       })));
       ok("C5 · every Protection row's name opens the client; the top case is a chip; the fact line names its cases", rows.length > 0 && rows.every((r) => r.name && r.caseChip && r.cases >= 1), JSON.stringify(rows.slice(0, 3)));

@@ -262,7 +262,7 @@ async function milestoneGroundTruth(page) {
 }
 async function milestonePanelIds(page) {
   return page.$$eval("#dh-milestone-panel .row-item button", (els) =>
-    els.map((b) => { const m = (b.getAttribute("onclick") || "").match(/openCase\('([^']+)'\)/); return m ? m[1] : null; }).filter(Boolean));
+    els.map((b) => { const m = (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || "").match(/openCase\('([^']+)'\)/); return m ? m[1] : null; }).filter(Boolean));
 }
 
 /* §B ground truth — independently reimplemented from the RPC's own R45 doc comment (tracker/
@@ -307,7 +307,7 @@ async function rateEndRollupCount(page) {
 }
 function rateEndPanelIds(page) {
   return page.$$eval("#dh-rateend-panel .row-item button", (els) =>
-    els.map((b) => { const m = (b.getAttribute("onclick") || "").match(/openCase\('([^']+)'\)/); return m ? m[1] : null; }).filter(Boolean));
+    els.map((b) => { const m = (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || "").match(/openCase\('([^']+)'\)/); return m ? m[1] : null; }).filter(Boolean));
 }
 
 (async () => {

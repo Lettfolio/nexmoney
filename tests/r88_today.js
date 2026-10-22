@@ -110,11 +110,11 @@ const readList = (page) => page.evaluate(() => {
     radar: r.dataset.radar || null,
     cls: [...r.classList].filter((c) => /^(hot|warm|brief-wt-row|unactioned-row)$/.test(c)),
     verbs: own(r).map((b) => b.textContent.trim()),
-    onclicks: own(r).map((b) => b.getAttribute("onclick") || ""),
+    onclicks: own(r).map((b) => ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || ""),
     sides: [...r.querySelectorAll(":scope > .row-main > .brief-side")].map((s) => ({
       alert: s.dataset.alertId || null, sev: s.dataset.sev || null, radar: s.dataset.radar || null,
       verbs: [...s.querySelectorAll("button")].map((b) => b.textContent.trim()),
-      onclicks: [...s.querySelectorAll("button")].map((b) => b.getAttribute("onclick") || ""),
+      onclicks: [...s.querySelectorAll("button")].map((b) => ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || ""),
     })),
     band: (() => {   // the band heading this row sits under (walk back over siblings / out of a fold)
       let el = r.closest("details.brief-fold") || r;
@@ -224,8 +224,8 @@ const expectedRows = (src) => {
         crit.every((u) => u.onclicks.some((o) => /^snoozeAlert\(/.test(o)) && u.onclicks.some((o) => /^resolveAlert\(/.test(o)) && !u.onclicks.some((o) => /wtDoneAlert/.test(o))), JSON.stringify(crit.slice(0, 3)));
       ok("A18 · every non-critical alert carries ✓ Done and neither Snooze… nor Dismiss",
         nonCrit.every((u) => u.onclicks.some((o) => /^wtDoneAlert\(/.test(o)) && !u.onclicks.some((o) => /snoozeAlert|resolveAlert/.test(o))), JSON.stringify(nonCrit.slice(0, 3)));
-      const snoozeOutsideCrit = await page.evaluate(() => [...document.querySelectorAll("#briefing-list [onclick^='snoozeAlert('], #briefing-list [onclick^='resolveAlert(']")]
-        .filter((b) => !/,'crit',/.test(b.getAttribute("onclick"))).length);
+      const snoozeOutsideCrit = await page.evaluate(() => [...document.querySelectorAll("#briefing-list [data-act='snoozeAlert'], #briefing-list [data-act='resolveAlert']")]
+        .filter((b) => !/,'crit',/.test(((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b))).length);
       eq("A19 · …so no Snooze… / Dismiss on My Day belongs to a non-critical rule", snoozeOutsideCrit, 0);
       ok("A20 · a radar-only row carries Open and ONE verb, “Add next step” (no Done, no Snooze)",
         radarHeads.every((r) => r.verbs.length === 2 && r.verbs[0] === "Open" && r.verbs[1] === "Add next step"), JSON.stringify(radarHeads.slice(0, 2).map((r) => r.verbs)));
@@ -233,9 +233,9 @@ const expectedRows = (src) => {
       /* 02 #11 — one meaning per verb. */
       const verbs = await page.evaluate(() => {
         const rowOf = (b) => b.closest(".brief-row");
-        const appt = [...document.querySelectorAll("#briefing-list .brief-row .t[onclick^='openAppt(']")].map((t) => t.closest(".brief-row"));
-        const task = [...document.querySelectorAll("#briefing-list [onclick^='briefDone(']")].map(rowOf);
-        const openOf = (r) => { const b = [...r.children].find((x) => x.tagName === "BUTTON" && x.textContent.trim() === "Open"); return b ? b.getAttribute("onclick") : null; };
+        const appt = [...document.querySelectorAll("#briefing-list .brief-row .t[data-act='openAppt']")].map((t) => t.closest(".brief-row"));
+        const task = [...document.querySelectorAll("#briefing-list [data-act='briefDone']")].map(rowOf);
+        const openOf = (r) => { const b = [...r.children].find((x) => x.tagName === "BUTTON" && x.textContent.trim() === "Open"); return b ? ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) : null; };
         return {
           appt: appt.map((r) => ({ open: openOf(r), caseAttr: r.dataset.case || null })),
           task: task.slice(0, 5).map((r) => ({ open: openOf(r), caseAttr: r.dataset.case || null })),

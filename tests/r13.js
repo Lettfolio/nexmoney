@@ -1062,7 +1062,7 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       });
       ok("J2 · fixture sanity — at least one open alert exists to work", !!oneAlert);
       if (oneAlert) {
-        const snoozeBtnSel = `#watchtower-list button[onclick*="snoozeAlert('${oneAlert.id}'"]`;
+        const snoozeBtnSel = `#watchtower-list button[data-act="snoozeAlert"][data-args*='"${oneAlert.id}"']`;
         const hasBtn = await page.$(snoozeBtnSel);
         if (hasBtn) {
           await page.click(snoozeBtnSel);
@@ -1082,7 +1082,7 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
         return (data || [])[0] || null;
       });
       if (dismissTarget) {
-        const dismissSel = `#watchtower-list button[onclick*="resolveAlert('${dismissTarget.id}'"]`;
+        const dismissSel = `#watchtower-list button[data-act="resolveAlert"][data-args*='"${dismissTarget.id}"']`;
         const hasDismiss = await page.$(dismissSel);
         if (hasDismiss) {
           page.__dialogPlan = [{ type: "accept", text: "watchtower mirror — dismiss sanity check" }];

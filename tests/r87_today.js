@@ -341,7 +341,7 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       await goPage(p2, "pipeline", 600);
       await goPage(p2, "dashboard", 2200);
       const row = await p2.evaluate((id) => {
-        const done = document.querySelector(`[onclick="briefDone('${id}')"]`);
+        const done = document.querySelector(`[data-act="briefDone"][data-args='["${id}"]']`);
         const r = done && done.closest(".row-item");
         if (!r) return null;
         return { sms: r.querySelectorAll("a[href^='sms:']").length, tel: r.querySelectorAll("a[href^='tel:']").length, noTexts: r.querySelectorAll(".row-sms-optout").length, text: r.textContent.replace(/\s+/g, " ").slice(0, 80) };
@@ -414,7 +414,7 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       await goPage(page, "pipeline", 600);
       await goPage(page, "dashboard", 2200);
       const row = await page.evaluate((id) => {
-        const done = document.querySelector(`[onclick="briefDone('${id}')"]`);
+        const done = document.querySelector(`[data-act="briefDone"][data-args='["${id}"]']`);
         const r = done && done.closest(".row-item");
         if (!r) return null;
         const ctrls = [...r.querySelectorAll("button, a, input, select, summary")].filter((e) => e.checkVisibility());
@@ -440,7 +440,7 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       await page.waitForTimeout(700);
       const due = await page.evaluate((id) => window.__mockDb.from("case_tasks").select("due_date").eq("id", id).single().then((r) => r.data.due_date), tk.id);
       eq("F6 · “3 days” wrote today + 3 (weekend-rolled) — the same write the old +3d chip made", due, roll(addDays(today, 3)));
-      const gone = await page.evaluate((id) => !document.querySelector(`[onclick="briefDone('${id}')"]`), tk.id);
+      const gone = await page.evaluate((id) => !document.querySelector(`[data-act="briefDone"][data-args='["${id}"]']`), tk.id);
       ok("F7 · …and the row left My Day on the repaint (due date past today)", gone);
       /* The menu folds on an outside click. */
       const foldTest = await page.evaluate(async () => {
@@ -465,7 +465,7 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       await goPage(ph, "dashboard", 2200);
       const prow = await ph.evaluate((id) => {
         document.querySelectorAll("#briefing-list details.brief-fold").forEach((d) => { d.open = true; });
-        const done = document.querySelector(`[onclick="briefDone('${id}')"]`);
+        const done = document.querySelector(`[data-act="briefDone"][data-args='["${id}"]']`);
         const r = done && done.closest(".row-item");
         if (!r) return null;
         const s = r.querySelector("details.snooze-menu > summary");
@@ -482,10 +482,10 @@ const wordsOf = (t) => String(t || "").trim().split(/\s+/).filter(Boolean).lengt
       /* 01 #7 — ops chips about the same thing go to the same place. */
       const adm = await boot(browser, "p1");
       const chips = await adm.evaluate(() => ({
-        failed: document.getElementById("ops-emails-failed").getAttribute("onclick"),
-        held: document.getElementById("ops-emails-queued").getAttribute("onclick"),
-        sms: document.getElementById("ops-sms-queued").getAttribute("onclick"),
-        docs: document.getElementById("ops-docs-overdue").getAttribute("onclick"),
+        failed: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(document.getElementById("ops-emails-failed")),
+        held: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(document.getElementById("ops-emails-queued")),
+        sms: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(document.getElementById("ops-sms-queued")),
+        docs: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(document.getElementById("ops-docs-overdue")),
       }));
       ok("F11 · every mail chip opens EMAILS — “emails failed” no longer detours through Data health",
         /* R89 · A: was nav('emails'); the chips go by the tab's hash form nav('operations/emails') — the
