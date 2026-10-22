@@ -182,7 +182,7 @@ const openNewCase = async (page) => {
 /* One case row inside a client's drawer, as it renders — used for the §A1 chip checks. Matched by
    the "openCase('<id>')" onclick every row's title carries (see clientCaseRowHtml). */
 const caseRowChip = (page, caseId) => page.evaluate((id) => {
-  const t = [...document.querySelectorAll("#modal .row-item .t")].find((e) => (e.getAttribute("onclick") || "").includes(`openCase('${id}')`));
+  const t = [...document.querySelectorAll("#modal .row-item .t")].find((e) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(e) || "").includes(`penCase('${id}')`));   // R95 · B: openCase or closeModalOpenCase
   const row = t ? t.closest(".row-item") : null;
   const chip = row ? row.querySelector(".cl-prot-chip") : null;
   return chip ? { cls: chip.className, dataProt: chip.dataset.prot, text: chip.textContent.trim() } : null;

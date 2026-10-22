@@ -530,7 +530,7 @@ const sortedIds = (a) => a.slice().sort();
         const count = await page.$eval("#mi-drilldown .mi-drill-count", (e) => e.textContent.trim());
         const ids = await page.$$eval("#mi-drilldown table tr", (trs) => trs.slice(1).map((tr) => {
           const btn = tr.querySelector("button");
-          const m = /openCase\('([^']+)'\)/.exec((btn && btn.getAttribute("onclick")) || "");
+          const m = /openCase\('([^']+)'\)/.exec((btn && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn)) || "");
           return m ? m[1] : null;
         }));
         return { count, ids };
@@ -611,7 +611,7 @@ const sortedIds = (a) => a.slice().sort();
       const dipExpected = rows.filter((r) => r.stage === "decision_in_principle").map((r) => r.id);
       const eIds = await page.$$eval("#mi-drilldown table tr", (trs) => trs.slice(1).map((tr) => {
         const btn = tr.querySelector("button");
-        const m = /openCase\('([^']+)'\)/.exec((btn && btn.getAttribute("onclick")) || "");
+        const m = /openCase\('([^']+)'\)/.exec((btn && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn)) || "");
         return m ? m[1] : null;
       }));
       eq("E · the Enter-opened drill-down lists exactly the DIP cases", sortedIds(eIds), sortedIds(dipExpected));
@@ -633,7 +633,7 @@ const sortedIds = (a) => a.slice().sort();
       const offerCaseId = rows.find((r) => r.stage === "offer").id;
       const openBtnIds = await page.$$eval("#mi-drilldown table tr", (trs) => trs.slice(1).map((tr) => {
         const btn = tr.querySelector("button");
-        const m = /openCase\('([^']+)'\)/.exec((btn && btn.getAttribute("onclick")) || "");
+        const m = /openCase\('([^']+)'\)/.exec((btn && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn)) || "");
         return m ? m[1] : null;
       }));
       eq("F · the offer drill-down has exactly one row, for the one offer case", openBtnIds, [offerCaseId]);
@@ -696,7 +696,7 @@ const sortedIds = (a) => a.slice().sort();
       await wait(page, 500);
       const hIds = await page.$$eval("#mi-drilldown table tr", (trs) => trs.slice(1).map((tr) => {
         const btn = tr.querySelector("button");
-        const m = /openCase\('([^']+)'\)/.exec((btn && btn.getAttribute("onclick")) || "");
+        const m = /openCase\('([^']+)'\)/.exec((btn && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn)) || "");
         return m ? m[1] : null;
       }));
       eq("H · the drill-down has exactly the one seeded (evil-named) case", hIds, [evilId]);

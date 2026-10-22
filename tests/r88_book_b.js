@@ -243,8 +243,8 @@ const recount = (page, who) => page.evaluate(async (who) => {
 
     // name → the client, never the case; the single-live-case chip → that case.
     const pick = await page.evaluate(() => {
-      const r = [...document.querySelectorAll("#client-list .client-row")].find((x) => x.querySelector(".client-case-chip[onclick*=openCase]"));
-      return r ? { id: r.dataset.id, caseOnclick: r.querySelector(".client-case-chip").getAttribute("onclick") } : null;
+      const r = [...document.querySelectorAll("#client-list .client-row")].find((x) => x.querySelector(".client-case-chip[data-act=openCase]"));
+      return r ? { id: r.dataset.id, caseOnclick: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".client-case-chip")) } : null;
     });
     ok("C7 · fixture · a row with exactly one live case exists", !!pick, JSON.stringify(pick));
     await page.evaluate(() => {

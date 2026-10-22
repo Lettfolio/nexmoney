@@ -21,7 +21,7 @@
      §G  emptyState is the kit's only empty state; the kit block is fenced; no console errors.
      §H  R88 · E kit gaps — the `attrs` map (escaped data-* + hidden) on rowItemHtml and
          segmentChipsHtml; the `moreCls` hook on both More ▾ menus; the 44px name hit area on
-         .row-head > .t[onclick]; the row checkbox on the name's line (one kit rule, no page patch).
+         .row-head > .t[data-act]; the row checkbox on the name's line (one kit rule, no page patch).
 
    Run:  node /root/nx/tests/r88_kit.js
    ========================================================================== */
@@ -88,6 +88,7 @@ async function sandbox(page) {
       document.querySelector("main").appendChild(sb);
     }
     sb.innerHTML = "";
+    window.__kitSet = (v) => { window.__kitHit = v; };   // R95 · B: the fixture's verbs name this global (no inline handlers)
   });
 }
 
@@ -107,19 +108,19 @@ const FIXTURE = `({
   ] },
   selall: { id: "client-bulk-all", count: 12 },
   bar: { id: "client-bulk", count: 3, verbs: [
-    { id: "client-bulk-task", label: "＋ Add task…", onclick: "window.__kitHit='task'" },
-    { id: "client-bulk-csv", label: "⭳ Export CSV", onclick: "window.__kitHit='csv'" },
+    { id: "client-bulk-task", label: "＋ Add task…", act: ["__kitSet", "task"] },
+    { id: "client-bulk-csv", label: "⭳ Export CSV", act: ["__kitSet", "csv"] },
     { id: "v3", label: "Assign to…" },
     { id: "v4", label: "Queue rate-end reminders" },
     { id: "v5", label: "Send document request" },
-  ], more: [{ id: "v6", label: "Chase solicitors" }], clearId: "client-bulk-clear", onClear: "window.__kitHit='clear'" },
+  ], more: [{ id: "v6", label: "Chase solicitors" }], clearId: "client-bulk-clear", clearAct: ["__kitSet", "clear"] },
   row: { id: "c1", cb: { name: "client-cb", value: "c1", checked: true },
     name: { text: "Smith, Alice", clientId: "c1" },
-    chips: [{ label: "Offer", cls: "blue", onclick: "window.__kitHit='case'", title: "Open the case" }, { label: "2 cases" }, { label: "third chip must not render" }],
+    chips: [{ label: "Offer", cls: "blue", act: ["__kitSet", "case"], title: "Open the case" }, { label: "2 cases" }, { label: "third chip must not render" }],
     fact: "alice@example.com · rate ends 3 Mar 2027 · Halifax",
     contact: { phone: "07700 900123", first: "Alice", smsOptOut: false },
     verbs: [
-      { id: "r-log", label: "📞 Log call", onclick: "window.__kitHit='log'" },
+      { id: "r-log", label: "📞 Log call", act: ["__kitSet", "log"] },
       { id: "r-book", label: "Book review" },
       { id: "r-open", label: "Open" },
       { id: "r-renew", label: "Renewed elsewhere" },
@@ -250,7 +251,7 @@ const FIXTURE = `({
       ok("C4 · verbs 4+ AND the `more` list land inside ONE <details class=\"row-more\"> 'More ▾'", r.inMore.join() === "v4,v5,v6" && /More ▾/.test(r.moreSummary));
       ok("C5 · More ▾ verbs are hidden closed and shown once opened", r.hidden.every(Boolean) && r.shownAfter.every(Boolean));
       ok("C6 · Clear is the last control, on the caller's id (#client-bulk-clear), pinned to the right", r.clearIsLast && r.clearRight);
-      ok("C7 · verb onclick and onClear expressions run", r.hit1 === "task" && r.hit2 === "clear");
+      ok("C7 · verb act and clearAct run", r.hit1 === "task" && r.hit2 === "clear");
       const r2 = await desk.evaluate(() => {
         const sb = document.querySelector("#kit-sandbox");
         sb.innerHTML = selectAllHtml({ id: "x-all", count: 0 }) + bulkBarHtml({ id: "x-bulk", count: 0, verbs: [{ label: "One" }, { label: "Two" }] });
@@ -340,7 +341,7 @@ const FIXTURE = `({
         return {
           cls: row.className, dataId: row.dataset.id, isSel: row.classList.contains("is-sel"),
           cb: cb && { cls: cb.className, id: cb.dataset.id, checked: cb.checked, aria: cb.getAttribute("aria-label"), first: row.firstElementChild === cb },
-          tText: t.textContent.trim(), tOnclick: t.getAttribute("onclick"), opened,
+          tText: t.textContent.trim(), tOnclick: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t), opened,
           chips: chips.map((c) => ({ tag: c.tagName, text: c.textContent.trim(), cls: c.className })),
           factText: fact.textContent, factLines: Math.round(fact.getBoundingClientRect().height / 17),
           tel: !!fact.querySelector(".ret-row-tel a[href^='tel:']"), sms: !!fact.querySelector("a.row-sms-link[href^='sms:']"), smsBody: (fact.querySelector("a.row-sms-link") || { href: "" }).href,
@@ -354,12 +355,12 @@ const FIXTURE = `({
       ok("E1 · .row-item.kit-row with data-id, .is-sel when the checkbox is checked", /\brow-item\b/.test(r.cls) && /\bkit-row\b/.test(r.cls) && r.dataId === "c1" && r.isSel);
       ok("E2 · checkbox first: .bulk-cb + the caller's class family (client-cb), data-id, checked, aria-label names the row", r.cb && r.cb.first && /\bbulk-cb\b/.test(r.cb.cls) && /\bclient-cb\b/.test(r.cb.cls) && r.cb.id === "c1" && r.cb.checked && /Smith, Alice/.test(r.cb.aria));
       ok("E3 · the name is .row-main .t and opens the CLIENT (openClient(id)), never the case", r.tText === "Smith, Alice" && /^openClient\('c1'\)$/.test(r.tOnclick) && r.opened === "c1", r.tOnclick);
-      ok("E4 · at most 2 chips, .badge, after the name; a chip with onclick is a <button> (the case chip)", r.chips.length === 2 && r.chips[0].tag === "BUTTON" && /\bblue\b/.test(r.chips[0].cls) && r.chips[1].tag === "SPAN" && r.hitCase === "case", JSON.stringify(r.chips));
+      ok("E4 · at most 2 chips, .badge, after the name; a chip with an act is a <button> (the case chip)", r.chips.length === 2 && r.chips[0].tag === "BUTTON" && /\bblue\b/.test(r.chips[0].cls) && r.chips[1].tag === "SPAN" && r.hitCase === "case", JSON.stringify(r.chips));
       ok("E5 · ONE fact line (.row-main .s) carrying the caller's fact text", /alice@example.com · rate ends 3 Mar 2027 · Halifax/.test(r.factText) && r.factLines <= 1, String(r.factLines));
       ok("E6 · contact renders through phoneActionsHtml: tel: link + sms: deep link with the house body", r.tel && r.sms && /body=Hi%20Alice/.test(r.smsBody), r.smsBody.slice(0, 80));
       ok("E7 · sms opt-out honoured: 'no texts' instead of the 💬, the call stays", r.r2.optout && r.r2.noSms && r.r2.tel);
       ok("E8 · ≤3 verbs visible in .row-acts, in order, with ids; verbs 4–5 inside More ▾ (.row-more)", r.visible.join() === "r-log,r-book,r-open" && r.inMore.join() === "r-renew,r-sold" && /More ▾/.test(r.moreSummary));
-      ok("E9 · a verb's onclick runs and does not bubble into the row", r.hitLog === "log" && r.opened === "c1");
+      ok("E9 · a verb's act runs and does not bubble into the row", r.hitLog === "log" && r.opened === "c1");
       ok("E10 · `sub` html renders in .row-sub; text fields are escaped", /<em>sub line<\/em>/.test(r.sub) && r.esc);
       ok(`E11 · desktop row height is the Clients row height (${Math.round(r.h)}px, 55–66); a row with \`sub\` grows by one line`, r.h >= 55 && r.h <= 66 && r.hSub > r.h && r.hSub < r.h + 40, JSON.stringify([r.h, r.hSub]));
       ok("E12 · no checkbox / no More when not asked; 1 verb → 1 button", r.r2.noCb && r.r2.noMore && r.r2.verbs === 1);
@@ -377,7 +378,7 @@ const FIXTURE = `({
       ok("G3 · the kit defines no empty state of its own (emptyState stays the one, outside the fence)", !/empty-state|class="empty"/.test(block) && /function emptyState\(/.test(kitSrc.slice(end)));
       ok("G4 · the kit knows no page: no page loader, no page id, no global selection set inside the fence", !/loadClients|loadRetention|loadProtection|renderPipeline|clientSel|pipeSel|protBulkSel|#page-/.test(block));
       ok("G5 · admin.css has ONE `R88 list kit` heading holding .list-tools / .seg-strip / .bulk-dock / .row-more, and the old R87 .row-more rules are gone", cssSrc.split("R88 list kit").length >= 2 && (() => { const i = cssSrc.indexOf("R88 list kit"); const tail = cssSrc.slice(i); return [".list-tools {", ".seg-strip {", ".bulk-dock {", ".row-more {"].every((s) => tail.includes(s)) && cssSrc.slice(0, i).indexOf(".row-more {") === -1; })());
-      const r = await desk.evaluate(() => { const sb = document.querySelector("#kit-sandbox"); sb.innerHTML = emptyState({ headline: "No clients match", sub: "Try All.", action: { label: "Clear", onclick: "window.__kitHit='es'" } }); const b = sb.querySelector(".empty-state .btn"); window.__kitHit = null; b.click(); return { h: sb.querySelector(".empty-state-h").textContent, hit: window.__kitHit }; });
+      const r = await desk.evaluate(() => { const sb = document.querySelector("#kit-sandbox"); sb.innerHTML = emptyState({ headline: "No clients match", sub: "Try All.", action: { label: "Clear", act: ["__kitSet", "es"] } }); const b = sb.querySelector(".empty-state .btn"); window.__kitHit = null; b.click(); return { h: sb.querySelector(".empty-state-h").textContent, hit: window.__kitHit }; });
       ok("G6 · emptyState() renders the house shape a kit consumer uses", r.h === "No clients match" && r.hit === "es");
       ok("G7 · desktop: no console / page errors", realErrs(desk).length === 0, realErrs(desk).join(" | "));
     }
@@ -394,7 +395,7 @@ const FIXTURE = `({
         sb.innerHTML = `<div class="panel" id="kit-rows">`
           + rowItemHtml({ ...F.row, moreCls: "hk-row-more", attrs: { client: "c1", monthKey: "3m", n: 0, skip: null, off: false, hidden: false, evil: 'a"><b x="1' } })
           + rowItemHtml({ id: "c9", name: { text: "Hidden, Row", clientId: "c9" }, fact: "x", attrs: { hidden: true } })
-          + rowItemHtml({ ...F.rowOptOut, more: [{ label: "Archive" }], moreCls: 'x" onclick="window.__kitHit=1' })
+          + rowItemHtml({ ...F.rowOptOut, more: [{ label: "Archive" }], moreCls: 'x" data-act="__kitSet' })
           + `</div>`
           + segmentChipsHtml({ id: "hk-segs", chips: [
             { key: "12", label: "12 mo", attrs: { month: "12", hidden: true } },
@@ -413,7 +414,7 @@ const FIXTURE = `({
           chip1: { outcome: chips[1].dataset.outcome, n: chips[1].dataset.n, seg: chips[1].dataset.seg, pressed: chips[1].getAttribute("aria-pressed") },
           chip2: { anyData: [...chips[2].attributes].map((a) => a.name).filter((n) => n.startsWith("data-") && n !== "data-seg"), hidden: chips[2].hidden },
           rowMore: row.querySelector(".row-acts details.row-more").className,
-          row2More: row2.querySelector("details.row-more").className, row2Onclick: row2.querySelector("details.row-more").getAttribute("onclick"),
+          row2More: row2.querySelector("details.row-more").className, row2Stop: row2.querySelector("details.row-more").hasAttribute("data-stop"), row2Act: row2.querySelector("details.row-more").getAttribute("data-act"),
           barMore: sb.querySelector("#client-bulk details.row-more").className,
           bar2More: sb.querySelector("#hk-bar2 details.row-more").className,
           cbTop: Math.round(cb.top), mainTop: Math.round(main.top),
@@ -429,12 +430,12 @@ const FIXTURE = `({
       ok("H6 · a chip with no attrs carries no extra data-* and is not hidden", r.chip2.anyData.length === 0 && !r.chip2.hidden, JSON.stringify(r.chip2));
       ok("H7 · rowItemHtml moreCls adds a class hook to its More ▾ <details>", r.rowMore === "row-more hk-row-more", r.rowMore);
       ok("H8 · bulkBarHtml moreCls adds a class hook to the bar's More ▾; without it the class is just row-more", r.barMore === "row-more hk-bar-more" && r.bar2More === "row-more", [r.barMore, r.bar2More].join(" | "));
-      ok("H9 · moreCls is escaped (a quote cannot open an onclick)", /^row-more x" onclick="window.__kitHit=1$/.test(r.row2More) && r.row2Onclick === "event.stopPropagation()", JSON.stringify([r.row2More, r.row2Onclick]));
+      ok("H9 · moreCls is escaped (a quote cannot open an attribute); the More ▾ is a data-stop barrier with no act of its own", /^row-more x" data-act="__kitSet$/.test(r.row2More) && r.row2Stop && r.row2Act === null, JSON.stringify([r.row2More, r.row2Stop, r.row2Act]));
       ok("H10 · desktop: the row checkbox sits on the name's line (its top is the row-main's top), as on Clients", Math.abs(r.cbTop - r.mainTop) <= 2, JSON.stringify([r.cbTop, r.mainTop]));
       ok("H11 · desktop: the name carries no hit-area padding (the 44px rule is phone / coarse only)", r.tPad === "0px", r.tPad);
       const media = (cssSrc.match(/^@media \(max-width: 760px\), \(pointer: coarse\) \{[\s\S]*?\n\}/m) || [""])[0];
-      ok("H12 · admin.css: the tap-target block gives `.row-head > .t[onclick]` the 44px hit area and keeps the checkbox on the name line — kit rules, no #client-list patch left",
-        /main \.row-head > \.t\[onclick\]/.test(media) && /\.kit-row > \.bulk-cb \+ \.row-main \{ flex-basis: calc\(100% - 44px\)/.test(media) && !/#client-list \.kit-row/.test(cssSrc) && /\.row-item\.kit-row > \.bulk-cb \{ align-self: flex-start/.test(cssSrc));
+      ok("H12 · admin.css: the tap-target block gives `.row-head > .t[data-act]` the 44px hit area and keeps the checkbox on the name line — kit rules, no #client-list patch left",
+        /main \.row-head > \.t\[data-act\]/.test(media) && /\.kit-row > \.bulk-cb \+ \.row-main \{ flex-basis: calc\(100% - 44px\)/.test(media) && !/#client-list \.kit-row/.test(cssSrc) && /\.row-item\.kit-row > \.bulk-cb \{ align-self: flex-start/.test(cssSrc));
       const block = kitSrc.slice(kitSrc.indexOf("/* ===== R88 LIST KIT ====="), kitSrc.indexOf("/* ===== END R88 LIST KIT ===== */"));
       ok("H13 · the attrs helper and the moreCls hook live inside the kit fence", /function kitDataAttrs\(/.test(block) && /moreCls/.test(block));
       ok("H14 · no consumer re-stamps kit markup after render (no dataset.client = / dataset.month = / dataset.outcome = writes)", !/\.dataset\.(client|month|outcome)\s*=[^=]/.test(kitSrc));

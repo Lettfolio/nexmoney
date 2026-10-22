@@ -201,7 +201,7 @@ const skipEntry = async (page) => {
     const box = document.querySelector("#overlay-modal");
     box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
     box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
-    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change", { bubbles: true })); });
   });
   await page.click("#se-ok");
 };
@@ -909,7 +909,7 @@ const columnCells = (page, key) => page.evaluate((k) => {
           bands: document.querySelectorAll("#page-protection tr.prot-band").length,
           rows: t.querySelectorAll(".prot-row").length,
           contract: [...t.querySelectorAll(".prot-row")]
-            .every((r) => r.querySelector(".row-acts .prot-logcall") && r.querySelector(".row-more-body button[onclick*='openCase']")),
+            .every((r) => r.querySelector(".row-acts .prot-logcall") && r.querySelector(".row-more-body button[data-act='openCase']")),
         };
       });
       ok("E14 · the Protection list still lays out (R80: rank order, NO band rows)", bands && bands.bands === 0 && bands.rows > 0 && bands.contract, JSON.stringify(bands));

@@ -184,7 +184,7 @@ const advisingPool = (page) => page.evaluate(async () => {
       const oneLead = await page.evaluate(() => ({
         bar: !!document.querySelector("#leads-accept-all"),
         hidden: (document.querySelector("#leads-accept-bar") || {}).className || "",
-        rows: document.querySelectorAll('#briefing-list [onclick^="acceptLead("]').length,
+        rows: document.querySelectorAll('#briefing-list [data-act="acceptLead"]').length,
       }));
       eq("A1a · one new enquiry on My Day", oneLead.rows, 1);
       ok("A1b · …and NO accept-all button (accept-all of one lead is just Accept)", !oneLead.bar, JSON.stringify(oneLead));
@@ -214,7 +214,7 @@ const advisingPool = (page) => page.evaluate(async () => {
              title (one hover / long-press away) rather than a standing paragraph under it. */
           sub: (document.querySelector("#leads-accept-bar-sub") || {}).textContent || (document.querySelector("#leads-accept-all") || {}).title || "",
           insideList: !!document.querySelector("#briefing-list #leads-accept-all"),
-          rows: document.querySelectorAll('#briefing-list [onclick^="acceptLead("]').length,
+          rows: document.querySelectorAll('#briefing-list [data-act="acceptLead"]').length,
         };
       });
       eq("A2a · six enquiries now on My Day", barState.rows, 6);
@@ -328,7 +328,7 @@ const advisingPool = (page) => page.evaluate(async () => {
       const byLead = Object.fromEntries(chips.map((c) => [c.lead, c.text]));
       eq("A8b · the joint enquiry says so", byLead[ids.joint], "joint name — accept by hand");
       eq("A8c · the email we already hold says so", byLead[ids.dupe], "possible existing client — accept by hand");
-      const stillAccept = await page.evaluate((i) => !!document.querySelector(`#briefing-list .brief-lead-actions [onclick^="acceptLead('${i}'"]`), ids.joint);
+      const stillAccept = await page.evaluate((i) => !!document.querySelector(`#briefing-list .brief-lead-actions [data-act="acceptLead"][data-args^='["${i}"']`), ids.joint);
       ok("A8d · a refused enquiry keeps its own Accept button — nothing is taken away", stillAccept);
 
       console.log("\n— §A5 · the single accept still asks the joint question (now the R76 overlay), then writes");

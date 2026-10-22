@@ -143,9 +143,9 @@ async function mkCase(page, opts) {
 }
 
 /* The three rate-book surfaces, read as they render. */
-const kpiRateNum = (page) => page.$eval(`.kpi[onclick="kpiGoto('rates')"] .num`, (e) => Number(e.textContent.replace(/[^\d-]/g, "")));
-const kpiErcNum = (page) => page.$eval(`.kpi[onclick="kpiGoto('erc')"] .num`, (e) => Number(e.textContent.replace(/[^\d-]/g, "")));
-const kpiRateLbl = (page) => page.$eval(`.kpi[onclick="kpiGoto('rates')"] .lbl`, (e) => e.textContent.replace(/\s+/g, " ").trim());
+const kpiRateNum = (page) => page.$eval(`.kpi[data-act="kpiGoto"][data-args='["rates"]'] .num`, (e) => Number(e.textContent.replace(/[^\d-]/g, "")));
+const kpiErcNum = (page) => page.$eval(`.kpi[data-act="kpiGoto"][data-args='["erc"]'] .num`, (e) => Number(e.textContent.replace(/[^\d-]/g, "")));
+const kpiRateLbl = (page) => page.$eval(`.kpi[data-act="kpiGoto"][data-args='["rates"]'] .lbl`, (e) => e.textContent.replace(/\s+/g, " ").trim());
 const drawerBadge = (page) => txt(page, "#rate-erc-panel h3");
 const retH3 = (page) => txt(page, "#ret-rates-h3");
 const retGroups = (page) => page.$$eval("#ret-rates-list .ret-group-h", (els) => els.map((e) => ({
@@ -235,8 +235,8 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       ok("§A2g · the chip is labelled for what it HOLDS, ERC conflicts included",
         /6 months \+ ERC conflicts/.test(chip.label), chip.label);
 
-      const rowIds = await page.$$eval("#ret-rates-list [onclick*=\"openCase\"]", (els) =>
-        els.map((e) => (e.getAttribute("onclick").match(/openCase\('([^']+)'/) || [])[1]).filter(Boolean));
+      const rowIds = await page.$$eval("#ret-rates-list [data-act=\"openCase\"]", (els) =>
+        els.map((e) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(e).match(/openCase\('([^']+)'/) || [])[1]).filter(Boolean));
       ok("§A2h · the seeded ended row is on the page", rowIds.includes(ended.caseId), ended.caseId);
       ok("§A2i · the seeded ending row is on the page", rowIds.includes(ending.caseId), ending.caseId);
       ok("§A2j · the seeded ERC-only row is on the page…", rowIds.includes(ercOnly.caseId), ercOnly.caseId);
@@ -250,8 +250,8 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
         const out = [];
         let n = h.nextElementSibling;
         while (n && !n.classList.contains("ret-group-h")) {
-          n.querySelectorAll("[onclick*='openCase']").forEach((b) => {
-            const m = (b.getAttribute("onclick") || "").match(/openCase\('([^']+)'/);
+          n.querySelectorAll("[data-act='openCase']").forEach((b) => {
+            const m = (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(b) || "").match(/openCase\('([^']+)'/);
             if (m) out.push(m[1]);
           });
           n = n.nextElementSibling;

@@ -24,7 +24,7 @@
        unchanged); mixed → "1 other live case · 2 previous on this property".
 
    §D  R60 CONTRACT INTACT — .cl-mini rows are still .row-item with
-       .row-main > .t[onclick] and a .cl-prot-chip.
+       .row-main > .t[data-act] and a .cl-prot-chip.
 
    §E  No console/page errors for p2, p3, p4.
 
@@ -376,7 +376,7 @@ async function search(page, term) {
         minis: minis.length,
         contract: minis.length > 0 && minis.every((m) =>
           m.classList.contains("row-item") && !!m.querySelector(".row-main > .t") &&
-          !!(m.querySelector(".row-main > .t") || {}).getAttribute && !!m.querySelector(".row-main > .t").getAttribute("onclick") &&
+          !!(m.querySelector(".row-main > .t") || {}).getAttribute && !!((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(m.querySelector(".row-main > .t")) &&
           !!m.querySelector(".cl-prot-chip")),
       };
     });
@@ -399,7 +399,7 @@ async function search(page, term) {
      §D · the R60 mini-row DOM contract is untouched
      ===================================================================== */
   console.log("\n— §D · the R60 fold row contract");
-  ok("D1 · .cl-mini rows are .row-item with .row-main > .t[onclick] and a .cl-prot-chip (live fold)",
+  ok("D1 · .cl-mini rows are .row-item with .row-main > .t[data-act] and a .cl-prot-chip (live fold)",
     cLive.contract, JSON.stringify(cLive));
   ok("D2 · …and in the all-previous fold", cPrev.contract, JSON.stringify(cPrev));
   ok("D3 · …and in the mixed fold", cMixed.contract, JSON.stringify(cMixed));

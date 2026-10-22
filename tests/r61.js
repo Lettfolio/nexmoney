@@ -198,7 +198,7 @@ async function boot(browser, persona) {
     const orderOk = domIds.length > 0 && domIds.every((id, i) => id === firstSeen[i]);
     const scoreDesc = (rpc || []).every((r, i, a) => i === 0 || Number(a[i - 1].score) >= Number(r.score));
     const contract = [...t.querySelectorAll(".prot-row")]
-      .every((r) => r.querySelector(".row-acts .prot-logcall") && r.querySelector(".row-more-body button[onclick*='openCase']"));
+      .every((r) => r.querySelector(".row-acts .prot-logcall") && r.querySelector(".row-more-body button[data-act='openCase']"));
     return { bands, orderOk, scoreDesc, rows: domIds.length, contract };
   });
   ok("D1 · R80: NO band header rows render any more (R88: nor the two band panels)", d && d.bands === 0, JSON.stringify(d && d.bands));

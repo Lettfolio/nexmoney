@@ -103,7 +103,7 @@ async function mkCase(page, o) {
 const cardSelect = (page, id, to) => page.evaluate(({ id, to }) => {
   const s = document.querySelector(`#board .card[data-id="${id}"] .card-stage-move`);
   if (!s) return false;
-  s.value = to; s.dispatchEvent(new Event("change")); return true;
+  s.value = to; s.dispatchEvent(new Event("change", { bubbles: true })); return true;
 }, { id, to });
 
 (async () => {

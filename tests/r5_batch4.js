@@ -106,11 +106,11 @@ const openDrawer = async (page, panelId) => {
       ok("fixture · a CRITICAL alert tied to a case exists among the production ten rules", !!fixture.critId, JSON.stringify(fixture));
       ok("fixture · one alert already arrives pre-snoozed (protection_quote_stale, per seedSnooze)", !!fixture.preSnoozedId, JSON.stringify(fixture));
 
-      ok("R5-22 · the pre-snoozed alert is hidden from the working list", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.preSnoozedId));
+      ok("R5-22 · the pre-snoozed alert is hidden from the working list", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`data-act="snoozeAlert" data-args="[&quot;${id}&quot;`), fixture.preSnoozedId));
       eq("R5-22 · the 'N snoozed' toggle starts at 1", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "1 snoozed");
 
       // Snooze the CRITICAL alert (whichever real rule produced it) until +7d with a reason.
-      const snoozeBtnSel = `#watchtower-list button[onclick*="snoozeAlert('${fixture.critId}'"]`;
+      const snoozeBtnSel = `#watchtower-list button[data-act="snoozeAlert"][data-args*='"${fixture.critId}"']`;
       ok("R5-22 · the row offers a Snooze… action beside Dismiss", await page.evaluate((s) => !!document.querySelector(s), snoozeBtnSel));
       await page.click(snoozeBtnSel);
       await page.waitForTimeout(300);
@@ -140,7 +140,7 @@ const openDrawer = async (page, panelId) => {
          already flags, so that case is legitimately still on the list under the OTHER rule after
          one of its two alerts is snoozed. The row's own Snooze… handler carries the alert id, so
          that is what is looked for now — a tighter test of exactly the same behaviour. */
-      ok("R5-22 · the alert is gone from the working list", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.critId));
+      ok("R5-22 · the alert is gone from the working list", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`data-act="snoozeAlert" data-args="[&quot;${id}&quot;`), fixture.critId));
       eq("R5-22 · the 'N snoozed' toggle now reads 2", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "2 snoozed");
 
       const row = await page.evaluate(async (id) => {
@@ -160,7 +160,7 @@ const openDrawer = async (page, panelId) => {
       await page.evaluate(() => { const d = document.querySelector("#brief-more"); if (d) d.open = true; });   /* R87 · today (A6): the control lives in My Day's ⋯ menu */
       await page.click("#watchtower-run");
       await page.waitForTimeout(500);
-      ok("R5-22 · still gone after Run checks (survives run_watchtower's upsert)", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.critId));  /* R65 — by alert id, see above */
+      ok("R5-22 · still gone after Run checks (survives run_watchtower's upsert)", await page.evaluate((id) => !document.querySelector("#watchtower-list").innerHTML.includes(`data-act="snoozeAlert" data-args="[&quot;${id}&quot;`), fixture.critId));  /* R65 — by alert id, see above */
       const rowAfterRun = await page.evaluate(async (id) => {
         const { data } = await window.__mockDb.from("watch_alerts").select("snoozed_until,snooze_note").eq("id", id).single();
         return data;
@@ -171,7 +171,7 @@ const openDrawer = async (page, panelId) => {
       await page.evaluate((id) => window.__mock.expireSnooze(id), fixture.critId);
       await page.evaluate(() => window.loadWatchtower());
       await page.waitForTimeout(300);
-      ok("R5-22 · reappears once snoozed_until is in the past", await page.evaluate((id) => document.querySelector("#watchtower-list").innerHTML.includes(`snoozeAlert('${id}'`), fixture.critId));  /* R65 — by alert id, see above */
+      ok("R5-22 · reappears once snoozed_until is in the past", await page.evaluate((id) => document.querySelector("#watchtower-list").innerHTML.includes(`data-act="snoozeAlert" data-args="[&quot;${id}&quot;`), fixture.critId));  /* R65 — by alert id, see above */
       eq("R5-22 · the 'N snoozed' toggle drops back to 1", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "1 snoozed");
 
       // Unsnooze from the header list.
@@ -180,7 +180,7 @@ const openDrawer = async (page, panelId) => {
         return (data.find((a) => a.severity !== "crit" && !a.snoozed_until) || {}).id;
       });
       ok("fixture · a non-CRITICAL alert exists to snooze for the Unsnooze check", !!warnAlert);
-      await page.click(`#watchtower-list button[onclick*="snoozeAlert('${warnAlert}'"]`);
+      await page.click(`#watchtower-list button[data-act="snoozeAlert"][data-args*='"${warnAlert}"']`);
       await page.waitForTimeout(300);
       await page.click("#overlay-modal .snooze-chip[data-months='1']");
       await page.fill("#snooze-reason", "waiting on the client to come back from holiday");
@@ -204,7 +204,7 @@ const openDrawer = async (page, panelId) => {
         const html = document.querySelector("#watchtower-snoozed").innerHTML;
         return /waiting on the client to come back from holiday/.test(html) && />Unsnooze<\/button>/.test(html);
       }));
-      await page.click("#watchtower-snoozed button[onclick*=\"unsnoozeAlert\"]");
+      await page.click("#watchtower-snoozed button[data-act=\"unsnoozeAlert\"]");
       await page.waitForTimeout(400);
       eq("R5-22 · Unsnooze puts it straight back on the working list (toggle back to 1)", await page.evaluate(() => document.querySelector("#watchtower-snoozed-toggle").textContent.trim()), "1 snoozed");
 
@@ -276,7 +276,7 @@ const openDrawer = async (page, panelId) => {
       eq("R5-39 · but withheld from a non-staff role (introducer)", visibleToIntroducer.length, 0);
 
       // Undo — Owner/Admin only. p1 (admin) can.
-      await page.click('a[onclick="toggleDismissedDupsPanel()"]');
+      await page.click('a[data-act="toggleDismissedDupsPanel"]');
       await page.waitForTimeout(200);
       ok("R5-39 · the dismissed-pairs list shows who dismissed it and why", await page.evaluate(() => /not the same person/.test(document.querySelector("#dh-dismissed-list").textContent) && /Kim Martin/.test(document.querySelector("#dh-dismissed-list").textContent)));
       await page.click("#dh-dismissed-list button");

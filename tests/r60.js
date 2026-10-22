@@ -78,7 +78,7 @@ async function ensureServer() {
   await page.waitForTimeout(1000);
   const a = await page.evaluate((fx2) => {
     const cards = [...document.querySelectorAll("#modal .row-item.cl-card")].filter((e) => !e.classList.contains("cl-gap-card"));
-    const headOnclick = cards[0]?.querySelector(".t")?.getAttribute("onclick") || "";
+    const headOnclick = ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(cards[0]?.querySelector(".t")) || "";
     const fold = document.querySelector("#modal .cprop-prev");
     const minis = [...document.querySelectorAll("#modal .cl-mini")];
     return {
@@ -86,7 +86,7 @@ async function ensureServer() {
       headIsLive: headOnclick.includes(fx2.liveId),
       summary: fold ? fold.querySelector("summary").textContent : "",
       miniCount: minis.length,
-      miniOrder: minis.map((m) => (m.querySelector(".t")?.getAttribute("onclick") || "").match(/openCase\('([^']+)'\)/)?.[1]),
+      miniOrder: minis.map((m) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(m.querySelector(".t")) || "").match(/[oO]penCase\('([^']+)'\)/)?.[1]),
       openByDefault: fold ? fold.open : null,
       miniContract: minis.length > 0 && minis.every((m) => m.classList.contains("row-item") && m.querySelector(".row-main .t") && m.querySelector(".cl-prot-chip")),
     };
@@ -111,7 +111,7 @@ async function ensureServer() {
     await new Promise((r) => setTimeout(r, 900));
     const card = [...document.querySelectorAll("#modal .row-item.cl-card")].find((e) => !e.classList.contains("cl-gap-card"));
     return {
-      headOnclick: card?.querySelector(".t")?.getAttribute("onclick") || "",
+      headOnclick: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(card?.querySelector(".t")) || "",
       badge: (card?.querySelector(".cl-badge-watch")?.textContent || "").trim(),
     };
   }, fx);
@@ -129,7 +129,7 @@ async function ensureServer() {
     await new Promise((r) => setTimeout(r, 900));
     const card = [...document.querySelectorAll("#modal .row-item.cl-card")].find((e) => !e.classList.contains("cl-gap-card"));
     return {
-      headOnclick: card?.querySelector(".t")?.getAttribute("onclick") || "",
+      headOnclick: ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(card?.querySelector(".t")) || "",
       soldClass: card?.classList.contains("cl-card-sold") || false,
       badge: (card?.querySelector(".cl-badge-sold")?.textContent || "").trim(),
     };
@@ -146,7 +146,7 @@ async function ensureServer() {
   await page.click("#modal .cprop-prev summary");
   await page.waitForTimeout(200);
   await page.evaluate((id) => {
-    const t = [...document.querySelectorAll("#modal .cl-mini .t")].find((e) => (e.getAttribute("onclick") || "").includes(id));
+    const t = [...document.querySelectorAll("#modal .cl-mini .t")].find((e) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(e) || "").includes(id));
     t.click();
   }, fx.doneId);
   await page.waitForTimeout(1000);

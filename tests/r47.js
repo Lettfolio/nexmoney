@@ -239,13 +239,13 @@ async function rateErcFeedDirect(page, opts) {
 async function rowIds(page, containerSel) {
   return page.evaluate((sel) => {
     // R88 · C: on the Retention page the name opens the client and the case is the chip (.ret-case-chip).
-    return [...document.querySelectorAll(sel + " .row-item .t[onclick], " + sel + " .row-item .ret-case-chip[onclick]")].map((el) => {
-      const m = el.getAttribute("onclick").match(/openCase\('([^']+)'\)/);
+    return [...document.querySelectorAll(sel + " .row-item .t[data-act], " + sel + " .row-item .ret-case-chip[data-act]")].map((el) => {
+      const m = ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(el).match(/openCase\('([^']+)'\)/);
       return m ? m[1] : null;
     }).filter(Boolean);
   }, containerSel);
 }
-const kpiNum = (page, which) => page.$eval(`.kpi[onclick="kpiGoto('${which}')"] .num`, (e) => Number(e.textContent.replace(/[^\d.-]/g, "")));
+const kpiNum = (page, which) => page.$eval(`.kpi[data-act="kpiGoto"][data-args='["${which}"]'] .num`, (e) => Number(e.textContent.replace(/[^\d.-]/g, "")));
 
 (async () => {
   let server = null;

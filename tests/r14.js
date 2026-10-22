@@ -791,7 +791,7 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       ok("J8 · the missing-DOB row shows the em dash", dobRow2 && dobRow2.val.indexOf("—") === 0, JSON.stringify(dobRow2));
       ok('J8 · the missing-DOB row offers the "(add DOB)" affordance', dobRow2 && dobRow2.hasAddDob);
       ok("J8 · the missing-DOB row has no copy control (there's nothing to copy)", dobRow2 && !dobRow2.hasCopy);
-      const addDobHref = await page.$eval("#case-sec-card .sec-dob-add", (e) => e.getAttribute("onclick"));
+      const addDobHref = await page.$eval("#case-sec-card .sec-dob-add", (e) => ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(e));
       ok("J9 · the (add DOB) link targets THIS case's client id", addDobHref && addDobHref.indexOf(found.withoutDob.client.id) !== -1, addDobHref);
 
       ok("J10 · no console errors", !page.__err, JSON.stringify(page.__err));

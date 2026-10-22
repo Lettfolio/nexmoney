@@ -165,7 +165,7 @@ function readGroup(page, caseId) {
   return page.evaluate((cid) => {
     const list = document.querySelector("#briefing-list");
     const primaries = [...list.querySelectorAll(".brief-row:not(.brief-subrow)")];
-    const mine = primaries.filter((r) => r.innerHTML.includes(`'${cid}'`));
+    const mine = primaries.filter((r) => r.innerHTML.includes(`&quot;${cid}&quot;`));
     const bandOf = (el) => {
       let node = el;
       while (node && node.parentElement !== list) node = node.parentElement;
@@ -193,7 +193,7 @@ function readGroup(page, caseId) {
       subBadges: subs.map((s) => [...s.querySelectorAll(".badge")].map((b) => b.textContent.trim()).join("|")),
       subActionHtml: subs.map((s) => s.innerHTML),
       // Is any part of the case anywhere else in the list? (rows only ever move up, never twice)
-      mentions: primaries.filter((r) => r.innerHTML.includes(`'${cid}'`)).length,
+      mentions: primaries.filter((r) => r.innerHTML.includes(`&quot;${cid}&quot;`)).length,
     };
   }, caseId);
 }
@@ -244,21 +244,21 @@ function readGroup(page, caseId) {
        the same snooze cluster + ✓ Done a top-level task row has, and the started appointment has
        its ✓/✗ outcome pair — the exact buttons briefActions/apptQuickOutcomeHtml build. */
     const html = g.subActionHtml.join(" ");
-    ok("A1 · the folded task keeps its ✓ Done", html.includes(`briefDone('${fx.taskToday}')`), html.slice(0, 300));
+    ok("A1 · the folded task keeps its ✓ Done", html.includes(`data-act="briefDone" data-args="[&quot;${fx.taskToday}&quot;]"`), html.slice(0, 300));
     ok("A1 · …and its snooze cluster", html.includes(`snooze-1d-brief-${fx.taskToday}`) && html.includes(`snooze-1wk-brief-${fx.taskToday}`));
-    ok("A1 · the folded appointment keeps its ✓/✗ outcome pair", html.includes(`quickApptOutcome('${fx.apptId}','attended'`) && html.includes(`quickApptOutcome('${fx.apptId}','no_show'`));
+    ok("A1 · the folded appointment keeps its ✓/✗ outcome pair", html.includes(`data-act="quickApptOutcome" data-args="[&quot;${fx.apptId}&quot;,&quot;attended&quot;`) && html.includes(`data-act="quickApptOutcome" data-args="[&quot;${fx.apptId}&quot;,&quot;no_show&quot;`));
     eq("A1 · the case appears in exactly ONE place in the list", g.mentions, 1);
     eq("A1 · …in the band of its highest-priority item (Urgent — rows only ever move up)", g.band, "brief-sec-hot");
 
     /* …and the buttons are not merely IN the markup: open the fold with a real click on its
        summary and press one. (R61's band fold is opened first, exactly as tests/r17.js does, so
        the click can land — a long Urgent band folds past ten rows and this case is in it.) */
-    const doneSel = `#briefing-list [onclick^="briefDone('${fx.taskToday}')"]`;
+    const doneSel = `#briefing-list [data-act="briefDone"][data-args^='["${fx.taskToday}"']`;
     ok("A1 · while the fold is closed the folded ✓ Done is not clickable", (await page.locator(doneSel).isVisible()) === false);
     await page.evaluate(() => document.querySelectorAll("#briefing-list details.brief-fold").forEach((d) => { d.open = true; }));
     await wait(page, 200);
     const rowLoc = page.locator("#briefing-list .brief-row:not(.brief-subrow)")
-      .filter({ has: page.locator(`[onclick^="briefDone('${fx.taskOverdue}')"]`) });
+      .filter({ has: page.locator(`[data-act="briefDone"][data-args^='["${fx.taskOverdue}"']`) });
     await rowLoc.locator("details.brief-more > summary").click();
     await wait(page, 300);
     ok("A1 · clicking the summary opens the fold", await rowLoc.locator("details.brief-more").evaluate((d) => d.open));

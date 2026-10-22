@@ -240,7 +240,7 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
       const packHtml = await page.evaluate(async (cid) => {
         const orig = window.open;
         let captured = "";
-        window.open = () => ({ document: { write: (h) => { captured += h; }, close() {} } });
+        window.open = () => ({ document: { write: (h) => { captured += h; }, close() {}, querySelector: () => null } });   // R95 · B: the opener wires Print
         try { await window.buildEvidencePack(cid); } finally { window.open = orig; }
         return captured;
       }, cases[0].id);
@@ -405,7 +405,7 @@ async function refileFromCaseModal(page, sourceCaseId, noteId, targetCaseId) {
       const packHtml = await page.evaluate(async (cid) => {
         const orig = window.open;
         let captured = "";
-        window.open = () => ({ document: { write: (h) => { captured += h; }, close() {} } });
+        window.open = () => ({ document: { write: (h) => { captured += h; }, close() {}, querySelector: () => null } });   // R95 · B: the opener wires Print
         try { await window.buildEvidencePack(cid); } finally { window.open = orig; }
         return captured;
       }, tgt.id);

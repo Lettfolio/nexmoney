@@ -110,7 +110,7 @@ const mock = (page, fn, arg) => page.evaluate(fn, arg);
     return {
       cards: cards.length,
       icons: cards.filter((e) => e.querySelector(".cl-card-icon")).length,
-      openable: cards.filter((e) => (e.querySelector(".t")?.getAttribute("onclick") || "").includes("openCase(")).length,
+      openable: cards.filter((e) => (((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(e.querySelector(".t")) || "").search(/[oO]penCase\(/) >= 0).length,
       prot: cards.filter((e) => e.querySelector(".cl-prot-chip")).length,
       moneyRows: cards.filter((e) => e.querySelector(".cl-card-money")).length,
       grid: !!document.querySelector("#modal .cl-book"),

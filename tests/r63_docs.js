@@ -47,7 +47,7 @@ async function r87SkipEntry(page) {
     const box = document.querySelector("#overlay-modal");
     box.querySelectorAll("input[type=checkbox]").forEach((i) => { i.checked = false; });
     box.querySelectorAll("input:not([type=checkbox]), textarea").forEach((i) => { i.value = ""; });
-    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change")); });
+    box.querySelectorAll("select").forEach((sel) => { sel.value = ""; sel.dispatchEvent(new Event("change", { bubbles: true })); });
   });
   await page.click("#se-ok");
 }

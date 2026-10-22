@@ -97,7 +97,10 @@ const modalHtml = (page) => page.evaluate(() => document.querySelector("#modal")
 /* R91 · CI: lender favicons are live <img class="lfav"> requests to Google that the app REMOVES on error
    (lfavFail). The sandbox has no route to Google, GitHub's runners do — so the same tree renders with or
    without the <img> depending on the network. Strip them before comparing; the fixture was recorded without. */
-const maskFav = (s) => String(s).replace(/<img class="lfav"[^>]*>/g, "");
+/* R95 · B: handler wiring moved from on*="…" to the delegation kit's data-* attributes by design; both
+   spellings are masked so the oracle still pins every id, class, other attribute and text node. */
+const maskHandlers = (s) => String(s).replace(/ on[a-z]+="[^"]*"/g, "").replace(/ data-(act|args|on)="[^"]*"/g, "").replace(/ data-(stop|prevent)=""/g, "");
+const maskFav = (s) => maskHandlers(s).replace(/<img class="lfav"[^>]*>/g, "");
 const maskLight = (s) => maskFav(s)
   .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?/g, "<ISO>")
   .replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, "<HM>");
@@ -229,7 +232,7 @@ function topLevelBody(src, startRe) {
           ok(`C · ${label}: identical to the base tree (${BASE_SHA}) live`, a === b, firstDiff(b, a));
         } else console.log(`  · ${label}: live base comparison skipped (no git / ${BASE_SHA})`);
         const want = stored && stored.views[`${v.persona}-${v.w}-${st}`];
-        ok(`C · ${label}: identical to the stored fixture`, !!want && maskHeavy(html) === want, want ? firstDiff(want, maskHeavy(html)) : "no fixture view");
+        ok(`C · ${label}: identical to the stored fixture`, !!want && maskHeavy(html) === maskHandlers(want), want ? firstDiff(maskHandlers(want), maskHeavy(html)) : "no fixture view");
       }
       errPages.push(now);
       if (base) errPages.push(base);

@@ -377,7 +377,7 @@ async function main() {
         q(b).value = "p3"; q(b).dispatchEvent(new Event("change", { bubbles: true }));
       }, [leadA, leadB]);
 
-      const briefBefore = await page.evaluate((a) => (document.querySelector("#briefing-list").innerHTML.indexOf(`acceptLead('${a}'`) >= 0), leadA);
+      const briefBefore = await page.evaluate((a) => (document.querySelector("#briefing-list").innerHTML.indexOf(`data-act="acceptLead" data-args="[&quot;${a}&quot;`) >= 0), leadA);
       ok("R5-21 · fixture: the lead also has a My Day row", briefBefore === true);
 
       await page.click(`#briefing-list .row-item:has(select[data-lead="${leadA}"]) button.btn-primary`);
@@ -392,7 +392,7 @@ async function main() {
           bVal: (sels.find((s) => s.lead === b) || {}).val,
           otherVals: sels.filter((s) => o.indexOf(s.lead) >= 0).map((s) => s.val),
           acceptedCaseAdviser: (cases.find((c) => c.id === lead.converted_case_id) || {}).assigned_to,
-          briefStillHasA: document.querySelector("#briefing-list").innerHTML.indexOf(`acceptLead('${a}'`) >= 0,
+          briefStillHasA: document.querySelector("#briefing-list").innerHTML.indexOf(`data-act="acceptLead" data-args="[&quot;${a}&quot;`) >= 0,
           leadGone: sels.every((s) => s.lead !== a),
         };
       }, [leadA, leadB, others]);
@@ -439,7 +439,7 @@ async function main() {
         /* R76 · B5 — the title's fix route goes through fixContactOpen() now (it records the
            failed queue row so the save can offer the retry), which itself opens the CLIENT via
            openClient — the fact under test is unchanged. */
-        return { hasFix: !!fix, titleOpensClient: /fixContactOpen\('email'|openClient\(/.test((r.querySelector(".t") || {}).outerHTML || ""), text: r.textContent.replace(/\s+/g, " ").trim().slice(0, 90) };
+        return { hasFix: !!fix, titleOpensClient: (() => { const t = r.querySelector(".t"); const a = t && t.getAttribute("data-act"); return a === "openClient" || (a === "fixContactOpen" && JSON.parse(t.getAttribute("data-args") || "[]")[0] === "email"); })(), text: r.textContent.replace(/\s+/g, " ").trim().slice(0, 90) };
       });
       ok("R5-43 · the no-address failure is on screen", !!row, "row not found");
       if (row) {

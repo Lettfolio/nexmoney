@@ -171,7 +171,7 @@ async function ensureServer() {
     await new Promise((r) => setTimeout(r, 900));
     const card = [...document.querySelectorAll(".cl-card")].find((el) => {
       const t = el.querySelector(".t");
-      return t && t.getAttribute("onclick") && t.getAttribute("onclick").includes(c.id);
+      return t && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t) && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(t).includes(c.id);
     });
     return { skip: false, hasBadge: !!(card && (card.querySelector(".cl-badge-sold") || card.querySelector(".cl-badge-watch"))) };
   });

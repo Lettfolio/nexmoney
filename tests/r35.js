@@ -402,14 +402,14 @@ const cardShape = (page, caseId) => page.evaluate((id) => {
       await wait(page, SETTLE);
 
       const rowsFor = (page, caseId) => page.evaluate((id) => [...document.querySelectorAll("#alerts-rateerc .row-item")]
-        .filter((r) => (r.querySelector(".t") && r.querySelector(".t").getAttribute("onclick") || "").includes(`openCase('${id}')`)), caseId);
+        .filter((r) => (r.querySelector(".t") && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".t")) || "").includes(`openCase('${id}')`)), caseId);
       const readCount = (page) => page.evaluate(() => {
         const el = document.querySelector("#rate-erc-panel h3 .count.hot");
         return el ? Number((el.textContent.match(/(\d+)/) || [])[1]) : 0;
       });
 
       const srcRowsBefore = await page.evaluate((id) => [...document.querySelectorAll("#alerts-rateerc .row-item")]
-        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && r.querySelector(".t").getAttribute("onclick")) || "").includes(`'${id}'`)).length, src.caseId);
+        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".t"))) || "").includes(`'${id}'`)).length, src.caseId);
       ok("D1 · the seeded live source case shows up in #alerts-rateerc", srcRowsBefore >= 1, JSON.stringify(srcRowsBefore));
       const countAfterSrc = await readCount(page);
 
@@ -425,10 +425,10 @@ const cardShape = (page, caseId) => page.evaluate((id) => {
       const countAfterSucc = await readCount(page);
       eq("D2a · the heading's scoped \"ending soon\" count is unchanged — the successor added no new alert", countAfterSucc, countAfterSrc);
       const succRows = await page.evaluate((id) => [...document.querySelectorAll("#alerts-rateerc .row-item")]
-        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && r.querySelector(".t").getAttribute("onclick")) || "").includes(`'${id}'`)).length, succ.caseId);
+        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".t"))) || "").includes(`'${id}'`)).length, succ.caseId);
       eq("D2b · the live successor's own id never appears in the drawer", succRows, 0);
       const srcRowsAfter = await page.evaluate((id) => [...document.querySelectorAll("#alerts-rateerc .row-item")]
-        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && r.querySelector(".t").getAttribute("onclick")) || "").includes(`'${id}'`)).length, src.caseId);
+        .filter((r) => (((r.querySelector(".t") || {}).getAttribute && ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(r.querySelector(".t"))) || "").includes(`'${id}'`)).length, src.caseId);
       eq("D2c · the source's own row is untouched — exactly one row for it, same as before", srcRowsAfter, 1);
 
       ok("D · no console errors (p2)", noNewErr(page, errBefore), JSON.stringify(page.__err));

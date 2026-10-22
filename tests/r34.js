@@ -151,7 +151,7 @@ async function seedCase(page, tag, clientFields, caseFields) {
 const watchtowerState = (page) => page.evaluate(() => {
   const rows = [...document.querySelectorAll("#watchtower-list .wt-row")].map((r) => {
     const btn = [...r.querySelectorAll("button")].find((b) => b.textContent.trim() === "Open");
-    const oc = btn ? btn.getAttribute("onclick") : null;
+    const oc = btn ? ((e) => e && e.getAttribute("data-act") ? e.getAttribute("data-act") + "(" + JSON.parse(e.getAttribute("data-args") || "[]").map((a) => typeof a === "string" ? "'" + a + "'" : a && typeof a === "object" ? JSON.stringify(a) : String(a)).join(",") + ")" : null)(btn) : null;
     const mCase = oc && oc.match(/openCase\('([^']+)'\)/);
     const mClient = oc && oc.match(/openClient\('([^']+)'\)/);
     return {
@@ -160,8 +160,8 @@ const watchtowerState = (page) => page.evaluate(() => {
       caseId: mCase ? mCase[1] : null,
       clientId: mClient ? mClient[1] : null,
       hasOpenBtn: !!btn,
-      hasSnooze: !!r.querySelector('button[onclick^="snoozeAlert"]'),
-      hasDismiss: !!r.querySelector('button[onclick^="resolveAlert"]'),
+      hasSnooze: !!r.querySelector('button[data-act="snoozeAlert"]'),
+      hasDismiss: !!r.querySelector('button[data-act="resolveAlert"]'),
       text: r.textContent,
     };
   });
@@ -426,7 +426,7 @@ const hasFirmLevelGroup = (groups) => groups.some((k) => FIRM_RULES.some((r) => 
       await wait(page, 400);
 
       // Move the live filter away from "all" so applying the view is the only thing that can put it back.
-      await page.$eval("#board-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change")); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
+      await page.$eval("#board-adviser", (e, v) => { e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); }, "p3");   // R88 · B: was selectOption on the (now hidden compat) adviser select — scope is the kit Mine|All(|Unassigned) toggle
       await wait(page, 300);
       eq("C3a · #board-adviser now reads p3, and that is what's stored", await page.evaluate(() => document.getElementById("board-adviser").value), "p3");
       eq("C3a2 · …persisted too", await lsGetPage(page, "nx_board_adviser_p2"), "p3");   // PATCHED R82 · A4
