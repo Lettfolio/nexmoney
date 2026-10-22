@@ -10,6 +10,7 @@ Disallow: /clienthub
 Disallow: /clienthub/
 Disallow: /admin
 Disallow: /admin/
+Disallow: /unsubscribe
 
 # AI answer-engine crawlers — explicitly welcome (citability in AI answers)
 User-agent: GPTBot
@@ -20,6 +21,7 @@ Disallow: /clienthub
 Disallow: /clienthub/
 Disallow: /admin
 Disallow: /admin/
+Disallow: /unsubscribe
 
 User-agent: ClaudeBot
 Allow: /
@@ -29,6 +31,7 @@ Disallow: /clienthub
 Disallow: /clienthub/
 Disallow: /admin
 Disallow: /admin/
+Disallow: /unsubscribe
 
 User-agent: PerplexityBot
 Allow: /
@@ -38,6 +41,7 @@ Disallow: /clienthub
 Disallow: /clienthub/
 Disallow: /admin
 Disallow: /admin/
+Disallow: /unsubscribe
 
 User-agent: Google-Extended
 Allow: /

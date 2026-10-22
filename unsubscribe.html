@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Unsubscribe — NexMoney</title>
+<link rel="icon" href="/favicon.svg">
+<style>
+  :root{--navy:#0f2a4a;--navy2:#0b1f35;--orange:#e08a2b;--ink:#1f2937;--muted:#6b7280;--line:#e3e7ee;--bg:#eef2f7;--red:#c0392b;--red-bg:#fdecea}
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.55;font-size:16px}
+  .top{background:linear-gradient(120deg,var(--navy2),var(--navy));color:#fff;padding:22px 18px}
+  .top .in{max-width:660px;margin:0 auto}
+  .brand{font-weight:800;font-size:22px;letter-spacing:.2px}.brand span{color:var(--orange)}
+  .top p{margin:6px 0 0;color:#c4d0e0;font-size:14px}
+  .wrap{max-width:660px;margin:0 auto;padding:20px 18px 80px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;margin:16px 0;box-shadow:0 1px 3px rgba(16,24,40,.05)}
+  .card p{margin:0 0 12px}
+  .hint{color:var(--muted);font-size:13.5px;margin:0}
+  .btn{appearance:none;border:1px solid var(--navy);background:var(--navy);color:#fff;padding:12px 20px;border-radius:10px;font-weight:700;font-size:15px;cursor:pointer}
+  .btn:disabled{opacity:.55;cursor:default}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:20px 0 12px}
+  .center{text-align:center;padding:60px 20px;color:var(--muted)}
+  .center h2{font-size:22px;color:var(--navy);margin-bottom:8px}
+  .skip-link{position:absolute;left:-9999px;top:0;background:var(--navy);color:#fff;padding:10px 16px;border-radius:0 0 8px 0;z-index:99}
+  .skip-link:focus{left:0}
+  .banner{padding:12px 14px;border-radius:10px;font-size:14px;margin:0 0 16px;background:var(--red-bg);color:var(--red)}
+  .foot{font-size:13px;line-height:1.7;color:#4b5563;border-top:1px solid var(--line);padding-top:16px;margin-top:26px}
+  .foot p{margin:0 0 6px}
+  [hidden]{display:none !important}
+  @media(max-width:560px){.btn{width:100%}}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="top"><div class="in">
+  <div class="brand">Nex<span>Money</span></div>
+  <p>Email preferences</p>
+</div></div>
+
+<main id="main" class="wrap" aria-live="polite">
+  <div id="loading" class="center"><h2>One moment…</h2></div>
+
+  <div id="invalid" class="card" hidden>
+    <p><strong>Sorry — this link isn't one we recognise.</strong></p>
+    <p>It may have been trimmed by your email app, or it may simply be an old one. Nothing has been changed.</p>
+    <p>If you'd rather not receive emails like the one that brought you here, just reply to it and tell us — we'll sort it straight away.</p>
+  </div>
+
+  <div id="confirm" class="card" hidden>
+    <p><strong>Prefer not to get emails like this?</strong></p>
+    <p>Press the button and we'll stop sending relationship emails — birthday and anniversary notes, review and referral requests. Emails about your own mortgage are unaffected.</p>
+    <div id="banner" class="banner" role="alert" hidden></div>
+    <div class="actions">
+      <button type="button" class="btn" id="unsubBtn">Unsubscribe me</button>
+    </div>
+    <p class="hint">Nothing has been changed yet. If you got here by mistake, just close this page.</p>
+  </div>
+
+  <div id="done" class="card" hidden>
+    <p><strong>Done — you're unsubscribed.</strong></p>
+    <p>You won't get relationship emails from us again. Emails about your own mortgage are unaffected.</p>
+    <p>If this was a mistake, just reply to the email that brought you here and we'll switch them back on.</p>
+  </div>
+
+  <div class="foot">
+    <p>NexMoney is a trading style of NexMoney Ltd, which is an Appointed Representative of Stonebridge Mortgage Solutions Ltd, which is authorised and regulated by the Financial Conduct Authority.</p>
+    <p>Registered Office: NexMoney Ltd. Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ.</p>
+    <p>Registered Company Number; 11454479 Registered in England &amp; Wales.</p>
+    <p>We are entered on the Financial Services Register under firm reference number 610875.</p>
+  </div>
+</main>
+
+<script src="/unsubscribe.js" defer></script>
+</body>
+</html>
