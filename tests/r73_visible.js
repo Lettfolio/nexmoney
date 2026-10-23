@@ -133,6 +133,9 @@ const boxes = (page, sel) => page.evaluate((s) => [...document.querySelectorAll(
   {
     console.log("\n— §A · A1 · the day is not a 340px window any more");
     const page = await boot(browser, "p1", DESK);
+    // The runner loads Inter (the sandbox cannot); measure only once the font has settled and the cage re-measured.
+    await page.evaluate(() => (document.fonts ? document.fonts.ready : null));
+    await page.waitForTimeout(300);
 
     const cage = await page.evaluate(() => {
       const l = document.getElementById("briefing-list");

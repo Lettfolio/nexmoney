@@ -9521,6 +9521,15 @@ window.addEventListener("resize", () => {
   clearTimeout(recageTimer);
   recageTimer = setTimeout(recageDashLists, 120);
 });
+/* R95 made the Inter stylesheet non-blocking (boot.js swaps its media on load), so on a cold cache the font
+   lands AFTER the first render: row heights move by a pixel and a cut measured on the fallback font slices a
+   row. A font arriving is the third thing that changes the answer without changing the data. */
+if (document.fonts && typeof document.fonts.addEventListener === "function") {
+  document.fonts.addEventListener("loadingdone", () => {
+    clearTimeout(recageTimer);
+    recageTimer = setTimeout(recageDashLists, 60);
+  });
+}
 /* R88 · A: THE FOLDED-IN ITEMS: Watchtower alerts and radar cases, in My Day's item shape, cut to My Day's own
    Mine/All scope. The alert test is the drawer's own (wtInScope) asked with My Day's scope: under Mine, an alert on
    a case assigned to me; a firm-level check (no case) is owner/admin work in both scopes and never an adviser's.
