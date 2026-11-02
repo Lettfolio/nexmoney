@@ -84,11 +84,14 @@ async function mkCase(page, o) {
 }
 
 /* The Offer fixture — picked exactly as panel-r87/measure-case.js picks it (newest Offer case with an
-   address and a lender), so the positions are comparable with the panel's 1,811px. */
+   address and a lender), so the positions are comparable with the panel's 1,811px.
+   R95: the mock's "this month" cohort is excluded — in the first days of a month its re-stamped
+   updated_at leapfrogs every other row and the pick changed with the calendar (same as r90_case_split). */
 async function pickCase(page, stage) {
   return page.evaluate(async (st) => {
-    const { data } = await window.db.from("cases").select("id,stage,lender,property_address").eq("stage", st).order("updated_at", { ascending: false }).limit(20);
-    const rows = data || [];
+    const { data } = await window.db.from("cases").select("id,stage,lender,property_address,created_at").eq("stage", st).order("updated_at", { ascending: false }).limit(20);
+    const now = new Date(), monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const rows = (data || []).filter((r) => !r.created_at || r.created_at < monthStart);
     const p = rows.find((r) => r.property_address && r.lender) || rows.find((r) => r.lender) || rows[0];
     return p && p.id;
   }, stage);
