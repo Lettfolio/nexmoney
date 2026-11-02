@@ -187,13 +187,17 @@ const shiftMv = (mv, n) => {
           .map((d) => ({ cls: d.className, text: d.textContent.trim() }))));
 
       const completionsIn = (mv) => fx.cases.filter((c) => inM(c.completed_at, mv)).length;
+      const submissionsIn = (mv) => fx.cases.filter((c) => inM(c.submitted_at, mv)).length;
       const noDataYoyMv = months.find((mv) => hasRows(mv) && !hasRows(shiftMv(mv, -12)));
       const deadPairMv = months.find((mv) => !hasRows(mv) && !hasRows(shiftMv(mv, -1)));
       /* "A real fall" needs a month whose year-earlier twin holds rows (so no chip may read
          "no data") and a metric that was something then and is nothing now (so a chip must read
-         −100%). Completions are that metric: an empty month qualifies, and so does a busy month
-         with nothing completed in it yet, which is what the first days of a month look like. */
-      const fallMv = months.find((mv) => hasRows(shiftMv(mv, -12)) && completionsIn(mv) === 0 && completionsIn(shiftMv(mv, -12)) > 0);
+         −100%). Completions or submissions are that metric: an empty month qualifies, and so does
+         a busy month with nothing completed (or submitted) in it yet, which is what the first days
+         of a month look like. R95: either count will do — the NOW-relative fixture left no month
+         with a completions fall at some calendar dates (29 Oct 2026), so the property went untested. */
+      const fellToNil = (count) => (mv) => count(mv) === 0 && count(shiftMv(mv, -12)) > 0;
+      const fallMv = months.find((mv) => hasRows(shiftMv(mv, -12)) && (fellToNil(completionsIn)(mv) || fellToNil(submissionsIn)(mv)));
       ok("fixture · the book holds a month with rows whose year-earlier twin has none, an empty month whose twin has rows, and a month empty on both sides",
         !!noDataYoyMv && !!deadPairMv && !!fallMv, JSON.stringify({ noDataYoyMv, deadPairMv, fallMv }));
 

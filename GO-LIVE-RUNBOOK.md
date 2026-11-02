@@ -61,7 +61,8 @@ old admin URL stays in the redirect list for a week.
 
 ## 4 · After (first week)
 Old hosting kept 30 days. Watch Vercel → Analytics for 404s the redirect map missed (add them to `vercel.json`).
-Remove `https://nexmoney-two.vercel.app/admin/**` from Supabase redirect URLs after a week. Then the two Auth
+Remove `https://nexmoney-two.vercel.app/admin/**` from Supabase redirect URLs after a week (the edge CORS allow-lists
+dropped it in R95, 29 Oct). Then the two Auth
 hardenings still open: sign-ups OFF, minimum password 12.
 
 ## Redirect map (old sitemap → new page)

@@ -28,8 +28,8 @@
    ========================================================================== */
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-// R94 · D: browsers may call this only from the site (vercel.app origin: one week after cutover, then delete it).
-const ORIGINS = ["https://www.nexmoney.co.uk", "https://nexmoney.co.uk", "https://nexmoney-two.vercel.app"];
+// R94 · D: browsers may call this only from the site (R95: vercel.app origin dropped a week after cutover).
+const ORIGINS = ["https://www.nexmoney.co.uk", "https://nexmoney.co.uk"];
 const withCors = (req: Request, res: Response): Response => {
   const o = req.headers.get("origin") ?? "";
   res.headers.set("Access-Control-Allow-Origin", ORIGINS.includes(o) ? o : ORIGINS[0]);

@@ -80,11 +80,17 @@ async function openCase(page, id, opts) {
   await page.evaluate(({ id, opts }) => window.openCase(id, opts), { id, opts: opts || {} });
   await wait(page, 2200);
 }
-/* The Offer / Completed fixture — the dom-dump.js / r88_case pick. */
+/* The Offer / Completed fixture — the dom-dump.js / r88_case pick.
+   R95: the mock re-stamps its "this month" cohort (two cases per stage) with created_at/updated_at
+   inside the current month, capped at (day − 1) days back. In the first days of a month that cohort
+   leapfrogs every other row on updated_at, so the pick — and the stored fixture — changed with the
+   calendar (ca031 on the 2nd, ca063 on the 29th). The cohort is excluded: a case created before this
+   month is picked on any date, and the fixture was recorded from one. */
 async function pickCase(page, stage) {
   return page.evaluate(async (st) => {
-    const { data } = await window.db.from("cases").select("id,stage,lender,property_address,client_id").eq("stage", st).order("updated_at", { ascending: false }).limit(20);
-    const rows = data || [];
+    const { data } = await window.db.from("cases").select("id,stage,lender,property_address,client_id,created_at").eq("stage", st).order("updated_at", { ascending: false }).limit(20);
+    const now = new Date(), monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const rows = (data || []).filter((r) => !r.created_at || r.created_at < monthStart);
     const p = rows.find((r) => r.property_address && r.lender) || rows.find((r) => r.lender) || rows[0];
     return p && p.id;
   }, stage);
