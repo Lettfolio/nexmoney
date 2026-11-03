@@ -57,7 +57,7 @@ const BASIS_INTRO_REV = "(all-time · earned · completed cases)";
 /* R5-F2 (Daniel-approved) — the HEADLINE basis. Fee value is now led with as EARNED ON COMPLETION: proc +
    broker + sols on cases whose completed_at falls in the period, paid or not. */
 const BASIS_EARNED_YTD = "(earned · proc+broker+sols · completed YTD)";
-const BASIS_TARGET_EARNED = "earned · proc+broker+sols · by completion date";
+const BASIS_TARGET_EARNED = "earned · proc+broker+sols · by completion date (waived excluded)";
 /* R5-F1 (Daniel-approved) — the adviser's own three figures. Every one of these is scoped to assigned_to =
    the signed-in person; the wording says so on the tile itself so the card can never be mistaken for a… */
 const BASIS_MY_CASH_YTD = "(cash · proc+broker+sols · by paid date · my cases · YTD · excl. future-dated)";
@@ -106,6 +106,10 @@ function cashInYear(rows, yr, types) {
 }
 /* R5-F2 — the HEADLINE basis, in one place so the month card, the target bar and the YTD tile cannot drift
    apart: proc + broker + sols fee value on cases whose completed_at falls in the period… */
+/* R97 · C-4: a WAIVED broker fee was never earned. The owed/aged view already left it out; the headline
+   figures counted it, so the two money views disagreed. Forecast and pipeline sums are untouched. */
+const brokerFeeEarned = (c) => (c.fee_status === "waived" ? 0 : Number(c.broker_fee || 0));
+const feeEarned = (c) => Number(c.proc_fee || 0) + brokerFeeEarned(c) + Number(c.sols_fee || 0);
 function earnedOnCompletion(rows, period) {
   const p = String(period || "");
   let total = 0, n = 0;
@@ -113,7 +117,7 @@ function earnedOnCompletion(rows, period) {
     if (!c.completed_at) return;
     if (localDateStr(c.completed_at).slice(0, p.length) !== p) return;
     n++;
-    total += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0);
+    total += feeEarned(c);   // R97 · C-4
   });
   return { total, n };
 }
@@ -220,7 +224,7 @@ function adviserMonthCompletions(cases, adviserId, mv) {
    firm "Fees earned vs target" bar, and deliberately NOT the cash "Fees banked" figure beside it. */
 function adviserMonthEarned(cases, adviserId, mv) {
   const done = adviserMonthCompletions(cases, adviserId, mv);
-  return { total: done.reduce((s, c) => s + (Number(c.proc_fee) || 0) + (Number(c.broker_fee) || 0) + (Number(c.sols_fee) || 0), 0), n: done.length };
+  return { total: done.reduce((s, c) => s + feeEarned(c), 0), n: done.length };   // R97 · C-4
 }
 /* R7-3's protection attach rate. `pct` is null — never 0 — when there were no completions at all, because
    nobody attached nothing to nothing; the caller renders that as "—". */
@@ -820,7 +824,7 @@ function renderThreadedPanels(all, mv, repAdvisers) {
   const ytdRpcSum = Object.keys(ytdById).reduce((s, k) => s + ytdById[k], 0);
   const ytdFirm = all.reduce((s, c) => {
     const d = feeCashDate(c, "broker_fee_paid_at");
-    return d && Number(localDateStr(d).slice(0, 4)) === ytdYear ? s + Number(c.broker_fee || 0) : s;
+    return d && Number(localDateStr(d).slice(0, 4)) === ytdYear ? s + brokerFeeEarned(c) : s;   // R97 · C-4
   }, 0);
   const ytdGap = ytdFirm - ytdRpcSum;
   /* R74 · A4b (panel D#14): ONE SENTENCE, THEN A DISCLOSURE. This paragraph had grown to ten lines of essay
@@ -5104,4 +5108,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r95";   // R89
+window.__nxTag_reportsmoney = "r97";   // R89

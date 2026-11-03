@@ -70,7 +70,7 @@ const FIXTURE = {
     { slug: "../admin/index", title: "never applied" },
   ],
   site_posts: [
-    { id: "a1", slug: "r93-test-guide", title: "R93 test guide", excerpt: "An excerpt.", body_md: "# Heading\n\nSome **bold** text and [a link](/contact).\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))", cover_image: null, status: "published", published_at: "2026-10-10T09:00:00Z", created_at: "2026-10-01T09:00:00Z", updated_at: "2026-10-12T09:00:00Z" },
+    { id: "a1", slug: "r93-test-guide", title: "R93 test guide", excerpt: "An excerpt.", body_md: "# Heading\n\nSome **bold** text and [a link](/contact).\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n[tabbed](<java\tscript:alert(2)>) and [slashed](/\\evil.com)", cover_image: null, status: "published", published_at: "2026-10-10T09:00:00Z", created_at: "2026-10-01T09:00:00Z", updated_at: "2026-10-12T09:00:00Z" },
     { id: "a2", slug: "r93-draft", title: "Draft", body_md: "x", status: "draft" },
   ],
 };
@@ -141,6 +141,10 @@ const FIXTURE = {
   const g = fs.existsSync(dist("guides/r93-test-guide.html")) ? fs.readFileSync(dist("guides/r93-test-guide.html"), "utf8") : "";
   ok("C6 · guide: canonical + Article JSON-LD", g.includes('<link rel="canonical" href="https://www.nexmoney.co.uk/guides/r93-test-guide">') && /"@type":"Article"/.test(g));
   ok("C7 · guide: raw <script> in Markdown is escaped, javascript: link dropped, # → h2", g.includes("&lt;script&gt;alert(1)&lt;/script&gt;") && !/<script>alert/.test(g) && !g.includes("javascript:") && g.includes("<h2>Heading</h2>"));
+  // R97 · C-10: a control character inside the scheme, and "/\" (read as "//" by browsers), leave no href.
+  const hrefs = [...g.matchAll(/href="([^"]*)"/g)].map((x) => x[1]);
+  ok("C7b · guide: the hostile hrefs rendered as text (the fixture reached the renderer)", g.includes(">tabbed<") || g.includes("tabbed"), "");
+  ok("C7c · guide: java<TAB>script: and /\\evil.com leave no href", !hrefs.some((h) => /script:|evil\.com/i.test(h.replace(/[\u0000- ]|&#9;|%09/g, ""))), JSON.stringify(hrefs.filter((h) => /script|evil/i.test(h))));
   ok("C8 · guide: no unfilled placeholders", !/\{\{\w+\}\}/.test(g));
   const m = fs.readFileSync(dist("mortgages.html"), "utf8");
   ok("C9 · mortgages: overridden <title>", m.includes("<title>R93 Override Title | NexMoney</title>"));

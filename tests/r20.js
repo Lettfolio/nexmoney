@@ -237,7 +237,7 @@ function computeExpectedMI(rows, mv, monthKeys) {
 /* ---------------------------------------------------------------------------
    Fixture helpers.
    ------------------------------------------------------------------------- */
-async function wipeCases(page) { await page.evaluate(async () => { await window.__mockDb.from("cases").delete(); }); }
+async function wipeCases(page) { await page.evaluate(async () => { window.__mockServiceRole = true; await window.__mockDb.from("cases").delete(); window.__mockServiceRole = false; });   /* R97 · S-8 */ }
 async function mkClient(page, first, last) {
   return page.evaluate(async ({ first, last }) => {
     const { data, error } = await window.__mockDb.from("clients")

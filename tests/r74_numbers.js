@@ -765,6 +765,53 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       await page.close();
     }
 
+    /* =====================================================================
+       §F · R97 · C-4 — A WAIVED BROKER FEE IS NOT EARNED.
+       ===================================================================== */
+    {
+      console.log("\n— §F · waiving one completed case's broker fee drops the earned headline by that fee (p4)");
+      const page = await boot(browser, "p4", { width: 1160, height: 900 });
+      const errBefore = realErrs(page).length;
+      const unit = await page.evaluate(() => {
+        const base = { completed_at: new Date().toISOString(), proc_fee: 300, broker_fee: 499, sols_fee: 100 };
+        const mv = localMonthStr();
+        return {
+          paid: earnedOnCompletion([Object.assign({}, base, { fee_status: "paid" })], mv).total,
+          waived: earnedOnCompletion([Object.assign({}, base, { fee_status: "waived" })], mv).total,
+          basis: BASIS_TARGET_EARNED,
+        };
+      });
+      eq("§F1 · earnedOnCompletion: the same case waived counts proc+sols only", [unit.paid, unit.waived], [899, 400]);
+      ok("§F2 · the earned basis label says waived fees are excluded", /\(waived excluded\)/.test(unit.basis), unit.basis);
+      // A fixture case completed this month with a live broker fee; seed one when the month has none.
+      let pick = await page.evaluate(() => {
+        const mv = localMonthStr();
+        const c = window.__mock.db.cases.filter((x) => x.stage === "completed" && x.completed_at && localMonthStr(x.completed_at) === mv
+          && Number(x.broker_fee) > 0 && x.fee_status !== "waived")[0];
+        return c ? { id: c.id, fee: Number(c.broker_fee) } : null;
+      });
+      if (!pick) {
+        const m = await mkCase(page, { first: "R97", last: tag(), case: { completed_at: new Date().toISOString(), broker_fee: 499, fee_status: "requested", assigned_to: "p4" } });
+        pick = { id: m.caseId, fee: 499 };
+        await page.evaluate(() => bustBookCache("delete"));
+      }
+      await goPage(page, "reports", 3800);
+      const heroNum = async () => { const h = await txt(page, "#report-hero"); const m = (h || "").match(/^£([\d,]+) earned/); return m ? Number(m[1].replace(/,/g, "")) : null; };
+      const before = await heroNum();
+      const upd = await page.evaluate(async (id) => {
+        const { error } = await window.__mockDb.from("cases").update({ fee_status: "waived" }).eq("id", id);
+        bustBookCache("delete");
+        return error ? error.message : null;
+      }, pick.id);
+      eq("§F3 · the fee is waived through the client (no error)", upd, null);
+      await goPage(page, "reports", 3800);
+      const after = await heroNum();
+      ok("§F4 · the Reports hero's earned figure dropped by exactly the waived broker fee",
+        before != null && after != null && before - after === pick.fee, JSON.stringify({ before, after, fee: pick.fee }));
+      eq("§F · no console errors", realErrs(page).slice(errBefore), []);
+      await page.close();
+    }
+
   } finally {
     await browser.close();
     if (server) server.kill();

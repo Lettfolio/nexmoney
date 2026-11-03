@@ -59,6 +59,10 @@ const HASH_ONLY = process.argv.includes("--hash");
 // Never shipped: the harness, versioned sources that deploy elsewhere, docs, secrets — and
 // middleware.js / vercel.json, which Vercel reads from the PROJECT ROOT (a copy in dist/ would
 // be served as a static file and expose the gate credential hash).
+// R97 · D-4 (supply-3): an ALLOW-list of served extensions is the first fence — a file of any
+// other type (a stray .csv / .xlsx export, a .env) is never copied to dist/, whatever folder it
+// lands in. The SKIP_* deny-lists below stay as the second fence for served types that must not ship.
+const ALLOW_EXT = new Set([".html", ".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".ico", ".mp4", ".txt", ".xml", ".webmanifest", ".woff2"]);
 const SKIP_DIRS = new Set(["dist", "node_modules", ".git", ".vercel", ".claude", "tests", "shots", "edge", "db", "adv", "_to_delete", "compliance", "Claude outputs", "docs", "supabase", ".github"]);
 const SKIP_FILES = new Set(["build.js", "package.json", "package-lock.json", "smoke.js", "middleware.js", "vercel.json", "deploy.bat", "vercel_out.txt", "_push-log.txt", ".vercelignore", ".gitignore", "admin/mock.html", "admin/mock-supabase.js", "guides.template.html", "eslint.config.js", "jsconfig.json"]);
 const SKIP_EXT = new Set([".md", ".pdf", ".docx", ".bat", ".log", ".zip"]);
@@ -100,6 +104,7 @@ function walk(dir, rel = "") {
     const r = rel ? rel + "/" + name : name;
     const st = fs.statSync(abs);
     if (st.isDirectory()) { if (!SKIP_DIRS.has(name)) out.push(...walk(abs, r)); continue; }
+    if (!ALLOW_EXT.has(path.extname(name).toLowerCase())) continue;   // R97 · D-4: allow-list first
     if (SKIP_FILES.has(r) || SKIP_EXT.has(path.extname(name).toLowerCase())) continue;
     if (/^tsconfig.*\.json$/.test(name)) continue;   // R94 · B2: editor/type-check config, never served
     if (name.startsWith(".") && name !== ".well-known") continue;
@@ -223,7 +228,10 @@ function applyPageRow(html, row) {
 
 /* ---------- guides: Markdown → allow-listed HTML */
 function safeHref(href, imageOnly) {
-  const h = String(href || "").trim();
+  /* R97 · C-10: browsers drop tab/newline/control characters inside a URL and read "\" as "/", so
+     "java\tscript:" and "/\evil.com" slipped past the tests below. Strip first; refuse a leading pair of slashes. */
+  const h = String(href || "").replace(/[\u0000- \u007f]/g, "");
+  if (/^[\\/][\\/]/.test(h)) return null;
   if (/^https:\/\//i.test(h)) return h;
   if (!imageOnly && /^mailto:[^\s<>"]+$/i.test(h)) return h;
   if (/^\/(?!\/)/.test(h) || (!imageOnly && /^#/.test(h))) return h;

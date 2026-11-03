@@ -493,7 +493,7 @@ const favImgs = (page, names) => page.evaluate((ns) => {
       eq("D4 · a queued row scheduled for tomorrow is NOT counted; one dated yesterday is", p1.pending, base.due + 1);
 
       /* …and a row that is not queued at all never counts, whatever its date. */
-      await page.evaluate(async (id) => { await window.__mockDb.from("email_queue").update({ status: "sent" }).eq("id", id); }, seeded.pastId);
+      await page.evaluate(async (id) => { window.__mockServiceRole = true; await window.__mockDb.from("email_queue").update({ status: "sent" }).eq("id", id); window.__mockServiceRole = false; }, seeded.pastId);   /* R97 · S-4: the sender marks sent */
       const p2 = await probe();
       eq("D5 · a row that has already been sent stops counting", p2.pending, base.due);
 

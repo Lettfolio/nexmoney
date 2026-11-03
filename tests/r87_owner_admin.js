@@ -491,6 +491,33 @@ const LEAK_RE = /coalesce|ceil\(|first_contact_at|protection_status|protection_q
         await page.close();
       }
     }
+    /* =====================================================================
+       §I · R97 · S-5 — names and emails are Owner-edited (audit labels use them)
+       ===================================================================== */
+    {
+      console.log("\n— §I · R97 · S-5: an adviser cannot rename themselves; the Owner can (p2 / p4)");
+      const adv = await boot(browser, "p2");
+      const r = await adv.evaluate(async () => {
+        const db = window.__mockDb;
+        const name = await db.from("profiles").update({ full_name: "Daniel Potts" }).eq("id", "p2");
+        const mail = await db.from("profiles").update({ email: "daniel@nexmoney.co.uk" }).eq("id", "p2");
+        const phone = await db.from("profiles").update({ phone: "07700900555", email_signoff: "Wayne" }).eq("id", "p2");
+        const row = window.__mock.db.profiles.find((p) => p.id === "p2");
+        return { name: name.error && name.error.code, mail: mail.error && mail.error.code, phone: phone.error, full: row.full_name, email: row.email, ph: row.phone };
+      });
+      eq("§I1 · adviser PATCH own full_name → refused 42501", r.name, "42501");
+      eq("§I2 · adviser PATCH own email → refused 42501", r.mail, "42501");
+      ok("§I3 · …the name and email are unchanged", r.full === "Wayne Kellow" && r.email === "wayne.kellow@nexmoney.co.uk", JSON.stringify(r));
+      ok("§I4 · the adviser's own phone / sign-off still save", !r.phone && r.ph === "07700900555", JSON.stringify(r));
+      await adv.close();
+      const owner = await boot(browser, "p4");
+      const o = await owner.evaluate(async () => {
+        const { error } = await window.__mockDb.from("profiles").update({ full_name: "Wayne K" }).eq("id", "p2");
+        return { error, full: window.__mock.db.profiles.find((p) => p.id === "p2").full_name };
+      });
+      ok("§I5 · the Owner renames a colleague", !o.error && o.full === "Wayne K", JSON.stringify(o));
+      await owner.close();
+    }
   } finally {
     await browser.close();
     if (srv) srv.kill();
