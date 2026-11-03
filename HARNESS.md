@@ -5612,7 +5612,7 @@ green local run is pushed as a BRANCH straight away — but it reaches main only
      SQL in `supabase/migrations/` IS applied to production by the merge (review it as live SQL);
      one-off scripts in `db/` are pasted by Daniel. Edge is separate: the CTO deploys it via MCP.
 **RETIRED for code (do not use):** `device_commit_files` into Daniel's folder, GitHub web upload
-through Chrome, `git` / `deploy.bat` in Daniel's Windows tree. They skipped the battery and caused
+through Chrome, `git` / `deploy.bat` (deleted R97) in Daniel's Windows tree. They skipped the battery and caused
 the R52 stale-tree clobber. Daniel's folder is a reader's copy; refresh it with `git pull`.
 
 **Repository layout.** Root: the public site (`*.html`, `style.css`, `enhance.js`, `assets/`),
