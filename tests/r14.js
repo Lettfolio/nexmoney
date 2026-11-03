@@ -14,7 +14,7 @@
                    shows "—" with no Reveal/Copy controls.
      VAULT EDIT  — changing a field value and adding a new field, then saving,
                    round-trips through the mock DB and writes a masked
-                   audit_log row (secret values → "(hidden)", non-secret kept).
+                   audit_log row (every value → "(hidden)" since R97 · S-2).
      VAULT ADD   — a brand-new entry via the editor gets the right defaults
                    and a masked insert audit row; the "Who can see this" gate
                    only renders for Owner/Administrator, never an adviser.
@@ -104,9 +104,10 @@ async function readRows(page, table, filters) {
   }, { table, filters });
 }
 const readTableAs = (page, persona, table) => page.evaluate(({ persona, table }) => window.__mock.readTableAs(persona, table), { persona, table });
+/* R97 · S-3: vault audit rows are Owner-only, so the audit is read as the Owner whoever drives the page. */
 const lastAuditFor = (page, table, rowId) => page.evaluate(async ({ table, rowId }) => {
-  const { data } = await window.__mockDb.from("audit_log").select("*").eq("table_name", table).eq("row_id", rowId);
-  return (data || []).sort((a, b) => (a.happened_at < b.happened_at ? -1 : 1)).slice(-1)[0] || null;
+  const data = window.__mock.readTableAs("p4", "audit_log").filter((a) => a.table_name === table && a.row_id === rowId);
+  return data.sort((a, b) => (a.happened_at < b.happened_at ? -1 : 1)).slice(-1)[0] || null;
 }, { table, rowId });
 
 /* --------------------------------------------------------------- friendly-
@@ -412,7 +413,7 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       const newFieldAudit = fchange && fchange.new.find((f) => f.label === NEW_FIELD_LABEL);
       eq("E4 · the audited new secret field is masked", newFieldAudit && newFieldAudit.value, "(hidden)");
       const newUserAudit = fchange && fchange.new.find((f) => f.label === beforeUser.label);
-      eq("E4 · the audited non-secret field is kept in the clear", newUserAudit && newUserAudit.value, beforeUser.value);
+      eq("E4 · the audited non-secret field is masked too (R97 · S-2)", newUserAudit && newUserAudit.value, "(hidden)");
 
       ok("E5 · no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
@@ -475,7 +476,7 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       const auditPw = audit && audit.changes && audit.changes.fields && audit.changes.fields.find((f) => f.label === "Password");
       const auditUser = audit && audit.changes && audit.changes.fields && audit.changes.fields.find((f) => f.label === "Username");
       eq("F5 · the insert audit masks the secret field", auditPw && auditPw.value, "(hidden)");
-      eq("F5 · the insert audit keeps the non-secret field in the clear", auditUser && auditUser.value, "newsys-user");
+      eq("F5 · the insert audit masks the non-secret field too (R97 · S-2)", auditUser && auditUser.value, "(hidden)");
 
       // Re-render the vault list (the save already triggered loadVault(); this
       // confirms the new card is actually painted, with a delete control since
@@ -830,6 +831,52 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       await owner.close();
 
       ok("K5 · no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
+    /* =======================================================================
+       L · R97 · S — a non-owner cannot hide an entry from the Owner (S-1); vault audit rows carry no
+           values (S-2) and are Owner-only (S-3)
+       ======================================================================= */
+    {
+      console.log("\n— L · R97 · S: visible_to write rule, value-free and owner-only vault audit");
+      const page = await newPage(browser, "p2", { skipTour: true });
+      const target = await readRow(page, "vault_entries", { name: "Test BDM" });
+      const hide = await page.evaluate(async (id) => {
+        const { data, error } = await window.__mockDb.from("vault_entries").update({ visible_to: ["adviser"] }).eq("id", id).select();
+        return { n: (data || []).length, error };
+      }, target.id);
+      ok("L1 · adviser PATCH visible_to:['adviser'] → refused 42501", hide.error && hide.error.code === "42501", JSON.stringify(hide));
+      eq("L1 · …the row is still unrestricted", (await readRow(page, "vault_entries", { id: target.id })).visible_to, null);
+      const ins = await page.evaluate(async () => {
+        const { error } = await window.__mockDb.from("vault_entries").insert([{ name: "R97 hidden", visible_to: ["adviser"] }]);
+        return error;
+      });
+      ok("L2 · adviser INSERT visible_to:['adviser'] → refused 42501", ins && ins.code === "42501", JSON.stringify(ins));
+      const keep = await page.evaluate(async (id) => {
+        const { error } = await window.__mockDb.from("vault_entries").update({ visible_to: ["owner", "adviser"] }).eq("id", id);
+        return error;
+      }, target.id);
+      ok("L3 · adviser PATCH visible_to:['owner','adviser'] → saved", !keep, JSON.stringify(keep));
+      eq("L3 · …and the row carries it", (await readRow(page, "vault_entries", { id: target.id })).visible_to, ["owner", "adviser"]);
+      const note = await page.evaluate(async (id) => {
+        const { error } = await window.__mockDb.from("vault_entries").update({ note: "R97 note" }).eq("id", id);
+        return error;
+      }, target.id);
+      ok("L4 · an ordinary edit of that row (visible_to untouched) still saves", !note, JSON.stringify(note));
+      const ownerAudit = await readTableAs(page, "p4", "audit_log");
+      const vaultAudit = ownerAudit.filter((a) => a.table_name === "vault_entries" && a.row_id === target.id);
+      ok("L5 · the Owner sees the vault audit rows for that entry", vaultAudit.length >= 2, String(vaultAudit.length));
+      const values = [];
+      vaultAudit.forEach((a) => { const f = a.changes && a.changes.fields; [].concat(Array.isArray(f) ? f : f ? [].concat(f.old || [], f.new || []) : []).forEach((x) => values.push(x && x.value)); });
+      ok("L6 · no vault audit row carries a field value (S-2)", values.every((v) => v === "(hidden)"), JSON.stringify(values.slice(0, 6)));
+      ok("L7 · the visible_to change is recorded in the audit row", vaultAudit.some((a) => a.changes && a.changes.visible_to), JSON.stringify(vaultAudit.map((a) => Object.keys(a.changes || {}))));
+      const advAudit = await page.evaluate(async () => {
+        const { data, error } = await window.__mockDb.from("audit_log").select("id").eq("table_name", "vault_entries");
+        return { n: (data || []).length, error };
+      });
+      eq("L8 · an adviser reads 0 vault_entries rows from audit_log (S-3)", advAudit, { n: 0, error: null });
+      ok("L9 · no console errors", !page.__err, JSON.stringify(page.__err));
       await page.close();
     }
 

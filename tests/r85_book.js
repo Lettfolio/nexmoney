@@ -292,7 +292,7 @@ const stats = (page) => page.evaluate(() => window.__bookStats());
         && insLog.filter((e) => e.kind === "from" && e.table === "clients" && e.op === "select").length === 1, JSON.stringify(insLog.filter((e) => e.kind === "from" && (e.table === "cases" || e.table === "clients"))));
       ok("B10 · the inserted case is in the book with its embed synthesised", await page.evaluate((s) => { const c = window.__bookPeek().caseById.get(s.caseId); return !!(c && c.clients && c.clients.last_name === "R85Scratch"); }, scratch));
       const fullBefore = (await stats(page)).fullLoads;
-      await page.evaluate(async (s) => { await window.db.from("cases").delete().eq("id", s.caseId); }, scratch);
+      await page.evaluate(async (s) => { window.__mockServiceRole = true; await window.db.from("cases").delete().eq("id", s.caseId); window.__mockServiceRole = false; }, scratch);   /* R97 · S-8 */
       ok("B11 · a delete marks the book for a FULL reload", (await stats(page)).dirty.full === true);
       await goPage(page, HOP, 600); await netReset(page); await page.evaluate(() => window.nav("pipeline")); await netSettle(page);
       const delLog = await netLog(page);

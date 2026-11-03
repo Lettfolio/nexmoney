@@ -612,7 +612,7 @@ async function mkClientCase(page, opts) {
       eq("D6 · the failed email is now cancelled", row3.status, "cancelled");
 
       // Race guard — status changed underneath the rendered button before the click lands.
-      await page.evaluate(async (id) => { await window.__mockDb.from("email_queue").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", id); }, ids.q4);
+      await page.evaluate(async (id) => { window.__mockServiceRole = true; await window.__mockDb.from("email_queue").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", id); window.__mockServiceRole = false; }, ids.q4);   /* R97 · S-4 */
       await page.click(`.em-cancel[data-id="${ids.q4}"]`);
       await wait(page, 900);
       const t4 = await toastText(page);

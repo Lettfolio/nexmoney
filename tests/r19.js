@@ -215,7 +215,7 @@ async function seedMiRows(page, clientId, rows) {
   }, { clientId, rows });
 }
 async function wipeCases(page) {
-  await page.evaluate(async () => { await window.__mockDb.from("cases").delete(); });
+  await page.evaluate(async () => { window.__mockServiceRole = true; await window.__mockDb.from("cases").delete(); window.__mockServiceRole = false; });   /* R97 · S-8: only the service role deletes cases */
 }
 async function mkThrowawayClient(page) {
   return page.evaluate(async () => {

@@ -493,7 +493,7 @@
   /* ------------------------------------------------------ policy (RLS parity) */
   var SENSITIVE_SETTING_KEYS = ["bank_account_name", "bank_sort_code", "bank_account_number", "cron_key", "resend_api_key",
     "vercel_deploy_hook_secret"];   /* R93 · fixer: matches the live regex's "secret" */
-  var AUDIT_OWNER_ONLY_TABLES = ["settings", "profiles"];
+  var AUDIT_OWNER_ONLY_TABLES = ["settings", "profiles", "vault_entries"];   /* R97 · S-3 */
   function pgError(message, code) {
     return { message: message, code: code || "42501", details: null, hint: null };
   }
@@ -545,6 +545,19 @@
     if (table === "email_queue" && op !== "delete" && payload && payload.email_type != null
         && EMAIL_TYPES_ENUM.indexOf(payload.email_type) === -1) {
       return pgError('invalid input value for enum email_type: "' + payload.email_type + '"', "22P02");
+    }
+    /* R97 · S-4 — guard_email_queue_status(): a signed-in caller may not mark a row sent/sending, rewrite a sent
+       row's status/sent_at, or delete a sent/sending row. window.__mockServiceRole = the sender (no auth.uid()). */
+    if (table === "email_queue" && (op === "update" || op === "delete") && window.__mockServiceRole !== true) {
+      var eqBad = (targets || []).some(function (t) {
+        if (op === "delete") return ["queued", "failed", "cancelled"].indexOf(t.status) === -1;
+        var p = payload || {};
+        var st = Object.prototype.hasOwnProperty.call(p, "status") ? p.status : t.status;
+        var sa = Object.prototype.hasOwnProperty.call(p, "sent_at") ? p.sent_at : t.sent_at;
+        if ((st === "sent" || st === "sending") && st !== t.status) return true;
+        return t.status === "sent" && (st !== t.status || (sa || null) !== (t.sent_at || null));
+      });
+      if (eqBad) return pgError("email_queue: only the sender may mark a row as sent, or change or delete a sent row", "42501");
     }
     /* R66 · M6a — referrals_kind_chk, the widened five. */
     if (table === "referrals" && op !== "delete" && payload && payload.kind != null
@@ -632,6 +645,15 @@
       if (!isStaff()) {
         return pgError('new row violates row-level security policy for table "vault_entries"', "42501");
       }
+      /* R97 · S-1 — WITH CHECK: a non-owner never writes a row the Owner cannot see (restricted ⇒ names 'owner'
+         AND the writer's role). */
+      var vtRows = op === "insert" ? [payload || {}] : (targets || []);
+      var vtBad = !isOwner() && vtRows.some(function (t) {
+        var vt = payload && Object.prototype.hasOwnProperty.call(payload, "visible_to") ? payload.visible_to : t.visible_to;
+        if (!Array.isArray(vt) || vt.length === 0) return false;
+        return !(vt.indexOf("owner") >= 0 && vt.indexOf(myRole()) >= 0);
+      });
+      if (vtBad) return pgError('new row violates row-level security policy for table "vault_entries"', "42501");
       return null;
     }
     /* R43: saved_views: per-user on all four ops, with is_staff() on the insert/update WITH CHECK. The two CHECK
@@ -751,6 +773,14 @@
         if (op === "update" && payload && Object.prototype.hasOwnProperty.call(payload, "role")) {
           return pgError("Only an Owner can change a role", "P0001");
         }
+        /* R97 · S-5 — guard_role_change(): full_name / email are Owner-edited (audit labels use them). */
+        if (op === "update" && payload && (targets || []).some(function (t) {
+          return ["full_name", "email"].some(function (k) {
+            return Object.prototype.hasOwnProperty.call(payload, k) && (payload[k] || null) !== (t[k] || null);
+          });
+        })) {
+          return pgError("Only an Owner can change a name or email", "42501");
+        }
         /* M1 — "profiles self edit": update of one's OWN row only. No self-INSERT. */
         var selfOnly = op === "update" && (targets || []).length > 0 &&
           (targets || []).every(function (t) { return t.id === CURRENT_UID; });
@@ -766,6 +796,10 @@
           return pgError("Cannot remove the last Owner — promote someone else first", "P0001");
         }
       }
+    }
+    /* R97 · S-8 — "cases delete admin" is gone: no API caller deletes a case (client delete still cascades). */
+    if (op === "delete" && table === "cases" && window.__mockServiceRole !== true) {
+      return pgError('permission denied: a case cannot be deleted', "42501");
     }
     if (op === "delete" && (table === "clients" || table === "cases") && !isAdminOrOwner()) {
       return pgError('permission denied: deleting a ' + (table === "cases" ? "case" : "client") + ' is Owner / Administrator only', "42501");
@@ -872,7 +906,8 @@
      replaced with "(hidden)"; the label and the secret flag itself stay in the clear… */
   function maskVaultFieldsArray(arr) {
     return (Array.isArray(arr) ? arr : []).map(function (f) {
-      if (f && f.secret) return { label: f.label, value: AUDIT_HIDDEN, secret: true };
+      /* R97 · S-2 — every value is hidden now, flagged secret or not (labels kept). */
+      if (f && typeof f === "object") return { label: f.label, value: AUDIT_HIDDEN, secret: !!f.secret };
       return f;
     });
   }

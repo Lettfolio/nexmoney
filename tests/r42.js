@@ -220,7 +220,7 @@ async function insertNoLoanCase(page) {
 async function wipeToZeroInformational(page) {
   return page.evaluate(async () => {
     const db = window.__mockDb;
-    await db.from("cases").delete();
+    window.__mockServiceRole = true; await db.from("cases").delete(); window.__mockServiceRole = false;   /* R97 · S-8 */
     const { data: clients } = await db.from("clients").select("id");
     for (const c of clients || []) {
       await db.from("clients").update({ is_vulnerable: false, suppress_automation: false }).eq("id", c.id);
