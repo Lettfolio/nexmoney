@@ -3888,6 +3888,7 @@ function showLogin() {
   $("#assistant-fab").classList.add("hidden");
   $("#assistant-drawer").classList.add("hidden");
   restoreLoginCard();   // R86 · A3 — a challenge / enrolment / recovery takeover ends with the session it belonged to
+  vaultForget();   // R97 · C-6
   signedOutOverOpenWork(); // R76 · B4 — no-op unless a modal/overlay is open over this login
 }
 /* BACKEND-R4 §1: resolve the caller's role from the my_role() RPC, which is the same expression the RLS
@@ -13834,8 +13835,9 @@ async function bulkMoveStage(targetStage) {
      tasks of a case that stops, so the bulk path does the same thing here and the two agree… */
   let tasksClosed = 0;
   if (lost && movedIds.length) {
-    const { data: closed, error: tErr } = await db.from("case_tasks")
-      .update({ done_at: new Date().toISOString() }).in("case_id", movedIds).is("done_at", null).select("id");
+    const doneAt = new Date().toISOString();
+    const { data: closed, error: tErr } = await inChunks(movedIds, (sl) => db.from("case_tasks")   // R97 · C-5: feed-sized list
+      .update({ done_at: doneAt }).in("case_id", sl).is("done_at", null).select("id"));
     if (!tErr) tasksClosed = (closed || []).length;
   }
   // All four buckets, always: the old summary dropped the no-ops entirely, so the numbers never
@@ -16075,7 +16077,7 @@ window.factFind = async function (caseId, clientId) {
     const signedBy = caseSignOffName(kase);
     const subj = encodeURIComponent(`${settings.company_name || "NexMoney"} — your quick mortgage fact-find`);
     const body = encodeURIComponent(`Hi ${(cl.first_name || "there").trim()},\n\nBefore we speak, please could you complete this short, secure fact-find? It takes about 5–10 minutes and you can save and come back to it:\n\n${link}\n\nThanks,\n${signedBy}`);
-    window.open(`mailto:${cl.email}?subject=${subj}&body=${body}`);
+    window.open(`mailto:${encodeURIComponent(cl.email).replace(/%40/g, "@")}?subject=${subj}&body=${body}`);   // R97 · C-8: mailLink's rule
     const who = [cl.first_name, cl.last_name].filter(Boolean).join(" ").trim() || cl.email;
     const { error: nErr } = await db.from("case_notes").insert({
       case_id: caseId,
@@ -16934,6 +16936,7 @@ async function logCallSave(root, c, hooks) {
 /* R83: the R78 · A5 stale-response guard, on the case modal. Every page has one; this modal, with a dozen
    awaits between the click and the paint, did not… */
 let caseOpenSeq = 0;
+let clientOpenSeq = 0;   // R97 · C-3: the same guard on openClient (a slow first open repainted over the second)
 /* R90 · B: openCase, SPLIT ALONG ITS OWN SEAMS. Every function below was a block (or a closure) inside
    window.openCase; each is the same code, in the same order, reading the one per-open context object `k` the
    orchestrator fills as the reads land. … */
@@ -20802,6 +20805,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
      client, fix-focused). Always cleared, so a plain open of the same client later can never inherit a… */
   const fixRetryCtx = (FIX_RETRY_CTX && FIX_RETRY_CTX.clientId === id && focus) ? FIX_RETRY_CTX : null;
   FIX_RETRY_CTX = null;
+  const seq = ++clientOpenSeq;   // R97 · C-3
   let c = {};
   let cases = [];
   let tlItems = [];
@@ -20813,6 +20817,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       db.from("clients").select("*").eq("id", id).single(),
       db.from("cases").select("*").eq("client_id", id).order("created_at", { ascending: false }),
     ]);
+    if (seq !== clientOpenSeq) return;   // R97 · C-3
     if (clErr || !cl) return toast("Client not found — it may have been deleted or you don't have access.");
     /* R83: the cases error was discarded: a failed read opened the record on "No cases yet", wiped the
        property registration for this client… */
@@ -20824,6 +20829,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     // audit_row() denormalises client_id onto the case/task/note/appointment rows too, so ONE
     // query returns the whole record's forensic history. Soft-failing: no history ≠ no modal.
     [tlItems, auditRows] = await Promise.all([buildClientTimeline(id, cases), loadAuditRows("client_id", id)]);
+    if (seq !== clientOpenSeq) return;   // R97 · C-3
     // BUILD 7d (defect 31): reuse Data Health's existing find_duplicate_clients RPC (no new detection engine)
     // so a duplicate spotted here, on the client record itself…
     try {
@@ -20839,6 +20845,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
         ? { id: pair.b_id, name: pair.b_name, reason: pair.reason, score: pair.score }
         : { id: pair.a_id, name: pair.a_name, reason: pair.reason, score: pair.score };
     } catch (e) { /* no banner */ }
+    if (seq !== clientOpenSeq) return;   // R97 · C-3
   }
   /* R9-4 · THE ADVOCACY LINE. Two facts, one line, and only where there is something to say —
      "Referred 0 clients" on every record in the book is noise, and this modal has none to spare. */
@@ -20953,6 +20960,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       ${clientPortfolioHtml(cases)}
       ${clientCasesHtml(cases)}
     </div>` : "";
+  if (seq !== clientOpenSeq) return;   // R97 · C-3 — last check before the paint (advocacy reads above awaited)
   $("#modal").innerHTML = `
     
     <h3>${id ? esc([c.first_name, c.last_name].filter(Boolean).join(" ") || "Client details") : "New client"}${id ? " " + careChipsHtml(c, { id: "client-care-chips" }) : ""}</h3>
@@ -26349,6 +26357,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r95";   // R89
+window.__nxTag_app = "r97";   // R89
 
 init();

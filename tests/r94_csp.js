@@ -125,8 +125,15 @@ async function ensureServer() {
     JS_CLASS_HASH === `'sha256-${crypto.createHash("sha256").update(JS_CLASS).digest("base64")}'`);
   ok("A8c · STRICT: neither script-src carries 'unsafe-inline' or 'unsafe-hashes'",
     !/unsafe-inline|unsafe-hashes/.test((SITE["script-src"] || []).concat(ADMIN["script-src"] || []).join(" ")), JSON.stringify([SITE["script-src"], ADMIN["script-src"]]));
-  ok("A8d · admin script-src is exactly 'self' + the supabase-js and SheetJS paths",
-    JSON.stringify(ADMIN["script-src"]) === JSON.stringify(["'self'", "https://cdn.jsdelivr.net/npm/@supabase/", "https://cdn.sheetjs.com/xlsx-0.20.2/"]), JSON.stringify(ADMIN["script-src"]));
+  // R97 · C-2: the jsDelivr entry is the one supabase-js FILE, not the whole @supabase/ prefix.
+  const SUPA_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js";
+  ok("A8d · admin script-src is exactly 'self' + the exact supabase-js file + the SheetJS path",
+    JSON.stringify(ADMIN["script-src"]) === JSON.stringify(["'self'", SUPA_JS, "https://cdn.sheetjs.com/xlsx-0.20.2/"]), JSON.stringify(ADMIN["script-src"]));
+  for (const f of ["admin/index.html", "admin/introducer.html"]) {
+    const tags = [...read(f).matchAll(/<script\b[^>]*\bsrc="https:\/\/cdn\.jsdelivr\.net\/[^"]+"[^>]*>/g)].map((m) => m[0]);
+    ok(`A8e · ${f}: its one jsDelivr tag is that exact URL and carries SRI`,
+      tags.length === 1 && tags[0].includes(`src="${SUPA_JS}"`) && /\bintegrity="sha384-[^"]+"/.test(tags[0]) && /crossorigin="anonymous"/.test(tags[0]), JSON.stringify(tags));
+  }
   ok("A9 · no realtime: admin connect-src has no wss:// (the code opens no channel)",
     !sourcesFor(ADMIN, "connect-src").some((s) => /^wss:/.test(s)) && !/\.channel\(/.test(["core", "reports-money", "diary", "import", "vault", "site", "app"].map((f) => read(`admin/${f}.js`)).join("\n")));
 

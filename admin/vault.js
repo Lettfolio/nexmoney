@@ -106,6 +106,13 @@ function vaultMatch(r, q) {
     .filter(Boolean).join(" ").toLowerCase();
   return hay.indexOf(q) >= 0;
 }
+/* R97 · C-6: a sign-out (chosen or not) must not leave the vault's secrets in the DOM behind the login card. */
+function vaultForget() {
+  VAULT_ROWS = [];
+  vaultLoaded = false;
+  const list = $("#vault-list");
+  if (list) list.innerHTML = "";
+}
 async function loadVault() {
   const list = $("#vault-list");
   if (!list) return;
@@ -392,4 +399,4 @@ async function deleteVaultEntry(id) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_vault = "r95";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_vault = "r97";   // R89 — the CTO bumps all seven together at each gate

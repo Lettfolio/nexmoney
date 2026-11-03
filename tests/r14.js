@@ -833,6 +833,31 @@ const fmtMGT = (n) => (n == null || n === "" ? "—" : Number(n).toLocaleString(
       await page.close();
     }
 
+    /* =======================================================================
+       L · R97 · C-6 — an involuntary sign-out purges the vault from the DOM
+       ======================================================================= */
+    {
+      console.log("\n— L · vault secrets do not survive a sign-out behind the login card");
+      const page = await newPage(browser, "p4", { skipTour: true });
+      await goto(page, "vault", 1500);
+      const before = await page.evaluate(() => ({ cards: document.querySelectorAll("#vault-list .vault-card, #vault-list [data-id]").length, vals: document.querySelectorAll("[data-val]").length }));
+      ok("L1 · the vault rendered with masked secrets first (the purge below is not vacuous)", before.vals > 0, JSON.stringify(before));
+      await page.evaluate(async () => { await db.auth.signOut(); });
+      await wait(page, 800);
+      const after = await page.evaluate(() => ({
+        loginShown: !document.querySelector("#login-view").classList.contains("hidden"),
+        listHtml: (document.querySelector("#vault-list") || {}).innerHTML,
+        vals: document.querySelectorAll("[data-val]").length,
+        rows: typeof VAULT_ROWS === "undefined" ? "n/a" : VAULT_ROWS.length,
+      }));
+      ok("L2 · the login card is showing (the !session path ran)", after.loginShown, JSON.stringify(after));
+      eq("L3 · #vault-list is empty", after.listHtml, "");
+      eq("L4 · no [data-val] secret is left anywhere in the DOM", after.vals, 0);
+      eq("L5 · VAULT_ROWS is emptied", after.rows, 0);
+      ok("L6 · no console errors", !page.__err, JSON.stringify(page.__err));
+      await page.close();
+    }
+
   } finally {
     await browser.close();
     if (server) { try { process.kill(-server.pid); } catch (e) { try { server.kill(); } catch (_) { } } }

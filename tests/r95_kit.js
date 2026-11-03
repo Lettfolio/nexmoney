@@ -207,6 +207,24 @@ async function ensureServer() {
     ok("H2 · admin/app.js has no javascript: URL", !/javascript:/.test(app));
     ok("H3 · core.js: the kit is fenced", /\/\* ===== R95 DELEGATION KIT =====/.test(core) && /\/\* ===== END R95 DELEGATION KIT ===== \*\//.test(core));
     ok("H4 · the chip-strip overflow wiring is gone", !/wireChipStripOverflow/.test(app));
+
+    /* R97 · C-9: with JS off (or the bundle failing) the enquiry form must not GET the visitor's
+       name, email and phone into the URL — history, logs and Referer would all carry them. */
+    const contact = fs.readFileSync(path.join(REPO, "contact.html"), "utf8");
+    const formTag = (contact.match(/<form\b[^>]*id="enquiryForm"[^>]*>/) || [""])[0];
+    ok("I1 · contact.html's enquiry form declares method=\"post\"", /\bmethod="post"/i.test(formTag), formTag);
+    const nojs = await browser.newContext({ javaScriptEnabled: false });
+    const cp = await nojs.newPage();
+    await cp.goto(`http://localhost:${PORT}/contact.html`, { waitUntil: "load" });
+    await cp.fill("#fname", "Nojs"); await cp.fill("#lname", "Visitor");
+    await cp.fill("#email", "nojs.visitor@example.com"); await cp.fill("#phone", "07700900123");
+    await cp.selectOption("#enquiryType", "remortgage");
+    for (const sel of await cp.$$eval("#enquiryForm [required]", (els) => els.filter((e) => !e.value && e.type !== "checkbox").map((e) => "#" + e.id))) await cp.fill(sel, "x");
+    await cp.check("#consent", { force: true });   // force: the page's CSS reveal animation never settles with JS off
+    const [nav] = await Promise.all([cp.waitForNavigation({ waitUntil: "domcontentloaded" }).catch(() => null), cp.click("#enquiryForm button[type=submit]", { force: true })]);
+    ok("I2a · the no-JS submit really left the page (so I2 is not vacuous)", !!nav, String(nav && nav.status()));
+    ok("I2 · a no-JS submit leaves no email= (or any field) in the URL", !/[?&](email|fname|phone)=/.test(cp.url()), cp.url());
+    await nojs.close();
   } catch (e) {
     failures.push("HARNESS: " + (e && e.stack || e));
     console.log("  ✗ HARNESS: " + (e && e.stack || e));
