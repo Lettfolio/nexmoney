@@ -106,7 +106,7 @@ $("#login-form").addEventListener("submit", async (e) => {
   if (error) { $("#login-error").textContent = error.message; $("#login-error").classList.remove("hidden"); return; }
   showApp(data.session);
 });
-$("#logout-btn").addEventListener("click", async () => { await db.auth.signOut(); showLogin(); });
+$("#logout-btn").addEventListener("click", async () => { await db.auth.signOut(); location.reload(); });   // R97 · C-7: as app.js — no referred names left in the DOM
 // R78 · B6 — send the recovery email. Uses the address already typed in the box where there is
 // one; the redirect comes BACK to this page, whose recovery handler (above) can finish the job.
 $("#forgot-btn").addEventListener("click", async () => {

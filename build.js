@@ -223,7 +223,10 @@ function applyPageRow(html, row) {
 
 /* ---------- guides: Markdown → allow-listed HTML */
 function safeHref(href, imageOnly) {
-  const h = String(href || "").trim();
+  /* R97 · C-10: browsers drop tab/newline/control characters inside a URL and read "\" as "/", so
+     "java\tscript:" and "/\evil.com" slipped past the tests below. Strip first; refuse a leading pair of slashes. */
+  const h = String(href || "").replace(/[\u0000- \u007f]/g, "");
+  if (/^[\\/][\\/]/.test(h)) return null;
   if (/^https:\/\//i.test(h)) return h;
   if (!imageOnly && /^mailto:[^\s<>"]+$/i.test(h)) return h;
   if (/^\/(?!\/)/.test(h) || (!imageOnly && /^#/.test(h))) return h;
