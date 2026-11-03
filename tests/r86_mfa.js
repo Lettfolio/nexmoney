@@ -550,7 +550,7 @@ const errLog = (page) => page.evaluate(() => (window.__errorLog || []).length);
     }
 
     /* =====================================================================
-       §H · EDGE FUNCTIONS — the seven signed-in functions require session_ok()
+       §H · EDGE FUNCTIONS — the signed-in functions require session_ok() (R97 · E-1: process-emails too)
        ===================================================================== */
     console.log("\n— §H · EDGE FUNCTIONS · invite-user / send-sms refuse at aal1 (403 second factor required), answer at aal2");
     {
@@ -560,12 +560,14 @@ const errLog = (page) => page.evaluate(() => (window.__errorLog || []).length);
         const r1 = await window.__mockDb.functions.invoke("invite-user", { body: { email: "new.adviser@example.com", full_name: "New Adviser", role: "adviser" } });
         const r2 = await window.__mockDb.functions.invoke("send-sms", { body: {} });
         const r3 = await window.__mockDb.functions.invoke("assistant", { body: { messages: [{ role: "user", content: "hi" }] } });
+        const r4 = await window.__mockDb.functions.invoke("process-emails", { body: {} });   // R97 · E-1
         const raw = await fetch("https://mock.supabase.co/functions/v1/invite-user", { method: "POST", body: JSON.stringify({ email: "x@example.com", full_name: "X", role: "adviser" }) });
-        return { r1: r1.data, r2: r2.data, r3: r3.data, status: raw.status, profiles: window.__mock.db.profiles.length };
+        return { r1: r1.data, r2: r2.data, r3: r3.data, r4: r4.data, status: raw.status, profiles: window.__mock.db.profiles.length };
       });
       eq("H1 · invite-user at aal1 → { error: 'second factor required' } (HTTP 403) — no login minted, no temp_password", [before.r1, before.status, "temp_password" in (before.r1 || {})], [{ error: "second factor required" }, 403, false]);
       eq("H1 · send-sms at aal1 → the same refusal", before.r2, { error: "second factor required" });
       eq("H1 · assistant at aal1 → the same refusal", before.r3, { error: "second factor required" });
+      eq("H1 · process-emails at aal1 → the same refusal (R97 · E-1: no queueing pass, no flush, no heartbeat)", before.r4, { error: "second factor required" });
       await typeCode(page, "#mfa-code", "000000");
       await until(page, () => !document.querySelector("#app-view").classList.contains("hidden"));
       await netSettle(page);
