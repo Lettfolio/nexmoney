@@ -1,9 +1,8 @@
 -- db/_live_functions_snapshot.sql — every function in production public schema (Supabase project sclghkmvzpwtmnzbkaoe),
--- as pg_get_functiondef() prints it. Snapshot taken 24 Sep 2026 (R91 tidy; R90 took the 17 the app probes, R91 added the
--- other 23 incl. the R86 pair get_team_mfa/session_ok). Evidence for the retired migration layer (HARNESS.md, R90 · A);
--- not applied by anything. Refresh: select proname, prosecdef, pg_get_functiondef(oid) from pg_proc where pronamespace =
+-- as pg_get_functiondef() prints it. Snapshot taken 3 Nov 2026 (R97 · D-1 refresh via the read-only MCP; the 24 Sep 2026
+-- R91 snapshot pre-dated R86's session_ok() bodies and the R93/R95 functions). Evidence only; not applied by anything.
+-- Refresh: select proname, prosecdef, pg_get_functiondef(oid) from pg_proc where pronamespace =
 -- (select oid from pg_namespace where nspname = 'public') order by proname.
--- R95 · E: get_introducer_cases/_clients added as the R95 migration creates them (live after the R95 merge).
 
 -- ===== ai_usage_bump (secdef=True) =====
 CREATE OR REPLACE FUNCTION public.ai_usage_bump(p_uid uuid, p_fn text, p_bytes bigint)
@@ -310,7 +309,7 @@ CREATE OR REPLACE FUNCTION public.find_duplicate_clients()
 AS $function$
 declare uid uuid := auth.uid();
 begin
-  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff')) then
+  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
     return '[]'::jsonb;
   end if;
   return coalesce((
@@ -350,7 +349,7 @@ declare
   -- appointments and the rate-end day counts were all a day out for anyone working late/early.
   today date := (now() at time zone 'Europe/London')::date;  -- R84
 begin
-  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff')) then
+  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
     return '[]'::jsonb;
   end if;
 
@@ -488,7 +487,7 @@ declare
 begin
   -- R85: the house staff guard (get_briefing's test), raising rather than returning empty.
   if uid is null or not exists (
-    select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff')
+    select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff') and public.session_ok()  -- R86
   ) then
     raise exception 'permission denied: get_dashboard_counts is for staff' using errcode = '42501';
   end if;
@@ -529,7 +528,7 @@ declare
   uid uuid := auth.uid();
   sent_ever boolean;
 begin
-  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff')) then
+  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
     return '{}'::jsonb;
   end if;
   select exists(select 1 from email_queue where status = 'sent') into sent_ever;
@@ -615,7 +614,7 @@ declare
   uid uuid := auth.uid();
   avg_comm numeric := coalesce(nullif(get_setting('protection_avg_commission'),'')::numeric, 850);
 begin
-  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff')) then
+  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
     return '[]'::jsonb;
   end if;
   if not is_admin_or_owner() then
@@ -676,7 +675,7 @@ declare
   uid uuid := auth.uid();
   n bigint;
 begin
-  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff')) then
+  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
     return jsonb_build_object('total', 0);
   end if;
   if not is_admin_or_owner() then
@@ -703,7 +702,7 @@ declare
   uid uuid := auth.uid();
   yr int := extract(year from current_date);
 begin
-  if not exists (select 1 from profiles where id = uid and role in ('owner','admin')) then
+  if not exists (select 1 from profiles where id = uid and role in ('owner','admin') and public.session_ok()) then  -- R86
     return '{}'::jsonb;
   end if;
 
@@ -824,7 +823,7 @@ AS $function$
 declare
   uid uuid := auth.uid();
 begin
-  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff')) then
+  if not exists (select 1 from profiles where id = uid and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
     return '[]'::jsonb;
   end if;
   return coalesce((
@@ -932,7 +931,7 @@ CREATE OR REPLACE FUNCTION public.has_bank_details()
  LANGUAGE sql
  STABLE SECURITY DEFINER
  SET search_path TO 'public'
-AS $function$ select coalesce(
+AS $function$ select public.session_ok() and coalesce(  -- R86
      (select value from settings where key = 'bank_account_name'), '') <> ''
    and coalesce(
      (select value from settings where key = 'bank_sort_code'), '') <> ''
@@ -1061,7 +1060,7 @@ CREATE OR REPLACE FUNCTION public.mark_tour_seen()
  SET search_path TO 'public'
 AS $function$
   update profiles set tour_seen_at = now()
-  where id = auth.uid() and tour_seen_at is null;
+  where id = auth.uid() and tour_seen_at is null and public.session_ok();  -- R86
 $function$
 
 
@@ -1142,6 +1141,12 @@ declare
   n_reviews int := 0;
   n_referrals int := 0;
 begin
+  -- R86 · V (P2): the run_watchtower guard — a SIGNED-IN caller who is not verified staff gets an
+  -- empty result; the cron / service-role path (auth.uid() null) is untouched.
+  if auth.uid() is not null
+     and not exists (select 1 from profiles where id = auth.uid() and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
+    return '{}'::jsonb;
+  end if;
   -- R84 (F3): serialise runs. Cron (08:00 UTC) and a human pressing "Run now" — or two humans —
   -- used to race under READ COMMITTED: both saw rate_reminder_queued_at / review_requested_at
   -- as null and both inserted, giving duplicate successor cases and duplicate client emails.
@@ -1313,6 +1318,12 @@ declare n_birthday int := 0; n_anniv int := 0; n_annual int := 0;
                                and get_setting('doc_chase_days')::int > 0
                                then get_setting('doc_chase_days')::int else 3 end;
 begin
+  -- R86 · V (P2): the run_watchtower guard — a SIGNED-IN caller who is not verified staff gets an
+  -- empty result; the cron / service-role path (auth.uid() null) is untouched.
+  if auth.uid() is not null
+     and not exists (select 1 from profiles where id = auth.uid() and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
+    return '{}'::jsonb;
+  end if;
   -- R84 (F3): same advisory lock key as queue_automated_emails — the two functions form one
   -- critical section per transaction, so an overlapping cron/"Run now" pair cannot both pass the
   -- count/exists guards below and queue duplicate birthday, anniversary, chase or reminder rows.
@@ -1538,7 +1549,7 @@ declare
   v_appts int := 0;
   v_now   timestamptz := now();
 begin
-  if not public.is_owner() then
+  if not public.is_owner() or not public.session_ok() then  -- R86
     raise exception 'Only an Owner can hand over a colleague''s work'
       using errcode = '42501';
   end if;
@@ -1594,7 +1605,7 @@ declare
 begin
   -- Authorization: block signed-in non-staff. Null uid = service role / cron = allowed.
   if auth.uid() is not null
-     and not exists (select 1 from profiles where id = auth.uid() and role in ('owner','admin','adviser','staff')) then
+     and not exists (select 1 from profiles where id = auth.uid() and role in ('owner','admin','adviser','staff') and public.session_ok()) then  -- R86
     return jsonb_build_object('error', 'forbidden');
   end if;
 
@@ -1877,6 +1888,79 @@ end
 $function$
 
 
+-- ===== site_hook_is_set (secdef=True) =====
+CREATE OR REPLACE FUNCTION public.site_hook_is_set()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select public.session_ok() and public.is_admin_or_owner()
+     and coalesce((select value from public.settings where key = 'vercel_deploy_hook_secret'), '') <> ''
+$function$
+
+
+-- ===== site_pages_stamp_author (secdef=False) =====
+CREATE OR REPLACE FUNCTION public.site_pages_stamp_author()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$ begin new.updated_by := auth.uid(); return new; end $function$
+
+
+-- ===== site_posts_stamp_author (secdef=False) =====
+CREATE OR REPLACE FUNCTION public.site_posts_stamp_author()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$ begin new.author_id := coalesce(new.author_id, auth.uid()); return new; end $function$
+
+
+-- ===== site_posts_status_guard (secdef=False) =====
+CREATE OR REPLACE FUNCTION public.site_posts_status_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  -- R93 · fixer: a non-owner edit of approved/published content demotes it — approval covers exact words
+  if tg_op = 'UPDATE' and current_user in ('authenticated', 'anon') and not public.is_owner()
+     and old.status in ('approved', 'published')
+     and (new.title is distinct from old.title or new.slug is distinct from old.slug
+          or new.excerpt is distinct from old.excerpt or new.body_md is distinct from old.body_md
+          or new.cover_image is distinct from old.cover_image) then
+    new.status := 'draft';
+    new.approved_by := null;
+    new.approved_at := null;
+    new.published_at := null;
+  end if;
+  if new.status in ('approved', 'published')
+     and (tg_op = 'INSERT' or new.status is distinct from old.status) then
+    -- R93: API roles only; postgres / service_role (SQL editor, edge functions) are not end users
+    if current_user in ('authenticated', 'anon') and not public.is_owner() then
+      raise exception 'Only the owner can approve' using errcode = '42501';
+    end if;
+    if new.status = 'approved' then
+      new.approved_by := auth.uid();
+      new.approved_at := now();
+    end if;
+  end if;
+  if new.status = 'published' and new.published_at is null then
+    new.published_at := now();
+  end if;
+  return new;
+end
+$function$
+
+
+-- ===== site_touch_updated_at (secdef=False) =====
+CREATE OR REPLACE FUNCTION public.site_touch_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$ begin new.updated_at := now(); return new; end $function$
+
+
 -- ===== touch_case (secdef=False) =====
 CREATE OR REPLACE FUNCTION public.touch_case()
  RETURNS trigger
@@ -1914,3 +1998,4 @@ CREATE OR REPLACE FUNCTION public.touch_vault_updated()
  LANGUAGE plpgsql
  SET search_path TO ''
 AS $function$ begin new.updated_at := now(); return new; end $function$
+

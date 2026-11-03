@@ -39,17 +39,54 @@
  *   · db/columns.json must map table -> ARRAY of column names. The raw columns.sql output
  *     is a comma-joined string per table; a snapshot pasted in unconverted now fails with a
  *     named reason instead of `p.filter is not a function` (R83 · fixH).
+ *
+ * R97 · D-1 — THE session_ok() RULE (HARNESS.md standing rule, R86). Before the column check it
+ * reads `db/_live_functions_snapshot.sql` (production's function bodies as pg_get_functiondef()
+ * prints them) and fails when a SECURITY DEFINER body that gates on the caller's role
+ * (`role in (`) does not also call `session_ok(`. Skipped: the helpers themselves (`is_*`,
+ * `session_ok`, `my_role`) and trigger functions (RETURNS trigger — no caller to gate).
+ *   node db/check-schema-drift.js --functions-only [--snapshot <file>]   # this rule alone, no browser
  */
 const fs = require("fs");
 const path = require("path");
-const { chromium } = require("playwright");
 
 const REPO = path.resolve(__dirname, "..");
 const PORT = 8151;
 const QUIET = process.argv.includes("--quiet");
+const FUNCTIONS_ONLY = process.argv.includes("--functions-only");
+const argAfter = (flag) => { const i = process.argv.indexOf(flag); return i > -1 ? process.argv[i + 1] : null; };
+const SNAPSHOT = argAfter("--snapshot") || path.join(REPO, "db", "_live_functions_snapshot.sql");
 const log = (...a) => { if (!QUIET) console.log(...a); };
 
+// R97 · D-1 — returns the names of SECURITY DEFINER role-gated bodies that lack session_ok().
+function sessionOkViolations(sql) {
+  const re = /^-- ===== (\S+) \(secdef=(\w+)\) =====$/gm;
+  const heads = [];
+  let m;
+  while ((m = re.exec(sql))) heads.push({ name: m[1], start: m.index, end: re.lastIndex });
+  if (!heads.length) throw new Error(`${SNAPSHOT}: no '-- ===== <name> (secdef=…) =====' headers found`);
+  const bad = [];
+  heads.forEach((h, i) => {
+    const body = sql.slice(h.end, i + 1 < heads.length ? heads[i + 1].start : sql.length);
+    if (!/SECURITY DEFINER/i.test(body)) return;
+    if (/^is_/.test(h.name) || h.name === "session_ok" || h.name === "my_role") return;
+    if (/RETURNS trigger/i.test(body)) return;
+    if (/role\s+in\s*\(/i.test(body) && !/session_ok\s*\(/i.test(body)) bad.push(h.name);
+  });
+  return { bad, total: heads.length };
+}
+
 (async () => {
+  const fnCheck = sessionOkViolations(fs.readFileSync(SNAPSHOT, "utf8"));
+  if (fnCheck.bad.length) {
+    console.error(`SESSION_OK DRIFT: ${fnCheck.bad.length} SECURITY DEFINER function(s) gate on role without public.session_ok(): ${fnCheck.bad.join(", ")}`);
+    console.error(`HARNESS.md standing rule (R86): AND the role check with public.session_ok(). Fix the function, then refresh the snapshot.`);
+    process.exit(1);
+  }
+  log(`session_ok OK — ${fnCheck.total} functions in the snapshot; every SECURITY DEFINER role gate carries session_ok().`);
+  if (FUNCTIONS_ONLY) return;
+
+  const { chromium } = require("playwright");
   const prod = JSON.parse(fs.readFileSync(path.join(REPO, "db", "columns.json"), "utf8"));
   // R83 · fixH — the snapshot must be table -> sorted array. A raw columns.sql paste is a
   // comma-joined string per table; refuse it by name rather than crashing further down.

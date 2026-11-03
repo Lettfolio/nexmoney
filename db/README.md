@@ -7,7 +7,10 @@ The SQL record of the live Supabase project `sclghkmvzpwtmnzbkaoe` (eu-west-2).
 - `db/r<NN>/` — the files of each round that Daniel pastes in the SQL editor. The editor records
   no migration row, so these folders are the only record of what was pasted (R85-02, R93, R94…).
 - `_live_functions_snapshot.sql`, `columns.json` / `columns.sql`, `check-schema-drift.js` — the
-  schema-drift check the battery runs against the app's column use.
+  schema-drift check the battery runs against the app's column use. The function snapshot was
+  refreshed from production on 3 Nov 2026 (R97 · D-1) and the check fails on any SECURITY DEFINER
+  body that gates on `role in (` without `session_ok()` (helpers `is_*`/`session_ok`/`my_role` and
+  triggers skipped). Refresh it with the query in its header after any function change.
 
 House style for a `db/r<NN>/` file (see `r86/01_session_ok.sql`, `r93/01_site_tables.sql`):
 a header saying WHAT and WHY, idempotent statements (`create or replace`, `if not exists`,

@@ -28,8 +28,9 @@ the suites expect the checkout at `/root/nx`. Playwright 1.56.0 is installed by 
 
 **Every change is a pull request → the CI battery passes → Daniel merges. Nobody pushes `main`.**
 Vercel deploys `main`; the change is then live-verified (served hashes, build tags, error log).
-Edge functions and SQL are not deployed by a merge: edge is deployed from `edge/` by the CTO,
-SQL in `db/` is pasted by Daniel. Details: `HARNESS.md` › "Deploy — every change is a PR".
+SQL in `supabase/migrations/` IS applied to production by the merge (review it as live SQL); one-off
+scripts in `db/` are pasted by Daniel. Edge functions are not deployed by a merge: the CTO deploys them
+from `edge/`. Details: `HARNESS.md` › "Deploy — every change is a PR".
 
 ## Where things are
 

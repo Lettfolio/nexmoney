@@ -1,0 +1,17 @@
+# R97 · D-3 (supply-2) — paths whose change reaches production or rewrites the gate that checks it.
+# A PR touching any of them needs the code owner's review once the main ruleset has
+# "Require review from Code Owners" switched on (Daniel's click, R97 owner decision D4).
+#   supabase/migrations/  is applied to production by the merge (supabase/README.md)
+#   .github/ + tests/run-battery.sh  define the required checks
+#   build.js, vercel.json, package*.json  decide what ships and how it is built
+#   edge/  edge-function source deployed from here
+# Owner: @Lettfolio — the account that owns Lettfolio/nexmoney and merges its PRs
+# (GitHub web merges on origin/main are authored "Lettfolio <daniel@lettfolio.uk>").
+/supabase/migrations/   @Lettfolio
+/.github/               @Lettfolio
+/tests/run-battery.sh   @Lettfolio
+/build.js               @Lettfolio
+/vercel.json            @Lettfolio
+/package.json           @Lettfolio
+/package-lock.json      @Lettfolio
+/edge/                  @Lettfolio
