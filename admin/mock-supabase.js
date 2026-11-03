@@ -6402,6 +6402,8 @@
          interactive caller. owner/admin/adviser/staff all pass now. */
       if (!isStaff()) return { __status: 403, error: "forbidden — staff only" };
       var ids = body && Array.isArray(body.queue_ids) ? body.queue_ids.filter(Boolean) : null;
+      /* R97 · HF1 (v23 parity, E-1): the full run is the cron's or an owner/admin's; an adviser names its rows. */
+      if (!ids && !isAdminOrOwner()) return { __status: 403, error: "a full run is owner/admin only — send named rows with queue_ids" };
       /* R68 · M15: THE SAFE PROBE. {queue_ids: []} names ZERO rows, so in production v14 short-circuits before it
          queues, sends, fails or stamps anything and answers three questions instead: is a Resend key set on the
          server, is the hold on, and how many emails are due right now. … */
@@ -6472,6 +6474,7 @@
           return {
             held: heldRun,
             pending: due.length,
+            skipped_care: 0, skipped_stale: 0,   /* R97 · HF1: v23's held response carries both counters (0: nothing ran) */
             warning: heldRun
               ? "email_hold is on — nothing was sent; " + due.length + " due email" + (due.length === 1 ? "" : "s") + " stay held in the queue."
               : "RESEND_API_KEY not set — nothing can be sent from this server."
@@ -6493,11 +6496,24 @@
           held: true,
           pending: due.length,
           scoped: true,
+          skipped_care: 0, skipped_stale: 0,   /* R97 · HF1 */
           warning: "email_hold is on — nothing was sent; the " + due.length + " named email" + (due.length === 1 ? "" : "s") + " stay held in the queue."
         };
       }
       /* R79 · A5: v19: the unscoped run takes the OLDEST-due rows first, capped at v18's 50-per-run. The
          scoped path names its rows and is unchanged. */
+      /* R97 · HF1 (v23 parity, E-3): the unscoped run cancels every queued row more than 7 days past its
+         scheduled_for AFTER the hold check and BEFORE the oldest-due 50 are picked; scoped sends are not aged out. */
+      var skippedStale = 0, skippedCare = 0;
+      if (!ids) {
+        var staleBefore = iso(new Date(Date.now() - 7 * 86400000));
+        DB.email_queue.forEach(function (e) {
+          if (e.status === "queued" && e.scheduled_for && e.scheduled_for < staleBefore) {
+            e.status = "cancelled"; e.error = "stale: scheduled more than 7 days ago"; skippedStale++;
+          }
+        });
+        due = due.filter(function (e) { return e.status === "queued"; });
+      }
       if (!ids) {
         due = due.slice().sort(function (a, b) {
           var A = a.scheduled_for || "9999-12-31T23:59:59Z", B = b.scheduled_for || "9999-12-31T23:59:59Z";
@@ -6511,6 +6527,17 @@
           e.error = "No recipient address — the client record has no email on file";
           failed++;
           return;
+        }
+        /* R97 · HF1 (v23 parity, E-2): unscoped only, not `custom` — suppress_automation, or comms_optout on a
+           non-marketing type, cancels at send time (a marketing type with comms_optout falls to v19 below). */
+        if (!ids && e.client_id && e.email_type !== "custom") {
+          var ccl = DB.clients.filter(function (x) { return x.id === e.client_id; })[0];
+          if (ccl && (ccl.suppress_automation || (ccl.comms_optout && MARKETING_TYPES.indexOf(e.email_type) < 0))) {
+            e.status = "cancelled";
+            e.error = "client suppressed / opted out at send time";
+            skippedCare++;
+            return;
+          }
         }
         /* R79 · A5: v19: opt-out re-read AT SEND TIME for the four marketing-adjacent types.
            comms_optout=true cancels the row with the exact production error string and sends nothing… */
@@ -6530,6 +6557,16 @@
           e.error = FIN_PROMO_CANCEL_ERROR;
           skippedPromos++;
           return;
+        }
+        /* R97 · HF1 (v23 parity, E-4): a `custom` row goes only to its client's own address. */
+        if (e.email_type === "custom") {
+          var rcl = e.client_id ? DB.clients.filter(function (x) { return x.id === e.client_id; })[0] : null;
+          if (String(e.to_email).trim().toLowerCase() !== String((rcl && rcl.email) || "").trim().toLowerCase()) {
+            e.status = "failed";
+            e.error = "recipient is not the client's email";
+            failed++;
+            return;
+          }
         }
         /* R12a·D3: v12: compose() can now throw (factfind, no site_url). A row whose compose blows up goes
            status='failed' with THAT error, the same as a bounce or a missing address… */
@@ -6568,11 +6605,13 @@
         at: nowIso, scoped: !!ids, queue_ids: ids, considered: due.length,
         sent: sent, failed: failed, skipped_optout: skippedOptout,
         skipped_promos: skippedPromos,   /* R82 · B4 */
+        skipped_care: skippedCare, skipped_stale: skippedStale,   /* R97 · HF1 */
         queued: queued, composed: composed
       };
       return { ok: true, sent: sent, failed: failed, skipped_optout: skippedOptout,
         skipped_promos: skippedPromos,   /* R82 · B4 — v20 counts its refusals beside v19's */
-        scoped: !!ids, skipped_queueing: !!ids, queued: queued };
+        scoped: !!ids, skipped_queueing: !!ids, queued: queued,
+        skipped_care: skippedCare, skipped_stale: skippedStale };   /* R97 · HF1: appended, as v23 does */
     },
     /* R63 · A3: PARITY NOTE, not a behaviour change. In production this function is ALSO on a schedule of its
        own: the `nexmoney-send-sms` cron invokes it daily at 08:05 UTC, five minutes behind the email run. */

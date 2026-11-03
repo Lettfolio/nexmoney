@@ -262,12 +262,16 @@ const SETTING_NOTES = {
 /* $, esc, debounce — MOVED to admin/core.js (R78 · A7). R55 · F7 — SheetJS on demand. The ~1MB
    xlsx.full.min.js used to be a blocking <script> on every boot… */
 let xlsxLoadPromise = null;
+const XLSX_SRI = "sha384-gx12pQMMYnabkTgbCHqqrT65RwDnXI/f/dU2H9JUmT0KUeiMF5bf+yroQBmX0Nuk";
 function ensureXlsx() {
   if (typeof XLSX !== "undefined") return Promise.resolve();
   if (!xlsxLoadPromise) {
     xlsxLoadPromise = new Promise((resolve, reject) => {
       const s = document.createElement("script");
       s.src = "https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js";
+      /* R97 · HF1: the battery routes this URL to npm's xlsx 0.18.5, whose bytes would fail the
+         0.20.2 hash — so only the mock skips SRI; production always pins the exact file. */
+      if (!window.__mockDb) { s.integrity = XLSX_SRI; s.crossOrigin = "anonymous"; }
       s.onload = () => resolve();
       s.onerror = () => { xlsxLoadPromise = null; reject(new Error("The spreadsheet reader could not load — check your connection and try again.")); };
       document.head.appendChild(s);
@@ -26357,6 +26361,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r97";   // R89
+window.__nxTag_app = "r97hf1";   // R89
 
 init();
