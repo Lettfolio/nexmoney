@@ -242,16 +242,23 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
       const v19 = edgeSrc("process-emails-v19.ts");
       const v20 = edgeSrc("process-emails-v20.ts");
       ok("A5a · the v20 source is versioned (tree or git history)", !!v20 && !!v19, `v19 ${v19.length} / v20 ${v20.length} chars`);
+      // R97 · D-6: the refusal must still be in the source that deploys today — the HIGHEST
+      // process-emails-v*.ts in edge/ (v20 itself left the tree in R94). A5b–A5f read that file;
+      // A5g–A5i stay a v19→v20 diff from git history.
+      const peFiles = fs.readdirSync(path.join(REPO, "edge")).map((f) => /^process-emails-v(\d+)\.ts$/.exec(f)).filter(Boolean)
+        .sort((a, b) => Number(b[1]) - Number(a[1]));
+      const cur = peFiles.length ? fs.readFileSync(path.join(REPO, "edge", peFiles[0][0]), "utf8") : "";
+      ok("A5a2 · the deployed process-emails source is in edge/", !!cur, peFiles.length ? peFiles[0][0] : "none");
       ok("A5b · it names the three financial-promotion types and only those",
-        /const FIN_PROMO_TYPES = \["referral_request", "protection_offer", "gi_exchange"\];/.test(v20), "FIN_PROMO_TYPES");
+        /const FIN_PROMO_TYPES = \["referral_request", "protection_offer", "gi_exchange"\];/.test(cur), "FIN_PROMO_TYPES");
       ok("A5c · MARKETING_TYPES (the unsubscribe list) is left exactly as v19 had it — a different question",
-        v20.includes('const MARKETING_TYPES = ["birthday_greeting", "completion_anniversary", "referral_request", "review_request"];'), "MARKETING_TYPES");
+        cur.includes('const MARKETING_TYPES = ["birthday_greeting", "completion_anniversary", "referral_request", "review_request"];'), "MARKETING_TYPES");
       ok("A5d · an unapproved promotion is CANCELLED with the reason on the row, not failed and not left queued",
-        /status: "cancelled", error: "financial promotions not approved \(settings\.financial_promotions_approved\)"/.test(v20), "cancel + error");
+        /status: "cancelled", error: "financial promotions not approved \(settings\.financial_promotions_approved\)"/.test(cur), "cancel + error");
       ok("A5e · …and counted in results beside v19's skipped_optout",
-        /skipped_optout: 0, skipped_promos: 0/.test(v20) && /results\.skipped_promos\+\+/.test(v20), "skipped_promos");
+        /skipped_optout: 0, skipped_promos: 0/.test(cur) && /results\.skipped_promos\+\+/.test(cur), "skipped_promos");
       ok("A5f · the default is fail-closed (an absent settings row means nobody has approved anything)",
-        /\(s\.financial_promotions_approved \?\? "off"\) !== "on"/.test(v20), "?? off");
+        /s\.financial_promotions_approved \?\? "off"\)(\.trim\(\)\.toLowerCase\(\))? !== "on"/.test(cur), "?? off");
       ok("A5g · every change is marked `v20:` exactly as v19 marked its own",
         (v20.match(/v20:/g) || []).length >= 3, String((v20.match(/v20:/g) || []).length));
       /* THE REPLICA RULE (HARNESS, binding): previewComposeEmail is a byte-exact client-side
