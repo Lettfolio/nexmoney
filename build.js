@@ -309,7 +309,7 @@ function renderGuides(posts, tpl, render) {
   }
   const cards = posts.map((p) => `<a class="guide-card" href="/guides/${esc(p.slug)}"><h2>${esc(p.title)}</h2>${nonEmpty(p.excerpt) ? `<p>${esc(p.excerpt.trim())}</p>` : ""}${p.published_at ? `<span class="guide-meta">${esc(longDate(p.published_at))}</span>` : ""}</a>`);
   const indexVals = {
-    title: "Mortgage Guides", excerpt: "Plain-English mortgage guides from NexMoney&#39;s advisers in Bournemouth.", slug: "", path: "guides",
+    title: "Mortgage Guides from Bournemouth Brokers", excerpt: "Plain-English mortgage guides from NexMoney&#39;s advisers in Bournemouth.", slug: "", path: "guides",
     ogtype: "website", ogimage: esc(`${SITE}/og-image.jpg`), published: "", cover: "",
     crumbs: "<span>Guides</span>",
     body: cards.length ? `<div class="guide-list">\n${cards.join("\n")}\n</div>` : "<p>No guides yet.</p>",
