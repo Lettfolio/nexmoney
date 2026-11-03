@@ -5609,7 +5609,8 @@ green local run is pushed as a BRANCH straight away — but it reaches main only
   4. Vercel builds main (`build.js` → `dist/`) and deploys production.
   5. Live-verify on the deployed host: every file `node build.js --hash` lists serves that SHA-256,
      the eight build tags agree (no tag-mismatch strip), and `window.__errorLog` is empty (0).
-     Edge functions and SQL are separate: the CTO deploys edge via MCP, Daniel pastes SQL.
+     SQL in `supabase/migrations/` IS applied to production by the merge (review it as live SQL);
+     one-off scripts in `db/` are pasted by Daniel. Edge is separate: the CTO deploys it via MCP.
 **RETIRED for code (do not use):** `device_commit_files` into Daniel's folder, GitHub web upload
 through Chrome, `git` / `deploy.bat` in Daniel's Windows tree. They skipped the battery and caused
 the R52 stale-tree clobber. Daniel's folder is a reader's copy; refresh it with `git pull`.
