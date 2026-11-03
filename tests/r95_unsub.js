@@ -88,7 +88,7 @@ function loadV4(db) {
   ok("A6 · sitemap.xml does not list it", !/unsubscribe/.test(read("sitemap.xml")));
   ok("A7 · v3 wording reused verbatim (not recognised / confirm / done)",
     html.includes("Sorry — this link isn't one we recognise.") && html.includes("Prefer not to get emails like this?") && html.includes("Done — you're unsubscribed."));
-  const v22 = read("edge/process-emails-v22.ts");
+  const v22 = read("edge/process-emails-v23.ts");   // R97 · E: highest -vN only
   ok("A8 · v22 footer: href=\"${escapeHtml(unsubSite)}/unsubscribe?c=…&t=…\", unsubSite from s.site_url",
     /<a href="\$\{escapeHtml\(unsubSite\)\}\/unsubscribe\?c=\$\{escapeHtml\(String\(cl\.id\)\)\}&t=\$\{escapeHtml\(String\(cl\.comms_token\)\)\}"/.test(v22) &&
     /const unsubSite = \(s\.site_url \|\| "https:\/\/www\.nexmoney\.co\.uk"\)/.test(v22));

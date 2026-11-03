@@ -6926,7 +6926,7 @@
     return form;
   }
   var MFA_GATED_EDGE = ["invite-user", "send-sms", "owner-digest", "outlook-sync", "assistant", "parse-offer", "ai-import",
-    "site-publish", "seo-snapshot"];   /* R86 · V1; R93 · A: the two Website functions carry the same gate */
+    "site-publish", "seo-snapshot", "process-emails"];   /* R86 · V1; R93 · A: the two Website functions carry the same gate; R97 · E-1: process-emails v23 */
   var realFetch = window.fetch ? window.fetch.bind(window) : null;
   window.fetch = function (input, init) {
     var url = typeof input === "string" ? input : (input && input.url) || "";

@@ -1,3 +1,5 @@
+// R97 · E: v23 = v22 + E-1 session_ok gate, full run owner/admin only · E-2 care/opt-out re-check at send time (unscoped) · E-3 stale cutoff 7 days (unscoped) · E-4 custom body re-escaped, recipient must be the client.
+// R95 · A: v22 = v21 + the footer Unsubscribe link opens the site page {site_url}/unsubscribe (function HTML is served as text/plain); List-Unsubscribe still POSTs to the function.
 /* =============================================================================
    process-emails v21 (R83 · fixH) — v20 plus the review fixes. Wording of every
    template is byte-identical to v20 for well-formed data; only escaping, gating and
@@ -73,12 +75,22 @@ const MARKETING_TYPES = ["birthday_greeting", "completion_anniversary", "referra
    approved, so the row is closed out with the reason on it. */
 const FIN_PROMO_TYPES = ["referral_request", "protection_offer", "gi_exchange"];
 
+/* R97 · E-1: a full (unscoped) run queues and flushes the whole firm's mail and stamps the cron
+   heartbeat, so a signed-in caller needs owner/admin for it — the same line send-sms and
+   owner-digest drew in R84. Advisers keep scoped sends (the rows they pressed Send on). */
+const FULL_RUN_ROLES = ["owner", "admin"];   // R97 · E-1
+
+/* R97 · E-3: owner decision D5 — a queued row more than 7 days past its scheduled_for is stale
+   (a hold release must not deliver two months of birthday and anniversary notes in one run). */
+const STALE_DAYS = 7;   // R97 · E-3
+
 // Allow a signed-in staff member OR a server caller with the shared cron key.
-async function authorize(req: Request): Promise<boolean> {
+// R97 · E-1: returns "cron", the caller's role, "mfa" (signed in, second factor not verified) or false.
+async function authorize(req: Request): Promise<string | false> {
   const cronKey = req.headers.get("x-cron-key");
   if (cronKey) {
     const { data } = await supabase.from("settings").select("value").eq("key", "cron_key").maybeSingle();
-    if (data?.value && cronKey === data.value) return true;
+    if (data?.value && cronKey === data.value) return "cron";
   }
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.replace("Bearer ", "");
@@ -86,8 +98,10 @@ async function authorize(req: Request): Promise<boolean> {
     const uc = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: authHeader } } });
     const { data: u } = await uc.auth.getUser();
     if (u?.user) {
+      const { data: ok, error: okErr } = await uc.rpc("session_ok");   // R97 · E-1: the R86 · V1 gate
+      if (okErr || ok !== true) return "mfa";   // R97 · E-1
       const { data: p } = await supabase.from("profiles").select("role").eq("id", u.user.id).maybeSingle();
-      if (p?.role && STAFF_ROLES.includes(p.role)) return true;
+      if (p?.role && STAFF_ROLES.includes(p.role)) return p.role;
     }
   }
   return false;
@@ -96,6 +110,14 @@ async function authorize(req: Request): Promise<boolean> {
 const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "";
 const money = (n: number | null) => n == null ? "" : new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(n);
 const escapeHtml = (t: string) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+
+/* R97 · E-4: the `custom` body is no longer trusted. Escape everything, then give back only what the
+   app's customEmailBodyHtml() emits: the literal <p>, </p>, <br> and the five entities its esc()
+   writes (&amp; &lt; &gt; &quot; &#39; — escaping them again would print "&amp;" to the client).
+   A body the app wrote comes out byte-identical; anything else (<a>, <img onerror>) arrives as text. */
+const customBodyHtml = (t: string) => escapeHtml(t)
+  .replace(/&lt;(\/?p|br)&gt;/g, "<$1>")
+  .replace(/&amp;(amp|lt|gt|quot|#39);/g, "&$1;");
 
 function wrap(inner: string, company: string) {
   return `<!doctype html><html><body style="margin:0;padding:0;background:#f4f5f7;font-family:Arial,Helvetica,sans-serif;">
@@ -138,8 +160,9 @@ function compose(type: string, c: any, cl: any, s: Record<string, string>, adv: 
   /* v19: unsubscribe footer for the four marketing-adjacent types — one small line above the
      existing grey footer (wrap() adds that, so this line closes the inner body). comms_token
      comes from the clients row already joined onto the queue row. */
+  const unsubSite = (s.site_url || "https://www.nexmoney.co.uk").replace(/\/+$/, "");   // R95 · A: same fallback as unsubscribe v4
   const unsub = MARKETING_TYPES.includes(type) && cl && cl.id && cl.comms_token
-    ? `<p style="margin:24px 0 0;color:#6b7280;font-size:12px;">Prefer not to get emails like this? <a href="${FN_BASE}/unsubscribe?c=${escapeHtml(String(cl.id))}&t=${escapeHtml(String(cl.comms_token))}" style="color:#6b7280;">Unsubscribe</a>.</p>`
+    ? `<p style="margin:24px 0 0;color:#6b7280;font-size:12px;">Prefer not to get emails like this? <a href="${escapeHtml(unsubSite)}/unsubscribe?c=${escapeHtml(String(cl.id))}&t=${escapeHtml(String(cl.comms_token))}" style="color:#6b7280;">Unsubscribe</a>.</p>`
     : "";
 
   // R6: security-property naming on client-facing, case-scoped templates.
@@ -168,11 +191,11 @@ function compose(type: string, c: any, cl: any, s: Record<string, string>, adv: 
   }
   /* R66 (v17) — an email the adviser WROTE from the case. The queue row carries the adviser's
      own subject and body: the app has already HTML-escaped the text and split it into <p>/<br>
-     paragraphs (nothing else can appear in it). This wraps that body in the house template with
+     paragraphs. This wraps that body in the house template with
      the usual "Regarding:" line and sign-off and never rewrites the subject or the words. */
   if (type === "custom") {
     if (!extra.customSubject || !extra.customBody) throw new Error("custom email row has no subject or body");
-    const inner = `${regarding}${extra.customBody}${signoff}`;
+    const inner = `${regarding}${customBodyHtml(extra.customBody)}${signoff}`;   // R97 · E-4: re-escaped server-side
     return { subject: String(extra.customSubject), html: wrap(inner, company) };
   }
   /* R12a (D3): the digital fact-find finally goes out through the queue like every
@@ -300,7 +323,9 @@ function compose(type: string, c: any, cl: any, s: Record<string, string>, adv: 
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
-  if (!(await authorize(req))) {
+  const authz = await authorize(req);   // R97 · E-1
+  if (authz === "mfa") return new Response(JSON.stringify({ error: "second factor required" }), { status: 403, headers: { ...CORS, "Content-Type": "application/json" } });   // R97 · E-1: R86 · V1 text
+  if (!authz) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { ...CORS, "Content-Type": "application/json" } });
   }
 
@@ -318,8 +343,12 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: "malformed JSON body" }), { status: 400, headers: { ...CORS, "Content-Type": "application/json" } });
   }
   const scoped = queueIds !== null;
+  // R97 · E-1: the full run is the cron's, or an owner/admin's; an adviser names the rows to send.
+  if (!scoped && authz !== "cron" && !FULL_RUN_ROLES.includes(authz)) {
+    return new Response(JSON.stringify({ error: "a full run is owner/admin only — send named rows with queue_ids" }), { status: 403, headers: { ...CORS, "Content-Type": "application/json" } });
+  }
 
-  const results: any = { queued: null, comms: null, sent: 0, failed: 0, scoped, skipped_optout: 0, skipped_promos: 0, requeued: 0 }; // v19: skipped_optout counter · v20: skipped_promos counter · v21: requeued (Resend 429/5xx, row put back)
+  const results: any = { queued: null, comms: null, sent: 0, failed: 0, scoped, skipped_optout: 0, skipped_promos: 0, requeued: 0, skipped_care: 0, skipped_stale: 0 }; // v19: skipped_optout counter · v20: skipped_promos counter · v21: requeued (Resend 429/5xx, row put back) · R97 · E-2/E-3: skipped_care, skipped_stale (appended)
 
   if (!scoped) {
     const { data: queued, error: qErr } = await supabase.rpc("queue_automated_emails");
@@ -386,6 +415,18 @@ Deno.serve(async (req: Request) => {
   if (scoped) reclaim = reclaim.in("id", queueIds!);
   await reclaim;
 
+  /* R97 · E-3: on the unscoped run, close out every queued row more than STALE_DAYS past its
+     scheduled_for BEFORE picking the oldest-due 50 — otherwise the oldest-first order hands the
+     whole batch to the stale rows. Cancelled with the reason, not failed (nothing to retry). A
+     failed cancel fails the run closed: the next query would otherwise send those very rows.
+     Scoped sends are a human naming a row, so they are not aged out. */
+  if (!scoped) {
+    const staleBefore = new Date(Date.now() - STALE_DAYS * 86400000).toISOString();
+    const { data: stale, error: sErr } = await supabase.from("email_queue").update({ status: "cancelled", error: `stale: scheduled more than ${STALE_DAYS} days ago` }).eq("status", "queued").lt("scheduled_for", staleBefore).select("id");
+    if (sErr) return new Response(JSON.stringify({ ...results, error: sErr.message }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
+    results.skipped_stale = (stale ?? []).length;
+  }
+
   let candQ = supabase.from("email_queue").select("id").eq("status", "queued");
   // v19: the unscoped run takes the OLDEST-due 50, not an arbitrary 50 (scoped path unchanged).
   candQ = scoped ? candQ.in("id", queueIds!) : candQ.lte("scheduled_for", new Date().toISOString()).order("scheduled_for", { ascending: true }).limit(50);
@@ -408,6 +449,20 @@ Deno.serve(async (req: Request) => {
     if (!cl || !to) {
       await supabase.from("email_queue").update({ status: "failed", error: "Missing client or email address" }).eq("id", e.id);
       results.failed++; continue;
+    }
+    /* R97 · E-2: on the UNSCOPED run every row for a client is re-checked against the care flag
+       (suppress_automation, Consumer Duty) and the unsubscribe flag (comms_optout) at send time — a
+       row queued before either was set must not go out. `custom` is exempt (a person wrote it), and
+       a marketing type with comms_optout falls through to the v19 rule below, unchanged. Scoped sends
+       are a human pressing Send, so they are not touched. A failed re-read uses the joined row. */
+    if (!scoped && e.client_id && e.email_type !== "custom") {
+      let care = { suppress_automation: !!e.clients?.suppress_automation, comms_optout: !!e.clients?.comms_optout };
+      const { data: cc } = await supabase.from("clients").select("suppress_automation,comms_optout,marketing_opt_out").eq("id", e.client_id).maybeSingle();
+      if (cc) care = { suppress_automation: !!cc.suppress_automation, comms_optout: !!cc.comms_optout };
+      if (care.suppress_automation || (care.comms_optout && !MARKETING_TYPES.includes(e.email_type))) {
+        await supabase.from("email_queue").update({ status: "cancelled", error: "client suppressed / opted out at send time" }).eq("id", e.id);
+        results.skipped_care++; continue;
+      }
     }
     /* v19: opt-out is checked AT SEND TIME for the four marketing-adjacent types — the stored
        clients row on this claim was read moments ago, but an unsubscribe can land between queueing
@@ -434,6 +489,11 @@ Deno.serve(async (req: Request) => {
     if (FIN_PROMO_TYPES.includes(e.email_type) && String(s.financial_promotions_approved ?? "off").trim().toLowerCase() !== "on") {   // v21 (fix 8): normalised like the app
       await supabase.from("email_queue").update({ status: "cancelled", error: "financial promotions not approved (settings.financial_promotions_approved)" }).eq("id", e.id);
       results.skipped_promos++; continue;
+    }
+    // R97 · E-4: a `custom` row goes only to its client's own address (a row can be written by any staff JWT).
+    if (e.email_type === "custom" && String(to).trim().toLowerCase() !== String(e.clients?.email || "").trim().toLowerCase()) {
+      await supabase.from("email_queue").update({ status: "failed", error: "recipient is not the client's email" }).eq("id", e.id);
+      results.failed++; continue;
     }
     const adv = c?.assigned_to ? staffById[c.assigned_to] : null;
     // R9: per-row context that compose() cannot fetch for itself (it is sync).
@@ -523,8 +583,9 @@ Deno.serve(async (req: Request) => {
       }
       const { subject, html } = compose(e.email_type, c ?? {}, cl, s, adv, extra);
       /* v21 (+): RFC 8058 one-click unsubscribe headers on the marketing-adjacent types, pointing
-         at the same URL as the footer link. unsubscribe v2 performs the opt-out on POST, so a mail
-         client's "Unsubscribe" button works and a link-prefetching scanner (GET) changes nothing. */
+         at the unsubscribe function (R95 · A: the footer now opens the site page instead). The function
+         performs the opt-out on POST, so a mail client's "Unsubscribe" button works and a
+         link-prefetching scanner (GET) changes nothing. */
       const unsubUrl = MARKETING_TYPES.includes(e.email_type) && cl.id && cl.comms_token
         ? `${FN_BASE}/unsubscribe?c=${encodeURIComponent(String(cl.id))}&t=${encodeURIComponent(String(cl.comms_token))}`
         : "";
