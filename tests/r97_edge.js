@@ -240,6 +240,87 @@ function appCustomBody() {
       eq(`B · ${leg.aal}: no page errors`, errs, []);
       await ctx.close();
     }
+
+    /* R97 · HF1 — mock parity with v23's four rules (E-1 full-run roles, E-2 care, E-3 stale, E-4 custom recipient). */
+    console.log("\n§B3 · mock mirrors v23: full-run roles, care flag, stale cutoff, custom recipient");
+    const fresh = async (as) => {
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "en-GB", timezoneId: "Europe/London" });
+      const page = await ctx.newPage();
+      const errs = [];
+      page.on("pageerror", (e) => errs.push(String(e)));
+      await page.goto(`${BASE}?as=${as}`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => window.__mockDb && window.__mockDb.functions, null, { timeout: 30000 });
+      await page.waitForTimeout(1500);
+      return { ctx, page, errs };
+    };
+    const post = (page, body) => page.evaluate(async (b) => {
+      const raw = await fetch("https://mock.supabase.co/functions/v1/process-emails", { method: "POST", body: JSON.stringify(b) });
+      return { status: raw.status, body: await raw.json() };
+    }, body);
+    {
+      const { ctx, page, errs } = await fresh("p2");
+      const r = await post(page, {});
+      eq("B3.1 · adviser (p2) full run → 403 'a full run is owner/admin only — send named rows with queue_ids'", [r.status, r.body],
+        [403, { error: "a full run is owner/admin only — send named rows with queue_ids" }]);
+      const probe = await post(page, { queue_ids: [] });
+      ok("B3.2 · adviser's scoped probe still answers", probe.status === 200 && probe.body.held === true, JSON.stringify(probe));
+      eq("B3 · p2: no page errors", errs, []);
+      await ctx.close();
+    }
+    {
+      const { ctx, page, errs } = await fresh("p4");
+      const held = await post(page, {});
+      ok("B3.3 · owner full run while held → 200, held, skipped_care/skipped_stale both 0", held.status === 200 && held.body.held === true &&
+        held.body.skipped_care === 0 && held.body.skipped_stale === 0, JSON.stringify(held));
+      const out = await page.evaluate(async () => {
+        const DB = window.__mock.db, day = 86400000, at = (d) => new Date(Date.now() - d * day).toISOString();
+        const hold = DB.settings.filter((x) => x.key === "email_hold")[0], holdWas = hold.value, keyWas = window.__mock.resendKey();
+        const base = DB.email_queue.filter((e) => e.client_id && e.case_id)[0];
+        const cls = DB.clients.filter((c) => c.email && !c.suppress_automation && !c.comms_optout && !c.marketing_opt_out);
+        const supp = DB.clients.filter((c) => c.email && c.suppress_automation)[0];
+        const mk = (id, cl, type, daysAgo, to) => { DB.email_queue.push(Object.assign({}, base, { id, client_id: cl.id, email_type: type,
+          to_email: to || cl.email, status: "queued", error: null, sent_at: null, subject: "Hi", body_html: "<p>Hi</p>", scheduled_for: at(daysAgo), created_at: at(daysAgo) })); };
+        cls[1].comms_optout = true;
+        mk("hf1-supp", supp, "rate_end_reminder", 6.9);
+        mk("hf1-optout", cls[1], "rate_end_reminder", 6.9);
+        mk("hf1-optout-mkt", cls[1], "review_request", 6.9);
+        mk("hf1-stale", cls[2], "rate_end_reminder", 8);
+        mk("hf1-custom-foreign", cls[3], "custom", 6.9, "someone.else@elsewhere.example");
+        mk("hf1-custom-own", cls[4], "custom", 6.9, cls[4].email.toUpperCase());
+        const staleWant = DB.email_queue.filter((e) => e.status === "queued" && e.scheduled_for < at(7)).length;
+        hold.value = "off"; window.__mock.setResendKey(true);
+        const raw = await fetch("https://mock.supabase.co/functions/v1/process-emails", { method: "POST", body: "{}" });
+        const body = await raw.json();
+        const row = (id) => { const e = DB.email_queue.filter((x) => x.id === id)[0]; return [e.status, e.error]; };
+        const res = { status: raw.status, body, staleWant,
+          careCount: DB.email_queue.filter((e) => e.error === "client suppressed / opted out at send time").length,
+          supp: row("hf1-supp"), optout: row("hf1-optout"), optoutMkt: row("hf1-optout-mkt"), stale: row("hf1-stale"),
+          foreign: row("hf1-custom-foreign"), own: row("hf1-custom-own") };
+        /* scoped send of a 9-day-old row for a suppressed client: neither aged out nor care-cancelled (a human pressed Send) */
+        mk("hf1-scoped-old", supp, "rate_end_reminder", 9);
+        const raw2 = await fetch("https://mock.supabase.co/functions/v1/process-emails", { method: "POST", body: JSON.stringify({ queue_ids: ["hf1-scoped-old"] }) });
+        res.scoped = (await raw2.json()); res.scopedRow = row("hf1-scoped-old");
+        hold.value = holdWas; window.__mock.setResendKey(keyWas);
+        res.restored = [DB.settings.filter((x) => x.key === "email_hold")[0].value, window.__mock.resendKey()];
+        return res;
+      });
+      ok("B3.4 · owner full run (hold off) → 200 with skipped_care and skipped_stale appended", out.status === 200 && out.body.ok === true &&
+        typeof out.body.skipped_care === "number" && typeof out.body.skipped_stale === "number" &&
+        JSON.stringify(Object.keys(out.body).slice(-2)) === JSON.stringify(["skipped_care", "skipped_stale"]), JSON.stringify(out.body));
+      eq("B3.5 · suppress_automation client → cancelled 'client suppressed / opted out at send time'", out.supp, ["cancelled", "client suppressed / opted out at send time"]);
+      eq("B3.6 · comms_optout on a non-marketing type → cancelled by the care rule", out.optout, ["cancelled", "client suppressed / opted out at send time"]);
+      eq("B3.7 · comms_optout on a marketing type falls to v19's opt-out rule", out.optoutMkt, ["cancelled", "client opted out of these emails"]);
+      ok("B3.8 · skipped_care counts every care cancel", out.body.skipped_care === out.careCount && out.careCount >= 2, JSON.stringify([out.body.skipped_care, out.careCount]));
+      eq("B3.9 · queued row 8 days past scheduled_for → cancelled 'stale: scheduled more than 7 days ago'", out.stale, ["cancelled", "stale: scheduled more than 7 days ago"]);
+      eq("B3.10 · skipped_stale = every queued row older than 7 days", out.body.skipped_stale, out.staleWant);
+      eq("B3.11 · custom row to a foreign address → failed 'recipient is not the client's email'", out.foreign, ["failed", "recipient is not the client's email"]);
+      eq("B3.12 · custom row to the client's own address (any case) → sent", out.own, ["sent", null]);
+      ok("B3.13 · scoped send is neither aged out nor care-cancelled", out.scopedRow[0] === "sent" && out.scoped.skipped_care === 0 && out.scoped.skipped_stale === 0,
+        JSON.stringify([out.scopedRow, out.scoped]));
+      eq("B3.14 · hold and Resend-key flag restored", out.restored, ["on", false]);
+      eq("B3 · p4: no page errors", errs, []);
+      await ctx.close();
+    }
   } finally {
     await browser.close();
     if (server) try { process.kill(-server.pid); } catch (_e) { /* ignore */ }

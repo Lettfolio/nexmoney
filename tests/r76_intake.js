@@ -250,8 +250,10 @@ async function setHold(page, value) {
         classic.slice(0, 300));
       const promised = Number((/Send ALL (\d+) queued email/.exec(classic) || [])[1] || 0);
       const sentRun = await page.evaluate(() => window.__mock.lastEmailRun());
-      ok("A6 · …and the number consented to is the number sent", promised > 0 && sentRun && sentRun.sent === promised,
-        `promised ${promised}, sent ${sentRun && sentRun.sent}`);
+      /* R97 · HF1: v23 parity — stale (>7 days) and care-flagged rows are cancelled at send time, never sent. */
+      const acct = sentRun ? (sentRun.sent || 0) + (sentRun.skipped_care || 0) + (sentRun.skipped_stale || 0) : -1;
+      ok("A6 · …and the number consented to is the number sent (bar v23's stale/care cancels) — never more", promised > 0 && sentRun && acct === promised && sentRun.sent <= promised,
+        `promised ${promised}, sent ${sentRun && sentRun.sent}, care ${sentRun && sentRun.skipped_care}, stale ${sentRun && sentRun.skipped_stale}`);
       const ovlDuringClassic = await page.evaluate(() => !document.querySelector("#overlay-backdrop").classList.contains("hidden"));
       eq("A6 · no house overlay in the unheld flow", ovlDuringClassic, false);
 

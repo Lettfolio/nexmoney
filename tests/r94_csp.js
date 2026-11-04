@@ -134,6 +134,17 @@ async function ensureServer() {
     ok(`A8e · ${f}: its one jsDelivr tag is that exact URL and carries SRI`,
       tags.length === 1 && tags[0].includes(`src="${SUPA_JS}"`) && /\bintegrity="sha384-[^"]+"/.test(tags[0]) && /crossorigin="anonymous"/.test(tags[0]), JSON.stringify(tags));
   }
+  // R97 · HF1: the CDN SheetJS load is pinned by Subresource Integrity (production), and the CSP still names its path.
+  {
+    const app = read("admin/app.js"), fn = (app.match(/function ensureXlsx\(\)[\s\S]*?\n}\n/) || [""])[0];
+    ok("A8f · ensureXlsx pins SheetJS with integrity=\"sha384-…\" + crossOrigin=\"anonymous\" (skipped only under the mock)",
+      app.includes('const XLSX_SRI = "sha384-gx12pQMMYnabkTgbCHqqrT65RwDnXI/f/dU2H9JUmT0KUeiMF5bf+yroQBmX0Nuk";') && /s\.integrity = XLSX_SRI/.test(fn) && /s\.crossOrigin = "anonymous"/.test(fn) &&
+      /if \(!window\.__mockDb\) \{ s\.integrity = XLSX_SRI; s\.crossOrigin = "anonymous"; \}/.test(fn),
+      fn.slice(0, 400));
+    ok("A8g · the SRI'd URL is the 0.20.2 file and the admin CSP still allows the sheetjs path",
+      /s\.src = "https:\/\/cdn\.sheetjs\.com\/xlsx-0\.20\.2\/package\/dist\/xlsx\.full\.min\.js";/.test(fn) &&
+      (ADMIN["script-src"] || []).includes("https://cdn.sheetjs.com/xlsx-0.20.2/"), JSON.stringify(ADMIN["script-src"]));
+  }
   ok("A9 · no realtime: admin connect-src has no wss:// (the code opens no channel)",
     !sourcesFor(ADMIN, "connect-src").some((s) => /^wss:/.test(s)) && !/\.channel\(/.test(["core", "reports-money", "diary", "import", "vault", "site", "app"].map((f) => read(`admin/${f}.js`)).join("\n")));
 
@@ -230,7 +241,7 @@ async function ensureServer() {
       "var c=rows.filter(function(x){return x.lender&&x.client_id;})[0]||rows[0];" +
       "await window.openCase(c.id);await W(1200);if(window.closeModal)window.closeModal();" +
       "await window.openClient(c.client_id);await W(1200);if(window.closeModal)window.closeModal();" +
-      "await ensureXlsx();var wb=XLSX.read('a,b\\n1,2',{type:'string'});R('xlsx',XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]).length===1?'ok':'bad');" +
+      "await ensureXlsx();var xt=document.querySelector('script[src*=\"cdn.sheetjs.com\"]');R('xlsxsri',xt?(xt.hasAttribute('integrity')?'has':'none'):'missing');var wb=XLSX.read('a,b\\n1,2',{type:'string'});R('xlsx',XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]).length===1?'ok':'bad');" +
       "await buildEvidencePack(c.id);R('drv','done');}catch(e){R('drv','err: '+e.message);}});",
     // site: the page's own edge-function host must be allowed by connect-src (the network failing here is the sandbox)
     connect: SET + "window.addEventListener('load',function(){fetch('" + SUPA + "/functions/v1/new-lead',{method:'OPTIONS'}).catch(function(){}).then(function(){R('fetch','done');});});",
@@ -309,6 +320,8 @@ async function ensureServer() {
       const drv = await waitAttr(page, "drv", 20000);
       ok("B · p4: the driver opened a case and a client and built the evidence pack", drv === "done", String(drv));
       ok("B · p4: SheetJS lazy-loads from cdn.sheetjs.com and parses under script-src (no 'unsafe-eval')", (await attr(page, "xlsx")) === "ok", String(await attr(page, "xlsx")));
+      // R97 · HF1: the mock route serves npm's 0.18.5 bytes, so the mock tag must carry no integrity (prod's would refuse them).
+      ok("B · p4 (mock): the SheetJS <script> carries no integrity attribute, so the battery's route still loads", (await attr(page, "xlsxsri")) === "none", String(await attr(page, "xlsxsri")));
       const pop = await popP;
       let popOk = false;
       if (pop) { await sleep(800); popOk = /Evidence pack/.test(await pop.title().catch(() => "")) && (await pop.locator("button.noprint").count()) === 1; }

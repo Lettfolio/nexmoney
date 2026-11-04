@@ -80,3 +80,14 @@ outlook-sync Junk folder + From matching (edge-7); send-sms custom-body variant 
   `MFA_GATED_EDGE` in the mock is the client-side list to keep complete.
 - Reviewer worktrees: suites hard-code `REPO=/root/nx` + `PORT=8099` → run sed'd copies on 810x; never point two
   builders at /root/nx.
+
+## Post-merge
+- PR #10 merged 18:18 UTC (3 Nov 2026). The integration push then failed on the unrecorded 2 Nov pg_net
+  migration → PR #11 recorded it, merged 22:10 UTC.
+- R97 migration live (125 rows); process-emails v23 deployed (version 27, sha256 `8fc27c1c…`).
+- Live-verified: eleven `build.js --hash` files serve their SHA-256, the eight build tags agree, `__errorLog` 0.
+- 108 stale queued rows cancelled by Claude at 22:17 UTC (`db/r97/01_stale_queue.sql` §B, N = 7 days).
+- R97-HF1: SheetJS CDN load pinned with Subresource Integrity (sha384, crossOrigin anonymous; skipped under
+  the mock, whose route serves npm's 0.18.5) — closes client-4/site-1/supply-1 without self-hosting; mock
+  `process-emails` brought to v23 parity (full run owner/admin only, care/opt-out at send time, 7-day stale
+  cutoff, custom recipient = the client's email; `skipped_care`/`skipped_stale` appended). Tags `r97hf1`.

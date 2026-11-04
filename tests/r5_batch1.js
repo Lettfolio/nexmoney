@@ -310,8 +310,11 @@ async function main() {
         return { queued: data.length, run: window.__mock.lastEmailRun() };
       });
       ok("R5-1 · confirming does flush the queue", afterSend.queued < queuedBefore, `${queuedBefore} → ${afterSend.queued}`);
-      ok("R5-1 · the number consented to is the number sent", afterSend.run && promisedNow > 0 && afterSend.run.sent === promisedNow,
-        `confirm promised ${promisedNow}, sent ${afterSend.run && afterSend.run.sent}`);
+      /* R97 · HF1: v23 (and now the mock) cancels, at send time, rows more than 7 days stale and rows whose client is
+         care-flagged/opted out — so the promise is kept as "sent, or cancelled with a reason", and never exceeded. */
+      const rr = afterSend.run || {}, accounted = (rr.sent || 0) + (rr.skipped_care || 0) + (rr.skipped_stale || 0);
+      ok("R5-1 · the number consented to is the number sent (bar v23's stale/care cancels) — never more", afterSend.run && promisedNow > 0 && accounted === promisedNow && rr.sent <= promisedNow,
+        `confirm promised ${promisedNow}, sent ${rr.sent}, care ${rr.skipped_care}, stale ${rr.skipped_stale}`);
       ok("R5-1 · the deliberate flush is UNscoped (the cron's behaviour)", afterSend.run && afterSend.run.scoped === false, JSON.stringify(afterSend.run && afterSend.run.scoped));
 
       // Empty queue → a toast, no round trip.
