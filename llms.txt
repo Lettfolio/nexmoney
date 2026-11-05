@@ -1,9 +1,11 @@
 # NexMoney
 
-> NexMoney is a trading style of NexMoney Ltd, an Appointed Representative of Stonebridge Mortgage Solutions Ltd which is authorised and regulated by the Financial Conduct Authority (firm reference number 610875). We are a whole-of-market mortgage and insurance broker based in Bournemouth, Dorset, UK. We compare hundreds of lenders to find a suitable mortgage for first-time buyers, home movers, remortgagers and buy-to-let investors, and arrange protection insurance (life, critical illness, income protection). Appointed Representative of Stonebridge Mortgage Solutions Ltd (FCA reference 610875).
+> NexMoney is a trading style of NexMoney Ltd (company number 11454479), an Appointed Representative of Stonebridge Mortgage Solutions Ltd, which is authorised and regulated by the Financial Conduct Authority. NexMoney Ltd is entered on the Financial Services Register under firm reference number 610875. We are a whole-of-market mortgage and insurance broker based in Bournemouth, Dorset, UK. We compare hundreds of lenders to find a suitable mortgage for first-time buyers, home movers, remortgagers and buy-to-let investors, and arrange protection insurance (life, critical illness, income protection).
 
 Key facts:
-- Location: Bournemouth, Dorset — serving Poole, Christchurch, Wimborne and all of the UK
+- Trading address: Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ — serving Poole, Christchurch, Wimborne and all of the UK
+- Registered office: Faulkner House, 31 West Street, Wimborne, Dorset, BH21 1JS · Company number 11454479
+- Reviews: Trustpilot https://uk.trustpilot.com/review/www.nexmoney.co.uk · FCA Register https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT
 - Phone: 01202 802 677 · Email: info@nexmoney.co.uk
 - Whole-of-market: not tied to any lender or panel
 - Fee statement: Typically, we charge a fee of £375 for arranging a mortgage but will also depend on your circumstances. The fees may be waived subject to the terms of the fee waiver agreement.

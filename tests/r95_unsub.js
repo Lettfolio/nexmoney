@@ -84,7 +84,7 @@ function loadV4(db) {
   ok("A2 · loads /unsubscribe.js deferred", /<script src="\/unsubscribe\.js" defer><\/script>/.test(html));
   ok("A3 · no inline on*= handler, no javascript: URL", !/\son[a-z]+=/i.test(html) && !/javascript:/i.test(html));
   ok("A4 · noindex meta", /<meta name="robots" content="noindex/.test(html));
-  ok("A5 · robots.txt Disallows /unsubscribe in the universal group", /User-agent: \*[\s\S]*?Disallow: \/unsubscribe\n[\s\S]*?User-agent: GPTBot/.test(read("robots.txt")));
+  ok("A5 · robots.txt Disallows /unsubscribe in the universal group", /User-agent: \*[\s\S]*?Disallow: \/unsubscribe\n[\s\S]*?Sitemap:/.test(read("robots.txt")));
   ok("A6 · sitemap.xml does not list it", !/unsubscribe/.test(read("sitemap.xml")));
   ok("A7 · v3 wording reused verbatim (not recognised / confirm / done)",
     html.includes("Sorry — this link isn't one we recognise.") && html.includes("Prefer not to get emails like this?") && html.includes("Done — you're unsubscribed."));

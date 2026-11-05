@@ -1,49 +1,19 @@
 # NexMoney — robots.txt
-# One universal group; named groups removed (a crawler obeys only its
-# most specific group, so per-bot "Allow: /" was overriding the Disallows).
+# One universal group (a crawler obeys only its most specific group, so per-bot
+# groups would need every Disallow repeated). R99 · SEO-A: /portal is no longer
+# disallowed — it 301s to /contact and Googlebot has to be able to crawl it to
+# see that; the X-Robots-Tag noindex on /portal/* stays in vercel.json.
 
 User-agent: *
 Allow: /
-Disallow: /portal
-Disallow: /portal/
 Disallow: /clienthub
 Disallow: /clienthub/
 Disallow: /admin
 Disallow: /admin/
 Disallow: /unsubscribe
 
-# AI answer-engine crawlers — explicitly welcome (citability in AI answers)
-User-agent: GPTBot
-Allow: /
-Disallow: /portal
-Disallow: /portal/
-Disallow: /clienthub
-Disallow: /clienthub/
-Disallow: /admin
-Disallow: /admin/
-Disallow: /unsubscribe
-
-User-agent: ClaudeBot
-Allow: /
-Disallow: /portal
-Disallow: /portal/
-Disallow: /clienthub
-Disallow: /clienthub/
-Disallow: /admin
-Disallow: /admin/
-Disallow: /unsubscribe
-
-User-agent: PerplexityBot
-Allow: /
-Disallow: /portal
-Disallow: /portal/
-Disallow: /clienthub
-Disallow: /clienthub/
-Disallow: /admin
-Disallow: /admin/
-Disallow: /unsubscribe
-
-User-agent: Google-Extended
-Allow: /
+# AI answer-engine crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended) are
+# welcome under the same rules. No separate groups: a named group replaces the
+# universal one for that bot, Allow and Disallow alike.
 
 Sitemap: https://www.nexmoney.co.uk/sitemap.xml

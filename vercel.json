@@ -26,6 +26,21 @@
       "statusCode": 301
     },
     {
+      "source": "/general-insurance/accident-insurance",
+      "destination": "/asu-insurance",
+      "statusCode": 301
+    },
+    {
+      "source": "/calculators/rental-income-calc",
+      "destination": "/buy-to-let-rent-calculator",
+      "statusCode": 301
+    },
+    {
+      "source": "/calculators/rental-income-calculator",
+      "destination": "/buy-to-let-rent-calculator",
+      "statusCode": 301
+    },
+    {
       "source": "/calculators/:slug+",
       "destination": "/calculators",
       "statusCode": 301
@@ -87,7 +102,7 @@
     },
     {
       "source": "/mortgages/capital-raising",
-      "destination": "/remortgage-bournemouth",
+      "destination": "/capital-raising-mortgage",
       "statusCode": 301
     },
     {
