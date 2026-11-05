@@ -808,6 +808,13 @@ const retChipAll = (page) => page.$eval("#ret-month-chips .ret-month-chip[data-m
       const after = await heroNum();
       ok("§F4 · the Reports hero's earned figure dropped by exactly the waived broker fee",
         before != null && after != null && before - after === pick.fee, JSON.stringify({ before, after, fee: pick.fee }));
+      // R98 · A-4: the introducers table's Revenue uses the same feeEarned basis — a waived broker fee counts 0 there too.
+      const intro = await page.evaluate(() => {
+        const base = { stage: "completed", completed_at: new Date().toISOString(), created_at: new Date().toISOString(), introducer_id: "i-r98", proc_fee: 300, broker_fee: 499, sols_fee: 100 };
+        const rev = (fs) => { renderBookIntroducers({ all: [Object.assign({}, base, { fee_status: fs })], introMap: { "i-r98": "R98 Intro" } }); const cells = [...document.querySelectorAll("#report-introducers tr + tr td")]; return cells.length ? Number(cells[cells.length - 1].textContent.replace(/[^\d.]/g, "")) : null; };
+        return { money: showMoney(), paid: rev("paid"), waived: rev("waived") };
+      });
+      eq("§F5 · introducer Revenue: the same case waived counts proc+sols only (agrees with earnedOnCompletion)", intro, { money: true, paid: 899, waived: 400 });
       eq("§F · no console errors", realErrs(page).slice(errBefore), []);
       await page.close();
     }

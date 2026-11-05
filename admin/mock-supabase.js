@@ -4130,7 +4130,7 @@
   var SITE_SITEMAP_PATHS = ["/", "/mortgages", "/first-time-buyer-mortgages-bournemouth", "/remortgage-bournemouth",
     "/buy-to-let-mortgages-dorset", "/services", "/calculators", "/contact", "/about", "/faq", "/testimonials",
     "/privacy", "/cookies", "/share-the-love-terms"];
-  /* The edge function's rules (edge/seo-snapshot-v1.ts auditHtml), so a fixture's issues agree with its numbers. */
+  /* The edge function's rules (edge/seo-snapshot-v2.ts auditHtml), so a fixture's issues agree with its numbers. */
   function siteAuditIssues(a) {
     var out = [];
     if (a.status !== 200) out.push({ code: "http_error", level: "error", msg: "HTTP " + a.status });
@@ -6951,7 +6951,7 @@
       row.status = "sent"; row.detail = "201 {\"job\":{\"state\":\"PENDING\"}}";
       return { ok: true, id: row.id, status: "sent", detail: row.detail };
     },
-    /* R93 · A — edge/seo-snapshot-v1.ts, mirrored for the JWT path: owner/admin; writes today's (UTC) rows in
+    /* R93 · A — edge/seo-snapshot-v2.ts, mirrored for the JWT path: owner/admin; writes today's (UTC) rows in
        the fixture shapes and answers { ok, summary, errors }. seo_audit_enabled 'off' without force = skipped. */
     "seo-snapshot": function (body) {
       if (!isAdminOrOwner()) return { __status: 401, ok: false, error: "unauthorized" };

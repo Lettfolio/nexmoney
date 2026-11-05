@@ -169,6 +169,11 @@
       "source": "/privacy-policy",
       "destination": "/privacy",
       "statusCode": 301
+    },
+    {
+      "source": "/sitemap",
+      "destination": "/",
+      "statusCode": 301
     }
   ],
   "headers": [

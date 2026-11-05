@@ -114,7 +114,7 @@ const FIXTURE = {
      §B — edge functions
      ===================================================================== */
   console.log("\n— §B · edge functions");
-  const pub = rd("edge/site-publish-v1.ts"), seo = rd("edge/seo-snapshot-v1.ts");
+  const pub = rd("edge/site-publish-v1.ts"), seo = rd("edge/seo-snapshot-v2.ts");
   ok("B1 · site-publish carries session_ok", pub.includes('uc.rpc("session_ok")') && pub.includes("second factor required"));
   ok("B2 · seo-snapshot carries session_ok", seo.includes('uc.rpc("session_ok")') && seo.includes("second factor required"));
   ok("B3 · seo-snapshot admits x-cron-key against settings.cron_key", seo.includes('req.headers.get("x-cron-key")') && seo.includes('.eq("key", "cron_key")'));
@@ -123,7 +123,9 @@ const FIXTURE = {
   ok("B6 · seo-snapshot upserts on (day,kind,page) and uses WebCrypto RS256", seo.includes('onConflict: "day,kind,page"') && seo.includes('"RSASSA-PKCS1-v1_5"') && seo.includes('"pkcs8"'));
   ok("B7 · owner/admin role gate in both", pub.includes('["owner", "admin"]') && seo.includes('["owner", "admin"]'));
   ok("B8 · seo-snapshot redacts ?key= in every error (msg + returned errors + run_errors)", seo.includes(`replace(/([?&]key=)[^&\\s"']+/g, "$1<redacted>")`) && /return redact\(s\)/.test(seo) && (seo.match(/errors: errors\.map\(redact\)/g) || []).length === 2 && /run_errors: errors\.slice\(0, RUN_ERRORS_MAX\)\.map\(\(e\) => redact\(e\)\.slice\(0, 200\)\)/.test(seo));
-  ok("B9 · seo-snapshot budget order: audit → PSI (≤8, 12 s, stop <10 s) → links", /const run = await runAudit\(dl, errors\);[\s\S]*const psi = await runPsi\(run\.pages, dl, errors\);\s*await runLinks\(run, dl, errors\);/.test(seo) && /PSI_MAX_PAGES = 8;/.test(seo) && /PSI_CALL_MS = 12_000;/.test(seo) && /PSI_MIN_LEFT_MS = 10_000;/.test(seo) && /not checked/.test(seo));
+  ok("B9 · seo-snapshot budget order: audit → PSI (≤8, 40 s, stop <10 s) → links", /const run = await runAudit\(dl, errors\);[\s\S]*const psi = await runPsi\(run\.pages, dl, errors\);\s*await runLinks\(run, dl, errors\);/.test(seo) && /PSI_MAX_PAGES = 8;/.test(seo) && /PSI_CALL_MS = 40_000;/.test(seo) && /PSI_MIN_LEFT_MS = 10_000;/.test(seo) && /not checked/.test(seo));
+  // R98 · A-1: PSI pages run concurrently (staggered launches, allSettled), each capped by what the budget leaves.
+  ok("B10 · seo-snapshot PSI is concurrent: 250 ms stagger, Promise.allSettled, min(40 s, left − 2 s), error strings kept", /PSI_STAGGER_MS = 250;/.test(seo) && /await Promise\.allSettled\(calls\)/.test(seo) && seo.includes("Math.min(PSI_CALL_MS, dl.left() - 2_000)") && !/for \(let i[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*await fetchT\(url/.test(seo) && seo.includes("`psi ${pathOf(loc)}: 429 rate limited`") && seo.includes("`psi ${pathOf(loc)}: HTTP ${r.status}`") && seo.includes("`psi ${pathOf(loc)}: ${msg(e)}`") && seo.includes("psi_connected: psi.size > 0"));
 
   /* =====================================================================
      §C — build.js
@@ -178,6 +180,10 @@ const FIXTURE = {
   ok("C21 · --hash does no content work", !/content/.test(hash));
   const vj = JSON.parse(rd("vercel.json"));
   ok("C22 · vercel.json: no /guides redirect, the others kept", !vj.redirects.some((r) => r.source === "/guides") && vj.redirects.some((r) => r.source === "/forum"));
+  // R98 · A-2: the old site's HTML /sitemap page 301s home; the XML sitemap must not be caught by any rule.
+  const srcRe = (src) => new RegExp("^" + src.replace(/[.]/g, "\\.").replace(/:\w+\+/g, "[^/]+(?:/[^/]+)*").replace(/:\w+/g, "[^/]+") + "$");
+  const hits = (p) => vj.redirects.filter((r) => srcRe(r.source).test(p));
+  ok("C22b · vercel.json: /sitemap → / (301, permanent); /sitemap.xml matches no redirect", hits("/sitemap").length === 1 && hits("/sitemap")[0].destination === "/" && hits("/sitemap")[0].statusCode === 301 && hits("/sitemap.xml").length === 0 && hits("/careers").length === 1, JSON.stringify([hits("/sitemap"), hits("/sitemap.xml")]));
   ok("C23 · llms.txt lists /guides", rd("llms.txt").includes("https://www.nexmoney.co.uk/guides"));
   const pkg = JSON.parse(rd("package.json"));
   ok("C24 · marked is a pinned devDependency", /^\d+\.\d+\.\d+$/.test((pkg.devDependencies || {}).marked || ""), (pkg.devDependencies || {}).marked);
