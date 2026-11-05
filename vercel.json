@@ -26,11 +26,6 @@
       "statusCode": 301
     },
     {
-      "source": "/general-insurance/accident-insurance",
-      "destination": "/asu-insurance",
-      "statusCode": 301
-    },
-    {
       "source": "/calculators/rental-income-calc",
       "destination": "/buy-to-let-rent-calculator",
       "statusCode": 301

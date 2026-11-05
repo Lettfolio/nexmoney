@@ -12,7 +12,7 @@
    ========================================================================== */
 
 /* ===== R93 · B CONTENT ===== */
-/* R93 · B: the public pages = sitemap.xml's <loc>s (17 since R99 · SEO-A). A page not listed here has no editor row. */
+/* R93 · B: the public pages = sitemap.xml's <loc>s (16 since R99 · SEO-A). A page not listed here has no editor row. */
 const sitePagesConst = [
   { slug: "", label: "Home" },
   { slug: "mortgages", label: "Mortgages" },
@@ -22,7 +22,6 @@ const sitePagesConst = [
   { slug: "buy-to-let-mortgages-dorset", label: "Buy-to-let" },
   { slug: "buy-to-let-rent-calculator", label: "BTL rent calculator" },
   { slug: "services", label: "Services" },
-  { slug: "asu-insurance", label: "ASU insurance" },
   { slug: "calculators", label: "Calculators" },
   { slug: "contact", label: "Contact" },
   { slug: "about", label: "About" },
