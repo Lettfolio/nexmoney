@@ -1,11 +1,12 @@
 // =============================================================================
-// seo-snapshot v1 — R93 · A (Website › SEO tab)
+// seo-snapshot v2 — R93 · A (Website › SEO tab); v2 R98 · A-1 (PSI concurrent)
 // Nightly by pg_cron 02:30 UTC (x-cron-key = settings.cron_key, process-emails' pattern; see
 // db/r93/02_cron.sql), or by an owner/admin JWT (owner-digest v7's gate: session_ok() → 403,
 // profiles.role owner/admin) with { force: true } from "Run audit now".
 // Steps: (1) sitemap → per-page audit fetch (8 concurrent);
-//        (2) PageSpeed Insights mobile, ≤8 pages, sequential with 1 s gap, each call ≤12 s, stop
-//            when <10 s of budget remain, skip on 429 (+ &key= when the PSI_API_KEY secret exists);
+//        (2) PageSpeed Insights mobile, ≤8 pages CONCURRENTLY (launched 250 ms apart), each call
+//            ≤min(40 s, budget left − 2 s), no launch with <10 s left, skip on 429 (+ &key= when the
+//            PSI_API_KEY secret exists) — R98 · A-1, v2: sequential calls timed out after 3 pages;
 //        (3) internal link check with whatever budget remains (≤150 links, 8 concurrent; the
 //            number left unchecked is noted);
 //        GSC (when the GSC_SERVICE_ACCOUNT secret exists) runs alongside all three: RS256 JWT via
@@ -41,7 +42,8 @@ const MAX_PAGES = 40;
 const MAX_LINKS = 150;
 const CONCURRENCY = 8;
 const PSI_MAX_PAGES = 8;
-const PSI_CALL_MS = 12_000;
+const PSI_CALL_MS = 40_000;
+const PSI_STAGGER_MS = 250;      // between launches, so the ≤8 calls are not one burst
 const PSI_MIN_LEFT_MS = 10_000;    // don't start a PSI call with less than this left
 const RUN_ERRORS_MAX = 20;
 const GSC_QUERY_ROWS = 50;
@@ -286,15 +288,14 @@ async function runPsi(locs: string[], dl: Deadline, errors: string[]): Promise<M
   const out = new Map<string, unknown>();
   const key = Deno.env.get("PSI_API_KEY");
   const list = locs.slice(0, PSI_MAX_PAGES);
-  for (let i = 0; i < list.length; i++) {
-    if (dl.left() < PSI_MIN_LEFT_MS) { errors.push(`psi: budget reached after ${i} of ${list.length} pages`); break; }
-    if (i > 0) await sleep(1_000);
-    const loc = list[i];
+  // R98 · A-1: a Lighthouse run takes 20–60 s, so sequential calls ran out of budget after 3 pages;
+  // launch every page at once (250 ms apart, quota is 240/min), each capped at what the budget leaves.
+  const one = async (loc: string): Promise<string | null> => {
     const url = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(loc)}&strategy=mobile&category=performance${key ? `&key=${encodeURIComponent(key)}` : ""}`;
     try {
-      const r = await fetchT(url, {}, PSI_CALL_MS, dl);
-      if (r.status === 429) { await r.body?.cancel().catch(() => {}); errors.push(`psi ${pathOf(loc)}: 429 rate limited`); continue; }
-      if (!r.ok) { await r.body?.cancel().catch(() => {}); errors.push(`psi ${pathOf(loc)}: HTTP ${r.status}`); continue; }
+      const r = await fetchT(url, {}, Math.min(PSI_CALL_MS, dl.left() - 2_000), dl);
+      if (r.status === 429) { await r.body?.cancel().catch(() => {}); return `psi ${pathOf(loc)}: 429 rate limited`; }
+      if (!r.ok) { await r.body?.cancel().catch(() => {}); return `psi ${pathOf(loc)}: HTTP ${r.status}`; }
       const j = await r.json();
       const lh = j?.lighthouseResult;
       const au = lh?.audits || {};
@@ -309,9 +310,20 @@ async function runPsi(locs: string[], dl: Deadline, errors: string[]): Promise<M
         fcp_ms: num(au["first-contentful-paint"]?.numericValue) == null ? null : Math.round(au["first-contentful-paint"].numericValue),
         fetched_at: new Date().toISOString(),
       });
+      return null;
     } catch (e) {
-      errors.push(`psi ${pathOf(loc)}: ${msg(e)}`);
+      return `psi ${pathOf(loc)}: ${msg(e)}`;
     }
+  };
+  const calls: Promise<string | null>[] = [];
+  for (let i = 0; i < list.length; i++) {
+    if (dl.left() < PSI_MIN_LEFT_MS) { errors.push(`psi: budget reached after ${i} of ${list.length} pages`); break; }
+    if (i > 0) await sleep(PSI_STAGGER_MS);
+    calls.push(one(list[i]));
+  }
+  for (const s of await Promise.allSettled(calls)) {
+    const e = s.status === "fulfilled" ? s.value : `psi: ${msg(s.reason)}`;
+    if (e) errors.push(e);
   }
   return out;
 }

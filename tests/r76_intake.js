@@ -246,13 +246,12 @@ async function setHold(page, value) {
       await wait(page, 2400);
       const classic = (page.__dialogs.find((d) => d.type === "confirm") || {}).message || "";
       ok("A6 · with the hold OFF the classic consent confirm is untouched",
-        /Send ALL \d+ queued email/.test(classic) && /Recipients:\s*\S/.test(classic) && /whole firm/.test(classic) && /Cancel sends nothing/.test(classic),
+        /^Send \d+ emails? now\?/.test(classic) && /Recipients:\s*\S/.test(classic) && /whole firm/.test(classic) && /Cancel sends nothing/.test(classic),
         classic.slice(0, 300));
-      const promised = Number((/Send ALL (\d+) queued email/.exec(classic) || [])[1] || 0);
+      const promised = Number((/^Send (\d+) emails? now\?/.exec(classic) || [])[1] || 0);
       const sentRun = await page.evaluate(() => window.__mock.lastEmailRun());
-      /* R97 · HF1: v23 parity — stale (>7 days) and care-flagged rows are cancelled at send time, never sent. */
-      const acct = sentRun ? (sentRun.sent || 0) + (sentRun.skipped_care || 0) + (sentRun.skipped_stale || 0) : -1;
-      ok("A6 · …and the number consented to is the number sent (bar v23's stale/care cancels) — never more", promised > 0 && sentRun && acct === promised && sentRun.sent <= promised,
+      /* R98 · A-3: the confirm's count leaves out v23's stale (>7 days) and care-flagged cancels, so it is the number sent. */
+      ok("A6 · …and the number consented to is the number sent — exactly", promised > 0 && sentRun && sentRun.sent === promised,
         `promised ${promised}, sent ${sentRun && sentRun.sent}, care ${sentRun && sentRun.skipped_care}, stale ${sentRun && sentRun.skipped_stale}`);
       const ovlDuringClassic = await page.evaluate(() => !document.querySelector("#overlay-backdrop").classList.contains("hidden"));
       eq("A6 · no house overlay in the unheld flow", ovlDuringClassic, false);

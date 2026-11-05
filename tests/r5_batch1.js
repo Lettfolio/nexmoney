@@ -272,6 +272,20 @@ async function main() {
         const { data } = await window.__mockDb.from("email_queue").select("id,to_email,client_id").eq("status", "queued");
         return data.length;
       });
+      /* R98 · A-3: make sure one due row is >7 days stale, then count what v23 will cancel (stale, or a care-flagged
+         client on a non-custom type, comms_optout only off the four marketing types) — the confirm must name it. */
+      const expectCancel = await snapshot(p4, () => {
+        const MKT = ["birthday_greeting", "completion_anniversary", "referral_request", "review_request"];
+        const nowIso = new Date().toISOString(), staleBefore = new Date(Date.now() - 7 * 86400000).toISOString();
+        const q = window.__mock.db.email_queue.filter((e) => e.status === "queued" && e.to_email && e.email_type !== "custom");
+        if (!q.some((e) => e.scheduled_for && e.scheduled_for < staleBefore) && q[0]) q[0].scheduled_for = new Date(Date.now() - 10 * 86400000).toISOString();
+        const cl = (id) => window.__mock.db.clients.filter((c) => c.id === id)[0];
+        return window.__mock.db.email_queue.filter((e) => e.status === "queued" && (!e.scheduled_for || e.scheduled_for <= nowIso)).filter((e) => {
+          if (e.scheduled_for && e.scheduled_for < staleBefore) return true;
+          const c = e.client_id && e.email_type !== "custom" && cl(e.client_id);
+          return !!(c && (c.suppress_automation || (c.comms_optout && MKT.indexOf(e.email_type) < 0)));
+        }).length;
+      });
       p4.__dialogAnswer = "dismiss";           // cancel: nothing may be sent
       p4.__dialogs.length = 0;
       const sentBefore = await snapshot(p4, () => (window.__mock.lastEmailRun() || {}).sent || 0);
@@ -284,8 +298,9 @@ async function main() {
          went out. The button now queues BEFORE it asks; the invariant under test is therefore the
          one that matters — the number in the confirm is the number that will be sent (checked
          against lastEmailRun() after the accepted run below). */
-      const promised = Number((/Send ALL (\d+) queued email/.exec(msg) || [])[1] || 0);
+      const promised = Number((/^Send (\d+) emails? now\?/.exec(msg) || [])[1] || 0);
       ok("R5-1 · the confirm states a count", promised > 0, JSON.stringify(msg));
+      ok("R5-1 · R98 · A-3: the confirm names the rows v23 will cancel, in one clause", expectCancel > 0 && msg.includes(`(${expectCancel} stale or care-flagged row${expectCancel === 1 ? "" : "s"} will be cancelled)`), `expected ${expectCancel}: ` + JSON.stringify(msg.slice(0, 160)));
       ok("R5-1 · the confirm lists recipients by name", /Recipients:\s*\S/.test(msg), JSON.stringify(msg));
       ok("R5-1 · the confirm says it covers the whole firm", /whole firm/i.test(msg), JSON.stringify(msg));
       // Cancelling must SEND nothing. (Queue length is no longer the proxy for that: the queueing
@@ -304,16 +319,16 @@ async function main() {
       await p4.click("#run-now-btn");
       await p4.waitForTimeout(1600);
       const acceptedMsg = (p4.__dialogs.find((d) => d.type === "confirm") || {}).message || "";
-      const promisedNow = Number((/Send ALL (\d+) queued email/.exec(acceptedMsg) || [])[1] || 0);
+      const promisedNow = Number((/^Send (\d+) emails? now\?/.exec(acceptedMsg) || [])[1] || 0);
       const afterSend = await snapshot(p4, async () => {
         const { data } = await window.__mockDb.from("email_queue").select("id").eq("status", "queued");
         return { queued: data.length, run: window.__mock.lastEmailRun() };
       });
       ok("R5-1 · confirming does flush the queue", afterSend.queued < queuedBefore, `${queuedBefore} → ${afterSend.queued}`);
-      /* R97 · HF1: v23 (and now the mock) cancels, at send time, rows more than 7 days stale and rows whose client is
-         care-flagged/opted out — so the promise is kept as "sent, or cancelled with a reason", and never exceeded. */
-      const rr = afterSend.run || {}, accounted = (rr.sent || 0) + (rr.skipped_care || 0) + (rr.skipped_stale || 0);
-      ok("R5-1 · the number consented to is the number sent (bar v23's stale/care cancels) — never more", afterSend.run && promisedNow > 0 && accounted === promisedNow && rr.sent <= promisedNow,
+      /* R98 · A-3: the confirm now leaves out what v23 (and the mock) cancels at send time — stale >7 days,
+         care-flagged/opted out — so the number consented to is the number sent again. */
+      const rr = afterSend.run || {};
+      ok("R5-1 · the number consented to is the number sent — exactly", afterSend.run && promisedNow > 0 && rr.sent === promisedNow,
         `confirm promised ${promisedNow}, sent ${rr.sent}, care ${rr.skipped_care}, stale ${rr.skipped_stale}`);
       ok("R5-1 · the deliberate flush is UNscoped (the cron's behaviour)", afterSend.run && afterSend.run.scoped === false, JSON.stringify(afterSend.run && afterSend.run.scoped));
 

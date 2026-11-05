@@ -502,7 +502,7 @@ function readGroup(page, caseId) {
     await wait(page, 2500);
     const confirmTxt = page.__dialogs.join("\n");
     ok("C2 · it asks the Emails page's own question, word for word — same path, same consent",
-      /Send ALL \d+ queued email/.test(confirmTxt)
+      /Send \d+ emails? now\?/.test(confirmTxt)
       && /Recipients:/.test(confirmTxt)
       && /This sends for the whole firm, not just your cases\./.test(confirmTxt)
       && /Cancel sends nothing/.test(confirmTxt), confirmTxt.slice(0, 400));

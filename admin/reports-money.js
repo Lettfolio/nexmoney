@@ -961,7 +961,8 @@ function renderLeadSourcesPanel(all, mv) {
     if (raw) v.variants.set(raw, (v.variants.get(raw) || 0) + 1);
     v.cases++;
     if (c.created_at && (!v.last || c.created_at > v.last)) v.last = c.created_at;
-    if (c.stage === "completed") { v.completed++; v.revenue += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
+    // R98 · A-4: feeEarned, so a waived broker fee counts 0 here as in the headline.
+    if (c.stage === "completed") { v.completed++; v.revenue += feeEarned(c); }
     else if (c.stage === "not_proceeding") v.lost++;
     else v.live++;
   });
@@ -2254,7 +2255,8 @@ function renderBookIntroducers(c) {
     const v = iMap[k];
     v.total++;
     if (c.created_at && (!v.last || c.created_at > v.last)) v.last = c.created_at;
-    if (c.stage === "completed") { v.done++; v.revenue += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
+    // R98 · A-4: feeEarned (waived broker fee → 0), so introducer revenue agrees with the earned headline.
+    if (c.stage === "completed") { v.done++; v.revenue += feeEarned(c); }
     else if (c.stage === "not_proceeding") v.lost++;
     else v.live++;
   });
@@ -2877,7 +2879,8 @@ function renderAdvocacy(all, ctx) {
       if (c.client_id) v.clients.add(c.client_id);
       /* CONVERTED VALUE = fee value EARNED on the referred cases that completed — proc + broker + sols, paid
          or not. Deliberately the same expression earnedOnCompletion() uses for the headline "Fees earned"… */
-      if (c.stage === "completed") { v.done++; v.value += Number(c.proc_fee || 0) + Number(c.broker_fee || 0) + Number(c.sols_fee || 0); }
+      // R98 · A-4: feeEarned (waived broker fee → 0), the helper earnedOnCompletion() itself uses.
+      if (c.stage === "completed") { v.done++; v.value += feeEarned(c); }
     });
     const list = [...byReferrer.values()]
       .sort((a, b) => b.clients.size - a.clients.size || b.value - a.value)
@@ -5108,4 +5111,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r97hf1";   // R89
+window.__nxTag_reportsmoney = "r98a";   // R89

@@ -22447,7 +22447,7 @@ async function runQueueNow(btn, after) {
     const queueingRan = !qa.error && !qc.error;
     const nowIso = new Date().toISOString();
     const { data: rows, error } = await db.from("email_queue")
-      .select("id,to_email,scheduled_for,clients(first_name,last_name)")
+      .select("id,to_email,scheduled_for,email_type,client_id,clients(first_name,last_name,suppress_automation,comms_optout)")
       .eq("status", "queued").order("scheduled_for");
     if (error) return dbFail("sendNowPreview", error, "Couldn't read the queue: " + error.message);   // R81 · A4
     // `scheduled_for` in the future is a deliberately deferred send (e.g. a rate-end chase) — the
@@ -22467,7 +22467,7 @@ async function runQueueNow(btn, after) {
        on a held system (the stuck-cron banner clears because the heartbeat moved, not because
        mail went out); the server's own held warning is surfaced by runAutomation's toast exactly
        as before. When the hold is OFF, the confirm below is a pinned contract (r5_batch1 R5-1 /
-       r69_today §C) and is byte-for-byte untouched. */
+       r69_today §C; R98 · A-3 made its count exclude what v23 cancels). */
     if (emailHoldOn()) {
       const goAhead = await confirmDestructive({
         title: "Email sending is on hold",
@@ -22481,8 +22481,15 @@ async function runQueueNow(btn, after) {
       if (typeof after === "function") await after();
       return;
     }
-    const who = due.slice(0, 5).map((e) => (e.clients ? [e.clients.first_name, e.clients.last_name].filter(Boolean).join(" ") : "") || e.to_email || "unknown recipient");
-    const more = due.length > who.length ? ` …and ${due.length - who.length} more` : "";
+    // R98 · A-3: the unscoped run (v23) cancels >7-day-stale and care-flagged rows; the count names only what sends.
+    const staleBefore = new Date(Date.now() - 7 * 86400000).toISOString();
+    const willCancel = (e) => queueingRan && ((e.scheduled_for && e.scheduled_for < staleBefore)
+      || (e.client_id && e.email_type !== "custom" && e.clients
+        && (e.clients.suppress_automation || (e.clients.comms_optout && !EDGE_MARKETING_TYPES.includes(e.email_type)))));
+    const sends = due.filter((e) => !willCancel(e));
+    const nCancel = due.length - sends.length;
+    const who = sends.slice(0, 5).map((e) => (e.clients ? [e.clients.first_name, e.clients.last_name].filter(Boolean).join(" ") : "") || e.to_email || "unknown recipient");
+    const more = sends.length > who.length ? ` …and ${sends.length - who.length} more` : "";
     /* R9-3: review REMINDERS count too. They are emails a client receives, queued by the same run, and
        leaving them out of "N of these were queued just now" made the sentence quietly wrong the moment the… */
     const newly = queueingRan
@@ -22490,8 +22497,9 @@ async function runQueueNow(btn, after) {
         + Number((qc.data && (qc.data.review_requests_queued || 0)) || 0)
         + Number((qc.data && (qc.data.review_reminders_queued || 0)) || 0)
       : 0;
-    if (!confirm(`Send ALL ${due.length} queued email${due.length === 1 ? "" : "s"} now?`
-      + `\n\nRecipients: ${who.join(", ")}${more}`
+    if (!confirm(`Send ${sends.length} email${sends.length === 1 ? "" : "s"} now?`
+      + (nCancel ? ` (${nCancel} stale or care-flagged row${nCancel === 1 ? "" : "s"} will be cancelled)` : "")
+      + `\n\nRecipients: ${who.join(", ") || "none"}${more}`
       + (newly ? `\n\n${newly} of these were queued just now by the automation (rate-end reminders, review requests that fell due, and reminders for review requests nobody answered).` : "")
       + `\n\nThis sends for the whole firm, not just your cases.`
       + `\nCancel sends nothing — anything queued stays in the queue for the overnight run.`)) return;
@@ -26361,6 +26369,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r97hf1";   // R89
+window.__nxTag_app = "r98a";   // R89
 
 init();
