@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Buy to Let Rent Calculator | Rental Cover &amp; ICR | NexMoney</title>
+  <meta name="description" content="Free buy to let rent calculator: see your gross yield, the rental cover your rent achieves and the rent needed to pass a 125% or 145% ICR test.">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+  <meta name="author" content="NexMoney Ltd">
+  <link rel="canonical" href="https://www.nexmoney.co.uk/buy-to-let-rent-calculator">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="NexMoney">
+  <meta property="og:title" content="Buy to Let Rent Calculator | NexMoney">
+  <meta property="og:description" content="Calculate rental value against a lender’s rental cover test: gross yield, ICR achieved and the rent needed at 125% or 145%.">
+  <meta property="og:url" content="https://www.nexmoney.co.uk/buy-to-let-rent-calculator">
+  <meta property="og:image" content="https://www.nexmoney.co.uk/og-image.jpg">
+  <meta property="og:locale" content="en_GB">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@NexMoney">
+  <meta name="twitter:title" content="Buy to Let Rent Calculator | NexMoney">
+  <meta name="twitter:description" content="A free rental income calculator for landlords, with a plain-English guide to ICR and stress rates.">
+  <meta name="twitter:image" content="https://www.nexmoney.co.uk/og-image.jpg">
+
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script>document.documentElement.classList.add('js')</script>
+  <script src="enhance.js" defer></script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": ["FinancialService", "LocalBusiness"],
+      "@id": "https://www.nexmoney.co.uk/#organization",
+      "name": "NexMoney Ltd",
+      "alternateName": ["NexMoney", "Next Money"],
+      "url": "https://www.nexmoney.co.uk/",
+      "logo": "https://www.nexmoney.co.uk/logo.svg",
+      "telephone": "+441202802677",
+      "address": {"@type": "PostalAddress", "streetAddress": "Avalon, 26-32 Oxford Road", "addressLocality": "Bournemouth", "addressRegion": "Dorset", "postalCode": "BH8 8EZ", "addressCountry": "GB"},
+      "identifier": [
+        {"@type": "PropertyValue", "propertyID": "Companies House", "value": "11454479"},
+        {"@type": "PropertyValue", "propertyID": "FCA FRN", "value": "610875"}
+      ],
+      "sameAs": [
+        "https://uk.trustpilot.com/review/www.nexmoney.co.uk",
+        "https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT",
+        "https://find-and-update.company-information.service.gov.uk/company/11454479"
+      ]
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://www.nexmoney.co.uk/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Calculators",
+          "item": "https://www.nexmoney.co.uk/calculators"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Buy to let rent calculator",
+          "item": "https://www.nexmoney.co.uk/buy-to-let-rent-calculator"
+        }
+      ]
+    },
+    {
+      "@type": "WebApplication",
+      "name": "NexMoney Buy to Let Rent Calculator",
+      "description": "Free buy-to-let rent calculator: gross yield, the rental cover ratio a rent achieves and the rent needed to pass a 125% or 145% interest cover test at a chosen stress rate.",
+      "url": "https://www.nexmoney.co.uk/buy-to-let-rent-calculator",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "All",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "GBP"
+      },
+      "author": {
+        "@id": "https://www.nexmoney.co.uk/#organization"
+      }
+    },
+    {
+      "@type": "Service",
+      "name": "Buy-to-Let Mortgage Advice",
+      "serviceType": "Mortgage brokerage",
+      "description": "Whole-of-market buy-to-let mortgage advice for first-time and portfolio landlords, in personal names and through limited companies.",
+      "provider": {
+        "@id": "https://www.nexmoney.co.uk/#organization"
+      },
+      "areaServed": [
+        {
+          "@type": "City",
+          "name": "Bournemouth"
+        },
+        {
+          "@type": "AdministrativeArea",
+          "name": "Dorset"
+        },
+        {
+          "@type": "Country",
+          "name": "United Kingdom"
+        }
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How do I calculate the rent needed for a buy-to-let mortgage?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Multiply the mortgage amount by the lender’s stress rate, divide by 12 to get the monthly stressed interest, then multiply by the rental cover ratio, such as 125% or 145%. The result is the minimum monthly rent the lender may want to see. Lenders’ ratios and stress rates vary."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is a good interest cover ratio?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Lenders commonly ask for 125% or 145%, depending on your tax position and whether you buy personally or through a limited company. Meeting a lender’s ratio does not guarantee a mortgage: your credit history, experience, the property and other criteria are also assessed."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why do higher-rate taxpayers need 145% rental cover?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Individual landlords now receive only a basic-rate tax credit for mortgage interest, so higher- and additional-rate taxpayers keep less of the rent after tax. Many lenders allow for this by asking for a higher rental cover ratio, often 145%. NexMoney does not provide taxation advice."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What stress rate do lenders use?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "It varies by lender and product. The stress rate is often higher than the rate you pay, although on fixed rates of five years or more lenders are often allowed to test at or near the pay rate. That is why this calculator asks you to enter the rate you want to test."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I still borrow if the rent does not cover the test?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Possibly. Some lenders allow top-slicing with surplus personal income, and a larger deposit or a longer fixed rate can also change the result. These options are subject to lender criteria and affordability."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+  <style>
+    .full-calc-card { background: linear-gradient(160deg, rgba(255,255,255,0.055), rgba(255,255,255,0.02)); backdrop-filter: blur(10px); border: 1px solid var(--brd); border-radius: 16px; padding: 36px; box-shadow: var(--shadow-dk); margin: 32px 0; }
+    .full-calc-card h2 { font-size: 20px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+    .full-calc-card .calc-desc { font-size: 14px; color: var(--dim); margin-bottom: 24px; }
+    .btl-calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+    .btl-out-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .calc-output { background: linear-gradient(135deg, #0a2a52, #0d4a8f); border-radius: 12px; padding: 20px; margin-top: 16px; }
+    .calc-output-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: rgba(255,255,255,0.65); margin-bottom: 4px; }
+    .calc-output-value { font-size: 26px; font-weight: 900; color: #fff; }
+    .calc-output-sub { font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 10px; }
+    @media (max-width: 768px) { .btl-calc-grid, .btl-out-grid { grid-template-columns: 1fr; } .full-calc-card { padding: 24px; } }
+  </style>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="container">
+    <div class="topbar-left">
+      <span>Whole-of-market broker — FCA Registered (FRN 610875)</span>
+      <span>|</span>
+      <span>Bournemouth based · National coverage</span>
+    </div>
+    <div class="topbar-right">
+      <a href="mailto:info@nexmoney.co.uk">info@nexmoney.co.uk</a>
+      <a href="tel:01202802677">01202 802 677</a>
+    </div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<header>
+  <div class="container">
+    <div class="header-inner">
+      <a href="/" class="logo">
+        <svg class="logo-icon" width="46" height="46" viewBox="0 0 46 46" xmlns="http://www.w3.org/2000/svg"><rect width="46" height="46" rx="10" fill="#f36f23"/><polyline points="12,13 27,23 12,33" fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div class="logo-text">
+          <strong>NexMoney</strong>
+          <small>Mortgage &amp; Insurance Brokers</small>
+        </div>
+      </a>
+      <nav id="mainNav">
+        <a href="/">Home</a>
+        <a href="/mortgages">Mortgages</a>
+        <a href="/services">Services</a>
+        <a href="/calculators" class="active">Calculators</a>
+        <a href="/about">About</a>
+        <a href="/faq">FAQs</a>
+        <a href="/contact">Contact</a>
+        <a href="/admin" class="nav-adviser" rel="nofollow">Adviser Login</a>
+      </nav>
+      <div class="header-cta">
+        <a class="header-phone" href="tel:01202802677">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 014.11 11.9a19.79 19.79 0 01-3.07-8.67A2 2 0 013 1.08h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+          01202 802 677
+        </a>
+        <a href="/contact" class="btn btn-primary">Speak to an Adviser</a>
+      </div>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false" data-act="navToggle" data-args='["$this"]'>
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- PAGE HERO -->
+<div class="page-hero">
+  <div class="hero-aurora" aria-hidden="true"></div>
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Home</a>
+      <span>/</span>
+      <a href="/calculators">Calculators</a>
+      <span>/</span>
+      <span>Buy to let rent calculator</span>
+    </div>
+    <h1>Buy to Let Rent Calculator</h1>
+    <p>Calculate rental value against a lender&rsquo;s rental cover test, and see how ICR, stress rates and top-slicing affect what you could borrow.</p>
+  </div>
+</div>
+
+<!-- ANSWER-FIRST INTRO -->
+<section>
+  <div class="container" style="max-width:800px;">
+    <p style="font-size:18px; line-height:1.8;"><strong>A buy to let rent calculator checks whether a property&rsquo;s monthly rent is high enough to pass a lender&rsquo;s rental cover test, which compares the rent with the mortgage interest worked out at a &ldquo;stress&rdquo; rate.</strong> Enter the property value, the expected rent, the mortgage amount and the stress rate you want to test, and choose a 125% or 145% ratio. The calculator shows the gross yield, the rental cover your rent achieves and the rent needed to pass. Results are indicative only: each lender sets its own ratios, stress rates and rules.</p>
+
+    <!-- calc -->
+    <div class="full-calc-card" id="calculator">
+      <h2>Rental cover calculator</h2>
+      <p class="calc-desc">Enter your own figures. Results are indicative only and are not a mortgage offer or a recommendation.</p>
+      <div class="btl-calc-grid">
+          <div class="form-group">
+            <label for="btl_value">Property value</label>
+            <div class="calc-input-wrap"><span class="calc-prefix">£</span>
+              <input type="number" id="btl_value" class="calc-input" value="250000" min="0" data-act="calcBTL" data-on="input">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="btl_rent">Expected monthly rent</label>
+            <div class="calc-input-wrap"><span class="calc-prefix">£</span>
+              <input type="number" id="btl_rent" class="calc-input" value="1200" min="0" data-act="calcBTL" data-on="input">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="btl_loan">Mortgage amount</label>
+            <div class="calc-input-wrap"><span class="calc-prefix">£</span>
+              <input type="number" id="btl_loan" class="calc-input" value="187500" min="0" data-act="calcBTL" data-on="input">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="btl_rate">Stress rate to test (%)</label>
+            <div class="calc-input-wrap"><span class="calc-prefix">%</span>
+              <input type="number" id="btl_rate" class="calc-input" min="0" step="0.1" max="25" placeholder="e.g. 5.5" data-act="calcBTL" data-on="input" style="padding-left:32px;">
+            </div>
+          </div>
+        <div class="form-group">
+          <label for="btl_ratio">Rental cover ratio required</label>
+          <select id="btl_ratio" data-act="calcBTL" data-on="change">
+            <option value="125">125% (often basic-rate taxpayers and limited companies)</option>
+            <option value="145">145% (often higher- and additional-rate taxpayers)</option>
+          </select>
+        </div>
+      </div>
+      <div class="btl-out-grid" role="status">
+        <div class="calc-output">
+          <div class="calc-output-label">Gross yield</div>
+          <div class="calc-output-value" id="btl_yield">&mdash;</div>
+        </div>
+        <div class="calc-output">
+          <div class="calc-output-label">Rental cover achieved</div>
+          <div class="calc-output-value" id="btl_icr">&mdash;</div>
+        </div>
+        <div class="calc-output">
+          <div class="calc-output-label">Rent needed to pass</div>
+          <div class="calc-output-value" id="btl_needed">&mdash;</div>
+        </div>
+      </div>
+      <p class="calc-output-sub" id="btl_icr_sub" style="color:var(--dim);">Enter the stress rate you want to test.</p>
+      <p class="calc-output-sub" id="btl_yield_sub" style="color:var(--dim);">Gross yield is before letting costs, voids and tax.</p>
+    </div>
+    <!-- /calc -->
+
+    <h2 style="margin-top:40px;">Calculating rent for a buy-to-let mortgage</h2>
+    <p>Most buy-to-let lenders size the loan on rent rather than on your salary. The basic calculation is:</p>
+    <p><strong>Rent needed each month = mortgage amount &times; stress rate &divide; 12 &times; rental cover ratio</strong></p>
+    <p>For illustration only, using a hypothetical stress rate of 5% (not a current rate): a &pound;200,000 mortgage gives monthly interest of about &pound;833. At 125% cover the rent needed is about &pound;1,042 a month; at 145% it is about &pound;1,208. Lenders use the rent their valuer confirms the property can achieve, which may differ from the rent you expect, and the calculation is usually made on an interest-only basis even if you choose a repayment mortgage.</p>
+
+    <h2 style="margin-top:40px;">What is ICR (interest cover ratio)?</h2>
+    <p>The <strong>interest cover ratio (ICR)</strong>, also called the rental cover ratio, is the monthly rent divided by the monthly mortgage interest at the lender&rsquo;s stress rate, shown as a percentage. A result of 125% means the rent is one and a quarter times the stressed interest.</p>
+    <p>The ratio a lender asks for often depends on how the income is taxed. Individual landlords cannot deduct mortgage interest from rental income in the way they once could; instead they receive a tax credit at the basic rate. Higher- and additional-rate taxpayers therefore keep less of the rent after tax, so lenders often test them at <strong>145%</strong>. Basic-rate taxpayers are often tested at <strong>125%</strong>. <strong>Limited companies</strong> pay corporation tax and can generally treat mortgage interest as a business cost, so lenders often apply 125% to them too. Some lenders use other ratios, for example for HMOs or holiday lets. NexMoney does not provide taxation advice; please speak to a qualified tax adviser or accountant about your position.</p>
+
+    <h2 style="margin-top:40px;">Stress rates and pay rates</h2>
+    <p>The <strong>pay rate</strong> is the interest rate you actually pay on the mortgage. The <strong>stress rate</strong> is the rate the lender uses for the rental cover test, and it is often higher than the pay rate &mdash; for example the pay rate plus a margin, or a minimum floor rate. On fixed rates of five years or more, lenders are often allowed to test at, or close to, the pay rate, which can mean a given rent supports a larger loan. Stress rates vary by lender and product and change over time, which is why this calculator asks you to enter one rather than suggesting a figure.</p>
+
+    <h2 style="margin-top:40px;">Top-slicing and other ways to bridge a shortfall</h2>
+    <p>If the rent falls short of the test, some lenders allow <strong>top-slicing</strong>: using surplus personal income to make up the difference, subject to their affordability checks and usually a minimum income. Other options can include a larger deposit, a longer fixed rate that is tested nearer the pay rate, or a different ownership structure. Not every lender offers these, and criteria vary.</p>
+
+    <h2 style="margin-top:40px;">Gross yield and what it leaves out</h2>
+    <p><strong>Gross yield</strong> is the annual rent divided by the property value. It is a quick way to compare properties, but it ignores letting and management fees, maintenance, insurance, service charges, void periods and tax, so your net return will be lower. Lenders do not lend on yield; they use the rental cover test.</p>
+
+    <h2 style="margin-top:40px;">Who this calculator is for</h2>
+    <p>This rental income calculator is designed for first-time landlords checking a purchase and for existing landlords testing a remortgage or a new addition to a portfolio. It does not include fees added to the loan, portfolio-wide stress tests for landlords with four or more mortgaged properties, or lender-specific rules. For an accurate figure, speak to us &mdash; we compare how different lenders would assess the same property. You can also read our guide to <a href="/buy-to-let-mortgages-dorset" style="color:var(--orange); font-weight:600;">buy-to-let mortgages</a>, or use our other <a href="/calculators" style="color:var(--orange); font-weight:600;">mortgage calculators</a>.</p>
+
+    <div class="risk-warning" role="note" aria-label="Risk warnings">
+      <p><strong>Risk warnings</strong></p>
+      <p>Your property may be repossessed if you do not keep up repayments on your mortgage.</p>
+      <p>Not all Buy to Let Mortgages are regulated by The Financial Conduct Authority.</p>
+    </div>
+
+    <div style="text-align:center; margin:48px 0 16px;">
+      <a href="/contact?type=buy-to-let" class="btn btn-primary btn-lg">Check your figures with an adviser →</a>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section style="background:var(--bg1);">
+  <div class="container" style="max-width:800px;">
+    <div class="section-header center">
+      <span class="section-label">Buy-to-Let Rent FAQs</span>
+      <h2 class="section-title">Your questions, <span>answered</span></h2>
+    </div>
+    <div class="faq-list">
+      <details class="faq-item">
+        <summary class="faq-question">How do I calculate the rent needed for a buy-to-let mortgage?</summary>
+        <div class="faq-answer"><p>Multiply the mortgage amount by the lender&rsquo;s stress rate, divide by 12 to get the monthly stressed interest, then multiply by the rental cover ratio, such as 125% or 145%. The result is the minimum monthly rent the lender may want to see. Lenders&rsquo; ratios and stress rates vary.</p></div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What is a good interest cover ratio?</summary>
+        <div class="faq-answer"><p>Lenders commonly ask for 125% or 145%, depending on your tax position and whether you buy personally or through a limited company. Meeting a lender&rsquo;s ratio does not guarantee a mortgage: your credit history, experience, the property and other criteria are also assessed.</p></div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Why do higher-rate taxpayers need 145% rental cover?</summary>
+        <div class="faq-answer"><p>Individual landlords now receive only a basic-rate tax credit for mortgage interest, so higher- and additional-rate taxpayers keep less of the rent after tax. Many lenders allow for this by asking for a higher rental cover ratio, often 145%. NexMoney does not provide taxation advice.</p></div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">What stress rate do lenders use?</summary>
+        <div class="faq-answer"><p>It varies by lender and product. The stress rate is often higher than the rate you pay, although on fixed rates of five years or more lenders are often allowed to test at or near the pay rate. That is why this calculator asks you to enter the rate you want to test.</p></div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Can I still borrow if the rent does not cover the test?</summary>
+        <div class="faq-answer"><p>Possibly. Some lenders allow top-slicing with surplus personal income, and a larger deposit or a longer fixed rate can also change the result. These options are subject to lender criteria and affordability.</p></div>
+      </details>
+    </div>
+    <p style="text-align:center; margin-top:24px;"><a href="/faq" style="color:var(--orange); font-weight:600;">See all mortgage FAQs →</a></p>
+  </div>
+</section>
+
+<!-- CTA BANNER -->
+<section class="cta-banner">
+  <div class="cta-wave" aria-hidden="true">
+    <svg viewBox="0 0 1440 60" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+      <path d="M0,0 L1440,0 L1440,18 C1080,62 360,2 0,42 Z"/>
+    </svg>
+  </div>
+  <div class="container">
+    <h2>Ready to run<br><span>the real numbers?</span></h2>
+    <p>Different lenders assess the same rent in different ways. A short call is enough to see where your figures stand.</p>
+    <div class="risk-warning" role="note" aria-label="Risk warnings">
+      <p><strong>Risk warnings</strong></p>
+      <p>Your property may be repossessed if you do not keep up repayments on your mortgage.</p>
+      <p>Not all Buy to Let Mortgages are regulated by The Financial Conduct Authority.</p>
+    </div>
+    <div class="cta-banner-actions">
+      <a href="/contact?type=buy-to-let" class="btn btn-primary btn-lg">Speak to an Adviser</a>
+      <a href="tel:01202802677" class="cta-phone-link">
+        <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 014.11 11.9a19.79 19.79 0 01-3.07-8.67A2 2 0 013 1.08h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L7.09 8.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+        01202 802 677
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+</main>
+
+<footer>
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="/" class="logo">
+          <svg class="logo-icon" width="46" height="46" viewBox="0 0 46 46" xmlns="http://www.w3.org/2000/svg"><rect width="46" height="46" rx="10" fill="#f36f23"/><polyline points="12,13 27,23 12,33" fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div class="logo-text"><strong>NexMoney</strong><small>Mortgage &amp; Insurance Brokers</small></div>
+        </a>
+        <p class="footer-desc">Expert whole-of-market mortgage and insurance advice. Based in Bournemouth, Dorset — helping clients across the UK.</p>
+        <div class="footer-contact">
+          <a href="tel:01202802677">01202 802 677</a>
+          <a href="mailto:info@nexmoney.co.uk">info@nexmoney.co.uk</a>
+        </div>
+      </div>
+      <div class="footer-col">
+        <h3>Mortgages</h3>
+        <ul>
+          <li><a href="/first-time-buyer-mortgages-bournemouth">First Time Buyer</a></li>
+          <li><a href="/remortgage-bournemouth">Remortgaging</a></li>
+          <li><a href="/mortgages#homemover">Home Mover</a></li>
+          <li><a href="/buy-to-let-mortgages-dorset">Buy-to-Let</a></li>
+          <li><a href="/mortgages#selfbuild">Self Build</a></li>
+          <li><a href="/mortgages#shared">Shared Ownership</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h3>Services</h3>
+        <ul>
+          <li><a href="/services#protection">Life Insurance</a></li>
+          <li><a href="/services#protection">Critical Illness</a></li>
+          <li><a href="/services#insurance">Buildings Insurance</a></li>
+          <li><a href="/services#specialist">Bridging Finance</a></li>
+          <li><a href="/services#specialist">Commercial Finance</a></li>
+          <li><a href="/services#conveyancing">Conveyancing</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h3>Company</h3>
+        <ul>
+          <li><a href="/about">About NexMoney</a></li>
+          <li><a href="/calculators">Calculators</a></li>
+          <li><a href="/faq">Mortgage FAQs</a></li>
+          <li><a href="/testimonials">Testimonials</a></li>
+          <li><a href="/contact">Contact Us</a></li>
+          <li><a href="/privacy">Privacy Policy</a></li>
+          <li><a href="/cookies">Cookie Policy</a></li>
+          <li><a href="/share-the-love-terms">Share the Love Terms</a></li>
+          <li><a href="/admin" rel="nofollow">Adviser Login</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div style="background:rgba(0,0,0,0.2);">
+    <div class="container">
+      <div class="footer-bottom">
+        <div class="footer-legal">
+          <p class="legal-line">NexMoney is a trading style of NexMoney Ltd, which is an Appointed Representative of Stonebridge Mortgage Solutions Ltd, which is authorised and regulated by the Financial Conduct Authority.</p>
+          <p class="legal-line">Registered Office: NexMoney Ltd, Faulkner House, 31 West Street, Wimborne, Dorset, BH21 1JS. Trading address: Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ.</p>
+          <p class="legal-line">Registered Company Number; 11454479 Registered in England &amp; Wales.</p>
+          <p class="legal-line">We are entered on the Financial Services Register under firm reference number <a href="https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT" rel="noopener" style="color:inherit; text-decoration:underline;">610875</a>.</p>
+          <p class="footer-fee">Typically, we charge a fee of &pound;375 for arranging a mortgage but will also depend on your circumstances. The fees may be waived subject to the terms of the fee waiver agreement.</p>
+          <p class="footer-copy">&copy; 2026 NexMoney Ltd. All rights reserved.</p>
+        </div>
+        <div class="footer-links">
+          <a href="/privacy">Privacy</a>
+          <a href="/cookies">Cookies</a>
+          <a href="/contact">Contact</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script src="/js/btl-rent-calculator.js"></script>
+
+</body>
+</html>
