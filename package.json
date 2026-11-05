@@ -8,10 +8,10 @@
   },
   "devDependencies": {
     "esbuild": "0.28.2",
-    "eslint": "10.13.0",
+    "eslint": "10.14.0",
     "espree": "11.2.0",
-    "globals": "17.13.0",
-    "marked": "18.1.1",
+    "globals": "17.14.0",
+    "marked": "18.1.2",
     "typescript": "5.9.3",
     "xlsx": "0.18.5"
   }
