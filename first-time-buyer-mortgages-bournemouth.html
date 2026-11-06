@@ -39,6 +39,25 @@
   "@context": "https://schema.org",
   "@graph": [
     {
+      "@type": ["FinancialService", "LocalBusiness"],
+      "@id": "https://www.nexmoney.co.uk/#organization",
+      "name": "NexMoney Ltd",
+      "alternateName": ["NexMoney", "Next Money"],
+      "url": "https://www.nexmoney.co.uk/",
+      "logo": "https://www.nexmoney.co.uk/logo.svg",
+      "telephone": "+441202802677",
+      "address": {"@type": "PostalAddress", "streetAddress": "Avalon, 26-32 Oxford Road", "addressLocality": "Bournemouth", "addressRegion": "Dorset", "postalCode": "BH8 8EZ", "addressCountry": "GB"},
+      "identifier": [
+        {"@type": "PropertyValue", "propertyID": "Companies House", "value": "11454479"},
+        {"@type": "PropertyValue", "propertyID": "FCA FRN", "value": "610875"}
+      ],
+      "sameAs": [
+        "https://uk.trustpilot.com/review/www.nexmoney.co.uk",
+        "https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT",
+        "https://find-and-update.company-information.service.gov.uk/company/11454479"
+      ]
+    },
+    {
       "@type": "BreadcrumbList",
       "itemListElement": [
         {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://www.nexmoney.co.uk/"},
@@ -86,6 +105,11 @@
           "@type": "Question",
           "name": "Do first-time buyers pay stamp duty?",
           "acceptedAnswer": {"@type": "Answer", "text": "First-time buyers benefit from stamp duty relief on properties up to a government-set threshold, paying a reduced rate above it. Because thresholds change, we confirm the current position for your purchase as part of our advice."}
+        },
+        {
+          "@type": "Question",
+          "name": "Is Help to Buy still available?",
+          "acceptedAnswer": {"@type": "Answer", "text": "No. The Help to Buy equity loan closed to new applications in October 2022 and the final purchases completed in 2023. Alternatives include 95% mortgages (including government-backed schemes, where available), shared ownership, First Homes, Deposit Unlock on some new builds, family-assisted mortgages and the Lifetime ISA. Eligibility rules apply to each, subject to lender criteria."}
         }
       ]
     }
@@ -178,6 +202,9 @@
     <p><strong>Shared ownership</strong> lets you buy a share of a home and pay rent on the remainder. Under the Shared Ownership model introduced in 2021, and continued under current Homes England programmes, the minimum initial share can be as low as 10%. Older Shared Ownership properties, particularly resale homes on older leases, may still require an initial purchase of between 25% and 75%, so the minimum is not always 10%. 75% is generally the maximum initial share, although you can usually increase your ownership later through staircasing, often up to 100% (subject to the lease and any restrictions in designated protected areas). It can be a popular route into new-build developments in Bournemouth and in other parts of the UK, although it is not available on every development.</p>
     <p><strong>First Homes</strong> offers new-build homes at a discount to eligible first-time buyers. The scheme is open to eligible first-time buyers, with local authorities able to prioritise key workers or people with a local connection. We'll tell you which schemes you may qualify for and how they compare with a standard 95% mortgage in your case.</p>
 
+    <h2 style="margin-top:40px;">Help to Buy has closed — the alternatives</h2>
+    <p>The government's <strong>Help to Buy equity loan</strong> closed to new applications in October 2022, and the final purchases under it completed in 2023, so it is no longer an option for new buyers. Several alternatives may help instead, depending on your circumstances. Some lenders offer <strong>95% mortgages</strong>, including products backed by government mortgage guarantee schemes, where available. <strong>Shared ownership</strong> and <strong>First Homes</strong> (both covered above) reduce the amount you need to borrow. <strong>Deposit Unlock</strong> allows 95% borrowing on some new-build homes from participating housebuilders and lenders. <strong>Family-assisted mortgages</strong> let a relative's savings or property support your application, and a <strong>Lifetime ISA</strong> can help you build your deposit. Each has its own eligibility rules and costs, and availability changes, so we will check which, if any, apply to you.</p>
+
     <h2 style="margin-top:40px;">Buying your first home in Bournemouth</h2>
     <p>We are based in Bournemouth, and in our own experience of advising local clients, areas such as <strong>Winton, Charminster, Moordown and Boscombe</strong> are often considered by first-time buyers because of the mix of flats and terraced homes available there. Property values and availability change over time and vary between individual properties, so you should always check current prices for the area and property you are interested in. As a Bournemouth-based broker we also see which local property types some lenders are cautious about — ex-local-authority flats, holiday-let-heavy blocks and non-standard construction — and which lenders take a more flexible view. We advise clients across the whole of the UK, not only in Bournemouth.</p>
 
@@ -223,6 +250,10 @@
       <details class="faq-item">
         <summary class="faq-question">Do first-time buyers pay stamp duty?</summary>
         <div class="faq-answer"><p>First-time buyers get stamp duty relief on properties up to a government-set threshold. Thresholds change, so we confirm the current position for your specific purchase as part of our advice.</p></div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-question">Is Help to Buy still available?</summary>
+        <div class="faq-answer"><p>No. The Help to Buy equity loan closed to new applications in October 2022 and the final purchases completed in 2023. Alternatives include 95% mortgages (including government-backed schemes, where available), shared ownership, First Homes, Deposit Unlock on some new builds, family-assisted mortgages and the Lifetime ISA. Eligibility rules apply to each, subject to lender criteria.</p></div>
       </details>
     </div>
     <p style="text-align:center; margin-top:24px;"><a href="/faq" style="color:var(--orange); font-weight:600;">See all mortgage FAQs →</a></p>
@@ -313,9 +344,9 @@
       <div class="footer-bottom">
         <div class="footer-legal">
           <p class="legal-line">NexMoney is a trading style of NexMoney Ltd, which is an Appointed Representative of Stonebridge Mortgage Solutions Ltd, which is authorised and regulated by the Financial Conduct Authority.</p>
-          <p class="legal-line">Registered Office: NexMoney Ltd. Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ.</p>
+          <p class="legal-line">Registered Office: NexMoney Ltd, Faulkner House, 31 West Street, Wimborne, Dorset, BH21 1JS. Trading address: Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ.</p>
           <p class="legal-line">Registered Company Number; 11454479 Registered in England &amp; Wales.</p>
-          <p class="legal-line">We are entered on the Financial Services Register under firm reference number <a href="https://register.fca.org.uk/" style="color:inherit; text-decoration:underline;">610875</a>.</p>
+          <p class="legal-line">We are entered on the Financial Services Register under firm reference number <a href="https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT" rel="noopener" style="color:inherit; text-decoration:underline;">610875</a>.</p>
           <p class="footer-fee">Typically, we charge a fee of &pound;375 for arranging a mortgage but will also depend on your circumstances. The fees may be waived subject to the terms of the fee waiver agreement.</p>
           <p class="footer-copy">&copy; 2026 NexMoney Ltd. All rights reserved.</p>
         </div>

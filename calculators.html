@@ -47,6 +47,25 @@
   "@context": "https://schema.org",
   "@graph": [
     {
+      "@type": ["FinancialService", "LocalBusiness"],
+      "@id": "https://www.nexmoney.co.uk/#organization",
+      "name": "NexMoney Ltd",
+      "alternateName": ["NexMoney", "Next Money"],
+      "url": "https://www.nexmoney.co.uk/",
+      "logo": "https://www.nexmoney.co.uk/logo.svg",
+      "telephone": "+441202802677",
+      "address": {"@type": "PostalAddress", "streetAddress": "Avalon, 26-32 Oxford Road", "addressLocality": "Bournemouth", "addressRegion": "Dorset", "postalCode": "BH8 8EZ", "addressCountry": "GB"},
+      "identifier": [
+        {"@type": "PropertyValue", "propertyID": "Companies House", "value": "11454479"},
+        {"@type": "PropertyValue", "propertyID": "FCA FRN", "value": "610875"}
+      ],
+      "sameAs": [
+        "https://uk.trustpilot.com/review/www.nexmoney.co.uk",
+        "https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT",
+        "https://find-and-update.company-information.service.gov.uk/company/11454479"
+      ]
+    },
+    {
       "@type": "BreadcrumbList",
       "itemListElement": [
         {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://www.nexmoney.co.uk/"},
@@ -153,9 +172,9 @@
     <div class="calc-page-grid">
 
       <!-- Borrowing Calculator -->
-      <div class="full-calc-card">
+      <div class="full-calc-card" id="borrow">
         <h2>How Much Can I Borrow?</h2>
-        <p class="calc-desc">Estimate your maximum mortgage based on your income. Lenders typically offer 4–5.5× your annual salary.</p>
+        <p class="calc-desc">Estimate a borrowing range based on your income. Many lenders lend around 4–5.5× annual income, but the amount you can borrow also depends on your outgoings, credit history and deposit. Treat the result as a starting point, not a mortgage offer.</p>
         <div class="form-group">
           <label for="b_income1">Your annual income (before tax)</label>
           <div class="calc-input-wrap"><span class="calc-prefix">£</span>
@@ -177,9 +196,9 @@
       </div>
 
       <!-- Repayment Calculator -->
-      <div class="full-calc-card">
+      <div class="full-calc-card" id="repayments">
         <h2>Monthly Repayment Calculator</h2>
-        <p class="calc-desc">Find out what your monthly mortgage repayments would be based on loan amount, rate, and term.</p>
+        <p class="calc-desc">See what a capital-and-repayment mortgage could cost each month for a given loan amount, interest rate and term. The figure assumes the rate stays the same for the whole term, which in practice it rarely does. Product fees and other costs are not included.</p>
         <div class="form-group">
           <label for="r_loan">Mortgage amount</label>
           <div class="calc-input-wrap"><span class="calc-prefix">£</span>
@@ -207,9 +226,9 @@
       </div>
 
       <!-- Overpayment Calculator -->
-      <div class="full-calc-card">
+      <div class="full-calc-card" id="overpayment">
         <h2>Overpayment Calculator</h2>
-        <p class="calc-desc">See how much interest you could save — and how many years you could knock off your mortgage — by making overpayments.</p>
+        <p class="calc-desc">See how much interest you could save, and how much sooner you could repay your mortgage, by overpaying each month. Many lenders allow overpayments of up to 10% of the balance a year without an early repayment charge, but limits vary, so check your mortgage terms first.</p>
         <div class="form-group">
           <label for="o_balance">Remaining mortgage balance</label>
           <div class="calc-input-wrap"><span class="calc-prefix">£</span>
@@ -243,9 +262,9 @@
       </div>
 
       <!-- Rental Income Calculator -->
-      <div class="full-calc-card">
-        <h2>Rental Income Required</h2>
-        <p class="calc-desc">Find out how much rental income you'll need to qualify for a buy-to-let mortgage on a given property value.</p>
+      <div class="full-calc-card" id="rental">
+        <h2>Buy-to-let rent calculator</h2>
+        <p class="calc-desc">Estimate the monthly rent a buy-to-let lender may want to see for a given property value and deposit. This quick version uses a 125% rental cover ratio; lenders' ratios and stress rates vary. <a href="/buy-to-let-rent-calculator" style="color:var(--orange); font-weight:600;">Full buy-to-let rent calculator and ICR explainer</a></p>
         <div class="form-group">
           <label for="ri_value">Property value</label>
           <div class="calc-input-wrap"><span class="calc-prefix">£</span>
@@ -355,9 +374,9 @@
       <div class="footer-bottom">
         <div class="footer-legal">
           <p class="legal-line">NexMoney is a trading style of NexMoney Ltd, which is an Appointed Representative of Stonebridge Mortgage Solutions Ltd, which is authorised and regulated by the Financial Conduct Authority.</p>
-          <p class="legal-line">Registered Office: NexMoney Ltd. Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ.</p>
+          <p class="legal-line">Registered Office: NexMoney Ltd, Faulkner House, 31 West Street, Wimborne, Dorset, BH21 1JS. Trading address: Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ.</p>
           <p class="legal-line">Registered Company Number; 11454479 Registered in England &amp; Wales.</p>
-          <p class="legal-line">We are entered on the Financial Services Register under firm reference number <a href="https://register.fca.org.uk/" style="color:inherit; text-decoration:underline;">610875</a>.</p>
+          <p class="legal-line">We are entered on the Financial Services Register under firm reference number <a href="https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT" rel="noopener" style="color:inherit; text-decoration:underline;">610875</a>.</p>
           <p class="footer-fee">Typically, we charge a fee of &pound;375 for arranging a mortgage but will also depend on your circumstances. The fees may be waived subject to the terms of the fee waiver agreement.</p>
           <p class="footer-copy">&copy; 2026 NexMoney Ltd. All rights reserved.</p>
         </div>

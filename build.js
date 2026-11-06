@@ -328,7 +328,31 @@ function renderGuides(posts, tpl, render) {
   return out;
 }
 
+// R99 · SEO-A: lastmod for the repo pages comes from git (last commit touching the page) when the
+// clone has history; a shallow clone (Vercel/CI depth 1) would date every page "today", so it keeps
+// the hand-kept values in sitemap.xml instead. Guides are dated from their rows as before.
+function gitDates() {
+  try {
+    const { execFileSync } = require("child_process");
+    const depth = Number(execFileSync("git", ["rev-list", "--count", "HEAD"], { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString().trim());
+    if (!(depth > 20)) return null;
+    return (file) => { try { return execFileSync("git", ["log", "-1", "--format=%cs", "--", file], { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString().trim() || null; } catch { return null; } };
+  } catch { return null; }
+}
+function datePages(xml) {
+  const when = gitDates();
+  if (!when) return xml;
+  return xml.replace(/<loc>([^<]+)<\/loc>\s*<lastmod>(\d{4}-\d{2}-\d{2})<\/lastmod>/g, (m, loc, old) => {
+    const slug = loc.replace(SITE, "").replace(/^\//, "");
+    const file = slug === "" ? "index.html" : `${slug}.html`;
+    if (!fs.existsSync(path.join(ROOT, file))) return m;
+    const d = when(file);
+    return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? `<loc>${loc}</loc>\n    <lastmod>${d}</lastmod>` : m;
+  });
+}
+
 function sitemapWithGuides(xml, posts) {
+  xml = datePages(xml);
   const urls = [];
   const latest = posts.map((p) => ymd(p.updated_at || p.published_at)).filter(Boolean).sort().pop() || new Date().toISOString().slice(0, 10);
   if (!xml.includes(`<loc>${SITE}/guides</loc>`)) urls.push({ loc: `${SITE}/guides`, lastmod: latest });

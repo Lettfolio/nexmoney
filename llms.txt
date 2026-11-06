@@ -1,9 +1,11 @@
 # NexMoney
 
-> NexMoney is a trading style of NexMoney Ltd, an Appointed Representative of Stonebridge Mortgage Solutions Ltd which is authorised and regulated by the Financial Conduct Authority (firm reference number 610875). We are a whole-of-market mortgage and insurance broker based in Bournemouth, Dorset, UK. We compare hundreds of lenders to find a suitable mortgage for first-time buyers, home movers, remortgagers and buy-to-let investors, and arrange protection insurance (life, critical illness, income protection). Appointed Representative of Stonebridge Mortgage Solutions Ltd (FCA reference 610875).
+> NexMoney is a trading style of NexMoney Ltd (company number 11454479), an Appointed Representative of Stonebridge Mortgage Solutions Ltd, which is authorised and regulated by the Financial Conduct Authority. NexMoney Ltd is entered on the Financial Services Register under firm reference number 610875. We are a whole-of-market mortgage and insurance broker based in Bournemouth, Dorset, UK. We compare hundreds of lenders to find a suitable mortgage for first-time buyers, home movers, remortgagers and buy-to-let investors, and arrange protection insurance (life, critical illness, income protection).
 
 Key facts:
-- Location: Bournemouth, Dorset — serving Poole, Christchurch, Wimborne and all of the UK
+- Trading address: Avalon, 26-32 Oxford Road, Bournemouth, Dorset, BH8 8EZ — serving Poole, Christchurch, Wimborne and all of the UK
+- Registered office: Faulkner House, 31 West Street, Wimborne, Dorset, BH21 1JS · Company number 11454479
+- Reviews: Trustpilot https://uk.trustpilot.com/review/www.nexmoney.co.uk · FCA Register https://register.fca.org.uk/s/firm?id=001b000000NMjhQAAT
 - Phone: 01202 802 677 · Email: info@nexmoney.co.uk
 - Whole-of-market: not tied to any lender or panel
 - Fee statement: Typically, we charge a fee of £375 for arranging a mortgage but will also depend on your circumstances. The fees may be waived subject to the terms of the fee waiver agreement.
@@ -15,7 +17,9 @@ Key facts:
 - [Mortgages](https://www.nexmoney.co.uk/mortgages): First-time buyer, remortgage, home mover, buy-to-let, self-build, shared ownership
 - [First Time Buyer Mortgages Bournemouth](https://www.nexmoney.co.uk/first-time-buyer-mortgages-bournemouth): Deposits from 5%, Lifetime ISA, shared ownership, local market guidance
 - [Remortgage Bournemouth](https://www.nexmoney.co.uk/remortgage-bournemouth): Rate switches, product transfers vs remortgage, capital raising — start 6 months before your fix ends
-- [Buy-to-Let Mortgages Dorset](https://www.nexmoney.co.uk/buy-to-let-mortgages-dorset): Personal & limited company BTL, rental cover, HMOs, holiday lets, portfolio landlords
+- [Capital Raising Mortgage](https://www.nexmoney.co.uk/capital-raising-mortgage): Borrowing more against your home by remortgage, further advance or second charge — purposes, assessment, costs and risks
+- [Buy-to-Let Mortgages Dorset](https://www.nexmoney.co.uk/buy-to-let-mortgages-dorset): Personal & limited company BTL, rental cover, HMOs, holiday lets, portfolio landlords, complex buy-to-let
+- [Buy to Let Rent Calculator](https://www.nexmoney.co.uk/buy-to-let-rent-calculator): Gross yield, rental cover achieved and the rent needed to pass a 125% or 145% ICR test, with an ICR explainer
 - [Services](https://www.nexmoney.co.uk/services): Life insurance, critical illness, income protection, buildings insurance, bridging and development finance, conveyancing
 - [Calculators](https://www.nexmoney.co.uk/calculators): How much can I borrow, monthly repayments, overpayments, rental yield
 - [FAQ](https://www.nexmoney.co.uk/faq): Common mortgage questions answered — deposits, bad credit, broker fees, timelines

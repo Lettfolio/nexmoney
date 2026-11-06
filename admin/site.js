@@ -12,13 +12,15 @@
    ========================================================================== */
 
 /* ===== R93 · B CONTENT ===== */
-/* R93 · B: the 14 public pages = sitemap.xml's <loc>s. A page not listed here has no editor row. */
+/* R93 · B: the public pages = sitemap.xml's <loc>s (16 since R99 · SEO-A). A page not listed here has no editor row. */
 const sitePagesConst = [
   { slug: "", label: "Home" },
   { slug: "mortgages", label: "Mortgages" },
   { slug: "first-time-buyer-mortgages-bournemouth", label: "First-time buyers" },
   { slug: "remortgage-bournemouth", label: "Remortgage" },
+  { slug: "capital-raising-mortgage", label: "Capital raising" },
   { slug: "buy-to-let-mortgages-dorset", label: "Buy-to-let" },
+  { slug: "buy-to-let-rent-calculator", label: "BTL rent calculator" },
   { slug: "services", label: "Services" },
   { slug: "calculators", label: "Calculators" },
   { slug: "contact", label: "Contact" },
@@ -649,4 +651,4 @@ async function seoRunAudit() {
 /* R93 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / site.js / app.js bumps the tag IN ALL EIGHT PLACES. */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_site = "r98a";   // bumped to r93 at the gate with the other seven
+window.__nxTag_site = "r99a";   // bumped to r93 at the gate with the other seven

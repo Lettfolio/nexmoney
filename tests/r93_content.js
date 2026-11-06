@@ -1,7 +1,7 @@
 /* ==========================================================================
    R93 · B — WEBSITE › CONTENT (R93-CONTRACT.md "Admin UI — slice B").
 
-     · #website opens the Content tab: one list of the 14 public pages merged with site_pages rows
+     · #website opens the Content tab: one list of the 16 public pages merged with site_pages rows
        (path · title or "— from HTML" · description-length chip · Edited chip).
      · the page editor (openOverlay): live counts, FAQ editing parked (R93 · fixer: a read-only
        "FAQ ×n" chip; Save leaves faq untouched), Save = upsert by slug,
@@ -103,8 +103,8 @@ async function openWebsite(page) {
     })));
     const visible = await p4.evaluate(() => { const el = document.getElementById("page-site-content"); return !!el && !el.classList.contains("hidden") && el.offsetParent !== null; });
     ok("A1 · #website shows the Content panel", visible);
-    eq("A2 · the list has 14 rows", list.length, 14);
-    eq("A3 · rows follow the sitemap order (home first, T&Cs last)", [list[0].path, list[13].path], ["/", "/share-the-love-terms"]);
+    eq("A2 · the list has 16 rows", list.length, 16);
+    eq("A3 · rows follow the sitemap order (home first, T&Cs last)", [list[0].path, list[15].path], ["/", "/share-the-love-terms"]);
     const slugOf = (r) => (r.slug === "/" ? "" : r.slug);
     const wantEdited = list.filter((r) => fx.some((x) => x.slug === slugOf(r))).length;
     eq("A4 · an Edited chip on exactly the rows site_pages holds", list.filter((r) => r.edited).length, wantEdited);
@@ -248,7 +248,7 @@ async function openWebsite(page) {
     const p1 = await boot(browser, "p1", "#website");
     pages.push(p1);
     await openWebsite(p1);
-    eq("C1 · the admin sees the same 14 pages", await p1.evaluate(() => document.querySelectorAll("#site-pages-list .site-row").length), 14);
+    eq("C1 · the admin sees the same 16 pages", await p1.evaluate(() => document.querySelectorAll("#site-pages-list .site-row").length), 16);
     const draft = (await mockRows(p1, "site_posts")).find((r) => r.status === "draft");
     await p1.click(`#row-sitegd-${draft.id} .site-edit`);
     await p1.waitForSelector("#site-guide-editor");
