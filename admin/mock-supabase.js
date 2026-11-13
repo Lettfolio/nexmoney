@@ -4130,7 +4130,7 @@
   var SITE_SITEMAP_PATHS = ["/", "/mortgages", "/first-time-buyer-mortgages-bournemouth", "/remortgage-bournemouth",
     "/buy-to-let-mortgages-dorset", "/services", "/calculators", "/contact", "/about", "/faq", "/testimonials",
     "/privacy", "/cookies", "/share-the-love-terms"];
-  /* The edge function's rules (edge/seo-snapshot-v2.ts auditHtml), so a fixture's issues agree with its numbers. */
+  /* The edge function's rules (edge/seo-snapshot-v3.ts auditHtml), so a fixture's issues agree with its numbers. */
   function siteAuditIssues(a) {
     var out = [];
     if (a.status !== 200) out.push({ code: "http_error", level: "error", msg: "HTTP " + a.status });
@@ -4201,7 +4201,20 @@
     gsc.forEach(function (x) { rows.push({ day: day, kind: "gsc", page: x[0], data: { clicks: x[1], impressions: x[2], ctr: x[3], position: x[4] } }); });
     var q = [["mortgage broker bournemouth", 22, 610, 0.0361, 6.3], ["remortgage bournemouth", 9, 340, 0.0265, 8.9],
       ["buy to let mortgage dorset", 5, 410, 0.0122, 12.8], ["nexmoney", 14, 60, 0.2333, 1.2], ["first time buyer mortgage poole", 2, 290, 0.0069, 21.4]];
-    q.forEach(function (x) { rows.push({ day: day, kind: "gsc_query", page: x[0], data: { clicks: x[1], impressions: x[2], ctr: x[3], position: x[4] } }); });
+    /* R100: v3 adds pages[] (query × page, top 3) and more queries, so every recommendation rule has a fixture. */
+    q[0].push([["/", 15, 430, 6.1], ["/mortgages", 7, 180, 7.0]]);
+    q[1].push([["/remortgage-bournemouth", 9, 340, 8.9]]);
+    q[2].push([["/buy-to-let-mortgages-dorset", 5, 410, 12.8]]);
+    q[3].push([["/", 14, 60, 1.2]]);
+    q[4].push([["/first-time-buyer-mortgages-bournemouth", 2, 290, 21.4]]);
+    q.push(["mortgage calculator uk", 0, 520, 0, 6.8, [["/calculators", 0, 520, 6.8]]],
+      ["shared ownership mortgage advice", 0, 140, 0, 44.0, [["/mortgages/shared-ownership", 0, 140, 44.0]]],
+      ["mortgage adviser christchurch", 1, 44, 0.0227, 15.5, [["/", 1, 44, 15.5]]]);
+    q.forEach(function (x) {
+      rows.push({ day: day, kind: "gsc_query", page: x[0], data: { clicks: x[1], impressions: x[2], ctr: x[3], position: x[4],
+        pages: (x[5] || []).map(function (p) { return { page: p[0], clicks: p[1], impressions: p[2], position: p[3] }; }) } });
+    });
+    rows.push({ day: day, kind: "gsc", page: "/mortgages/shared-ownership", data: { clicks: 0, impressions: 140, ctr: 0, position: 44.0 } });
     rows.push({ day: day, kind: "summary", page: "", data: {
       pages: spec.length, errors: errs, warnings: warns,
       psi_avg: Math.round(psi.reduce(function (t, x) { return t + x[1]; }, 0) / psi.length),
@@ -4209,6 +4222,23 @@
       gsc_connected: true, psi_connected: true, duration_ms: 31840, ran_at: ranAt,
       run_errors: []   /* R93 · fixer: the edge's step failures (redacted, ≤20) */
     } });
+    return rows;
+  }
+  /* R100 — v3's daily series (`day` = the date itself): 40 days for the site, one page and one query, plus the
+     snapshot eight days back that the Change columns compare with. Deterministic: values come from the index. */
+  function siteSeoHistoryRows(today) {
+    var rows = [], dayOf = function (n) { return iso(new Date(new Date(today + "T00:00:00Z").getTime() - n * 86400000)).slice(0, 10); };
+    for (var n = 40; n >= 2; n--) {
+      var k = 40 - n, imp = 90 + (k * 37) % 70 + k * 2, cl = (k * 7) % 5;
+      rows.push({ day: dayOf(n), kind: "gsc_day", page: "", data: { clicks: cl, impressions: imp, ctr: Math.round(cl / imp * 10000) / 10000, position: Math.round((22 - k * 0.2) * 10) / 10 } });
+      if (k % 6 !== 5) rows.push({ day: dayOf(n), kind: "gsc_page_day", page: "/remortgage-bournemouth", data: { clicks: k % 3 === 0 ? 1 : 0, impressions: 20 + (k * 11) % 25, ctr: 0, position: Math.round((18 - k * 0.1) * 10) / 10 } });
+      if (k % 4 !== 3) rows.push({ day: dayOf(n), kind: "gsc_query_day", page: "mortgage broker bournemouth", data: { clicks: k % 2, impressions: 12 + (k * 5) % 14, ctr: 0, position: Math.round((9 - k * 0.07) * 10) / 10 } });
+    }
+    var prev = dayOf(9);
+    rows.push({ day: prev, kind: "gsc", page: "/", data: { clicks: 36, impressions: 2100, ctr: 0.0171, position: 12.9 } });
+    rows.push({ day: prev, kind: "gsc", page: "/remortgage-bournemouth", data: { clicks: 15, impressions: 900, ctr: 0.0167, position: 13.0 } });
+    rows.push({ day: prev, kind: "gsc_query", page: "mortgage broker bournemouth", data: { clicks: 19, impressions: 560, ctr: 0.0339, position: 7.8, pages: [] } });
+    rows.push({ day: prev, kind: "gsc_query", page: "remortgage bournemouth", data: { clicks: 9, impressions: 300, ctr: 0.03, position: 8.1, pages: [] } });
     return rows;
   }
   function siteSeoUpsertRows(rows, createdAt) {
@@ -4268,6 +4298,7 @@
 
     var yday = iso(shift(-1)).slice(0, 10);
     siteSeoUpsertRows(siteSeoFixtureRows(yday, iso(shift(-1))), iso(shift(-1)));
+    siteSeoUpsertRows(siteSeoHistoryRows(iso(new Date()).slice(0, 10)), iso(shift(-1)));
   })();
 
   /* v_alerts — a computed view over cases + clients */
@@ -6951,7 +6982,7 @@
       row.status = "sent"; row.detail = "201 {\"job\":{\"state\":\"PENDING\"}}";
       return { ok: true, id: row.id, status: "sent", detail: row.detail };
     },
-    /* R93 · A — edge/seo-snapshot-v2.ts, mirrored for the JWT path: owner/admin; writes today's (UTC) rows in
+    /* R93 · A — edge/seo-snapshot-v3.ts, mirrored for the JWT path: owner/admin; writes today's (UTC) rows in
        the fixture shapes and answers { ok, summary, errors }. seo_audit_enabled 'off' without force = skipped. */
     "seo-snapshot": function (body) {
       if (!isAdminOrOwner()) return { __status: 401, ok: false, error: "unauthorized" };

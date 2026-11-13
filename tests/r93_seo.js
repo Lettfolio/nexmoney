@@ -105,7 +105,7 @@ const truth = (page) => page.evaluate(() => {
     const css = fs.readFileSync(path.join(REPO, "admin", "admin.css"), "utf8");
     const ca = css.indexOf("/* ===== R93 · C CSS ===== */"), cb = css.indexOf("/* ===== END R93 · C CSS ===== */"), cu = css.indexOf("/* R90 · C utilities");
     ok("S4 · the C CSS fence sits above the R90 utilities block", ca > 0 && cb > ca && cb < cu);
-    ok("S5 · the fence reads the latest day with ≤ 2 seo_snapshots queries", (fence.match(/from\("seo_snapshots"\)/g) || []).length === 2);
+    ok("S5 · every seo_snapshots read goes through seoQ() (R100: day, its rows, the week-older snapshot, one series)", (fence.match(/from\("seo_snapshots"\)/g) || []).length === 1 && (fence.match(/seoQ\(\)\./g) || []).length === 4);
 
     /* ------------------------------------------------------------------ A. owner, desktop */
     console.log("\nA · Owner (p4) — tiles, table, chips, queries, run");
@@ -130,7 +130,7 @@ const truth = (page) => page.evaluate(() => {
     const tbl = await p4.evaluate(() => {
       const rows = [...document.querySelectorAll("#seo-table tr.seo-row")];
       return {
-        tables: document.querySelectorAll("#page-site-seo table").length,
+        tables: document.querySelectorAll("#page-site-seo table.seo-table").length,
         heads: [...document.querySelectorAll("#seo-table tr:first-child th")].map((t) => t.textContent.trim()),
         rows: rows.map((r) => ({
           page: r.dataset.page,
@@ -140,8 +140,8 @@ const truth = (page) => page.evaluate(() => {
         })),
       };
     });
-    eq("A7 · column headers", tbl.heads, ["Page", "Title", "Description", "H1", "Words", "PSI", "Clicks", "Position", "Issues"]);
-    ok("A8 · the audit is ONE table (the queries list is not a table)", tbl.tables === 1, String(tbl.tables));
+    eq("A7 · column headers", tbl.heads, ["Page", "Title", "Description", "H1", "Words", "PSI", "Clicks", "Position", "Change", "Issues"]);
+    ok("A8 · the audit is ONE table", tbl.tables === 1, String(tbl.tables));
     eq("A9 · one row per audited page", tbl.rows.map((r) => r.page).sort(), T.audits.map((x) => x.page).sort());
     /* Chips: one per issue code; level colour; title = every message for that code. */
     let chipOk = true, chipWhy = "";
@@ -181,11 +181,11 @@ const truth = (page) => page.evaluate(() => {
 
     /* Top queries, clicks desc, ≤ 20. */
     const q = await p4.evaluate(() => ({
-      names: [...document.querySelectorAll("#seo-queries .kit-row .t")].map((t) => t.textContent.trim()),
+      names: [...document.querySelectorAll("#seo-queries tr.seo-qrow td.seo-q")].map((t) => t.textContent.trim()),
       connect: !!document.getElementById("seo-connect"),
     }));
-    const wantQ = T.queries.slice().sort((x, y) => y.clicks - x.clicks || y.impressions - x.impressions).slice(0, 20).map((x) => x.query);
-    eq("A16 · Top queries: clicks desc, ≤ 20, kit rows", q.names, wantQ);
+    const wantQ = T.queries.slice().sort((x, y) => y.impressions - x.impressions).slice(0, 25).map((x) => x.query);
+    eq("A16 · Search queries: impressions desc, ≤ 25 until Show all (R100)", q.names, wantQ);
     ok("A17 · no Connect panel while Search Console is connected", !q.connect);
 
     /* Run audit now: the invoke, the disabled/spinner state, the re-read. */
@@ -210,7 +210,7 @@ const truth = (page) => page.evaluate(() => {
     const run = await p4.evaluate(() => ({ t: window.__seoT, toast: (document.getElementById("toast") || {}).textContent || "", mi: (window.__mockInvokes || []).filter((x) => x.name === "seo-snapshot").length }));
     eq("A19 · exactly one invoke, of seo-snapshot with { force: true }", run.t.invokes, [{ name: "seo-snapshot", body: { force: true } }]);
     ok("A20 · the mock recorded the invoke too (window.__mockInvokes)", run.mi >= 1, String(run.mi));
-    ok("A21 · after the run the tab re-read seo_snapshots (2 reads)", run.t.reads === 2, String(run.t.reads));
+    ok("A21 · after the run the tab re-read seo_snapshots (4 reads: day, rows, week-older, series)", run.t.reads === 4, String(run.t.reads));
     ok("A22 · a toast says it finished", /Audit finished/.test(run.toast), run.toast);
     /* A failing function toasts the failure and re-enables the button. */
     await p4.evaluate(() => { db.functions.invoke = () => Promise.resolve({ data: null, error: { message: "boom" } }); });
@@ -286,9 +286,86 @@ const truth = (page) => page.evaluate(() => {
     const pm = await ph.evaluate(() => ({ overflow: document.documentElement.scrollWidth - window.innerWidth, rows: document.querySelectorAll("#seo-table tr.seo-row").length }));
     ok("D2 · phone 390: the table renders and the page does not scroll sideways", pm.rows === T.audits.length && pm.overflow <= 1, JSON.stringify(pm));
 
+    /* ------------------------------------------------------------------ F. R100 — history, change, queries, recommendations */
+    console.log("\nF · R100 — history chart, Change, queries table, recommendations");
+    const pf = await boot(browser, "p4");
+    pages.push(pf);
+    await openSeo(pf);
+    const snap = () => pf.evaluate(() => ({
+      scope: (document.getElementById("seo-scope") || {}).value,
+      charts: [...document.querySelectorAll("#seo-charts .seo-chart")].map((c) => ({ m: c.dataset.metric, v: c.querySelector(".seo-chart-v").textContent.trim(), bars: c.querySelectorAll(".seo-bar").length, line: (c.querySelector(".seo-line") || { getAttribute: () => "" }).getAttribute("d").length })),
+      n: Number((document.getElementById("seo-charts") || { dataset: {} }).dataset.n || 0),
+      active: [...document.querySelectorAll("[data-seo-range].active")].map((b) => b.dataset.seoRange),
+      empty: !!document.getElementById("seo-hist-empty"),
+    }));
+    const h0 = await snap();
+    const TH = await pf.evaluate(() => {
+      const rows = window.__mock.db.seo_snapshots.filter((r) => r.kind === "gsc_day");
+      return { n: rows.length, clicks: rows.reduce((t, r) => t + r.data.clicks, 0), imp: rows.reduce((t, r) => t + r.data.impressions, 0) };
+    });
+    eq("F1 · the chart opens on the whole site, 90 days", [h0.scope, h0.active], ["site", ["90"]]);
+    eq("F2 · three charts on one axis: clicks, impressions, position", h0.charts.map((c) => c.m), ["clicks", "impressions", "position"]);
+    eq("F3 · the clicks and impressions totals are the fixture's sums", [h0.charts[0].v, h0.charts[1].v], [fmt(TH.clicks), fmt(TH.imp)]);
+    ok("F4 · bars for the days with impressions, a drawn position line, one point per day", h0.charts[1].bars === TH.n && h0.charts[2].line > 20 && h0.n >= TH.n, JSON.stringify(h0));
+    ok("F5 · one y-scale per chart: no svg carries two series", await pf.evaluate(() => [...document.querySelectorAll(".seo-svg")].every((s) => !(s.querySelector(".seo-bar") && s.querySelector(".seo-line")))));
+    await pf.click('[data-seo-range="28"]');
+    await pf.waitForFunction(() => document.querySelector('[data-seo-range="28"].active'), null, { timeout: 5000 });
+    const h28 = await snap();
+    ok("F6 · 28 days narrows the axis to 28 points", h28.n === 28 && h28.active[0] === "28", JSON.stringify(h28));
+    await pf.click('#seo-table tr.seo-row[data-page="/remortgage-bournemouth"] .seo-hist-btn');
+    await pf.waitForFunction(() => document.getElementById("seo-scope").value === "page:/remortgage-bournemouth", null, { timeout: 5000 });
+    const hp = await snap();
+    ok("F7 · a page's History button charts that page and leaves its issues closed", hp.charts.length === 3 && hp.charts[1].bars > 0 && await pf.evaluate(() => !document.querySelector('#seo-table tr.seo-row[data-page="/remortgage-bournemouth"] details[open]')), JSON.stringify(hp));
+    await pf.click('#seo-queries tr.seo-qrow[data-key="mortgage broker bournemouth"] td.seo-q');
+    await pf.waitForFunction(() => document.getElementById("seo-scope").value === "query:mortgage broker bournemouth", null, { timeout: 5000 });
+    ok("F8 · a query row charts that query", (await snap()).charts[1].bars > 0);
+    await pf.selectOption("#seo-scope", "page:/contact");
+    await pf.waitForFunction(() => document.getElementById("seo-hist-empty"), null, { timeout: 5000 });
+    ok("F9 · a page with no daily rows says so instead of drawing an empty chart", (await snap()).empty);
+    await pf.selectOption("#seo-scope", "site");
+    await pf.waitForFunction(() => document.getElementById("seo-charts"), null, { timeout: 5000 });
+    await pf.waitForTimeout(900);   // the smooth scroll back to the chart
+    const box = await (await pf.$(".seo-svg")).boundingBox();
+    await pf.mouse.move(box.x + box.width * 0.4, box.y + 10);
+    await pf.mouse.move(box.x + box.width * 0.5, box.y + 12);
+    await pf.waitForTimeout(100);
+    const hov = await pf.evaluate(() => ({ t: document.getElementById("seo-hover").textContent, x: [...document.querySelectorAll(".seo-cross")].map((l) => l.getAttribute("x1")) }));
+    ok("F10 · hovering reads out the date and all three figures, with one crosshair in every chart", /\d+ \w+ · \d+ clicks? · [\d,]+ impressions · position [\d.—]+/.test(hov.t) && hov.x.length === 3 && new Set(hov.x).size === 1 && Number(hov.x[0]) > 0, JSON.stringify(hov));
+
+    const chg = await pf.evaluate(() => {
+      const cell = (sel) => { const c = document.querySelector(sel); return c ? { t: c.textContent.trim(), green: c.classList.contains("green"), red: c.classList.contains("red"), title: c.getAttribute("title") } : null; };
+      return {
+        home: cell('#seo-table tr.seo-row[data-page="/"] .seo-delta'), remo: cell('#seo-table tr.seo-row[data-page="/remortgage-bournemouth"] .seo-delta'),
+        btl: cell('#seo-table tr.seo-row[data-page="/buy-to-let-mortgages-dorset"] .seo-delta'), q: cell('#seo-queries tr.seo-qrow[data-key="mortgage broker bournemouth"] .seo-delta'),
+      };
+    });
+    ok("F11 · Change: 12.9 → 11.4 is ▲ 1.5 green, 13.0 → 14.2 is ▼ 1.2 red, a page unseen a week earlier is 'new'", chg.home && chg.home.t === "▲ 1.5" && chg.home.green && chg.home.title === "Position 12.9 a week earlier" && chg.remo.t === "▼ 1.2" && chg.remo.red && chg.btl.t === "new", JSON.stringify(chg));
+    ok("F12 · the same on a query: 7.8 → 6.3 is ▲ 1.5", chg.q && chg.q.t === "▲ 1.5" && chg.q.green, JSON.stringify(chg.q));
+
+    const qt = await pf.evaluate(() => ({ heads: [...document.querySelectorAll("#seo-queries tr:first-child th")].map((t) => t.textContent.trim()), page: document.querySelector('#seo-queries tr.seo-qrow[data-key="mortgage broker bournemouth"] td.seo-qpage').textContent.trim() }));
+    eq("F13 · queries table columns, sorted by impressions", qt.heads, ["Query", "Clicks", "Impressions ↓", "CTR", "Position", "Change", "Page"]);
+    eq("F14 · the Page column names the ranking page and counts the others", qt.page, "/ +1");
+    await pf.click('#seo-queries th[data-seo-sort="position"]');
+    const byPos = await pf.evaluate(() => [...document.querySelectorAll("#seo-queries tr.seo-qrow td.seo-q")].map((t) => t.textContent.trim()));
+    eq("F15 · a header click sorts by that column (position, worst first)", byPos, T.queries.slice().sort((x, y) => y.position - x.position).map((x) => x.query));
+    await pf.fill("#seo-qfilter", "remortgage");
+    const fl = await pf.evaluate(() => ({ rows: [...document.querySelectorAll("#seo-queries tr.seo-qrow td.seo-q")].map((t) => t.textContent.trim()), focus: document.activeElement.id }));
+    ok("F16 · the filter narrows the rows and keeps its focus", fl.rows.length === 1 && fl.rows[0] === "remortgage bournemouth" && fl.focus === "seo-qfilter", JSON.stringify(fl));
+
+    const recs = await pf.evaluate(() => [...document.querySelectorAll("#seo-recs .seo-rec")].map((r) => ({ label: r.querySelector(".badge").textContent.trim(), q: r.querySelector(".seo-rec-q").textContent.trim(), a: r.querySelector(".seo-rec-a").textContent.trim() })));
+    const rec = (q) => recs.find((r) => r.q === q) || {};
+    eq("F17 · one recommendation per rule, most actionable first", recs.map((r) => r.label), ["Nearly page one", "Nearly page one", "Two pages competing", "Page one, few clicks", "Seen but buried", "Seen but buried", "Old address"]);
+    ok("F18 · nearly page one: names the page that already targets it, or says where to add the phrase", /^\/buy-to-let-mortgages-dorset already targets this/.test(rec("buy to let mortgage dorset").a) && /title and main heading of \/\./.test(rec("mortgage adviser christchurch").a), JSON.stringify(recs.slice(0, 2)));
+    ok("F19 · two pages competing names both; the brand query earns no recommendation", /^\/ and \/mortgages both show/.test(rec("mortgage broker bournemouth").a) && !recs.some((r) => r.q === "nexmoney"));
+    ok("F20 · an old address still listed by Google is flagged", rec("/mortgages/shared-ownership").label === "Old address");
+    await pf.evaluate(() => { const s = window.__mock.db.seo_snapshots.filter((r) => r.kind === "summary").sort((x, y) => String(y.day).localeCompare(String(x.day)))[0]; s.data = Object.assign({}, s.data, { gsc_connected: false, gsc: null }); });
+    await repaint(pf);
+    ok("F21 · without Search Console there is no history panel and no recommendations", await pf.evaluate(() => !document.getElementById("seo-history") && !document.getElementById("seo-recs") && !!document.getElementById("seo-connect")));
+    eq("F22 · no inline style in the R100 markup", await pf.evaluate(() => document.getElementById("page-site-seo").querySelectorAll("[style]").length), 0);
+
     /* ------------------------------------------------------------------ E. console */
     console.log("\nE · Console");
-    pages.forEach((pg, i) => ok(`E${i + 1} · no console errors (${["p4", "p1", "p4 phone"][i]})`, realErr(pg).length === 0, realErr(pg).join(" | ")));
+    pages.forEach((pg, i) => ok(`E${i + 1} · no console errors (${["p4", "p1", "p4 phone", "p4 R100"][i]})`, realErr(pg).length === 0, realErr(pg).join(" | ")));
   } catch (e) {
     failures.push("CRASH — " + (e && e.stack || e));
     console.log("CRASH", e);

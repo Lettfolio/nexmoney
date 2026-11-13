@@ -425,10 +425,21 @@ async function siteOpenGuideEditor(id, draft) {
 /* ===== END R93 · B CONTENT ===== */
 
 /* ===== R93 · C SEO ===== */
-/* loadSiteSeo({ refresh }) paints #page-site-seo from the LATEST seo_snapshots day (two reads: the day, then
-   its rows). Rows are written nightly by edge seo-snapshot (slice A); "Run audit now" invokes it with force.
+/* loadSiteSeo({ refresh }) paints #page-site-seo from the LATEST seo_snapshots day (the day, then its rows;
+   R100 adds the snapshot a week older for the Change columns and one daily series for the history chart). Rows are written nightly by edge seo-snapshot (slice A); "Run audit now" invokes it with force.
    R93 · C: every top-level name here starts with `seo` — eight classic scripts share one global scope. */
 let seoRunning = false;
+/* R100: what the history chart shows and how the queries table is sorted — kept across repaints. */
+const seoView = { type: "site", key: "", range: 90, series: [], pts: [], sort: "impressions", dir: -1, filter: "", all: false, model: null };
+const SEO_KINDS_DAY = ["summary", "audit", "psi", "gsc", "gsc_query"];
+const SEO_SERIES_KIND = { site: "gsc_day", page: "gsc_page_day", query: "gsc_query_day" };
+const SEO_RANGES = [[28, "28 days"], [90, "90 days"], [480, "16 months"]];
+const SEO_Q_SHOWN = 25;
+const SEO_STOP = ["a", "an", "and", "the", "in", "for", "to", "of", "on", "near", "me", "my", "uk", "best", "is", "what", "how", "do", "i", "can", "with"];
+function seoQ() { return db.from("seo_snapshots"); }
+function seoDayAdd(day, n) { const d = new Date(day + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function seoFmtDay(day) { return new Date(day + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }); }
+function seoFmtPos(v) { const n = seoNum(v); return n == null || n <= 0 ? "—" : n.toFixed(1); }
 const SEO_ISSUE_LABEL = {
   missing_title: "No title", title_long: "Title long", title_short: "Title short",
   missing_meta: "No description", meta_long: "Description long", meta_short: "Description short",
@@ -475,16 +486,30 @@ function seoIssueChips(issues) {
 }
 function seoIssueCount(issues, level) { return (issues || []).filter((i) => i && i.level === level).length; }
 async function seoLoadLatest() {
-  const d = await db.from("seo_snapshots").select("day").order("day", { ascending: false }).limit(1);
+  const d = await seoQ().select("day").eq("kind", "summary").order("day", { ascending: false }).limit(1);
   if (d.error) return { error: d.error };
   const day = d.data && d.data[0] && d.data[0].day;
-  if (!day) return { day: null, rows: [] };
-  const r = await db.from("seo_snapshots").select("*").eq("day", day).limit(1000);
+  if (!day) return { day: null, rows: [], prev: [] };
+  /* R100: the latest day, and the newest snapshot at least a week older — the "Change" columns compare the two. */
+  const [r, p] = await Promise.all([
+    seoQ().select("*").eq("day", day).in("kind", SEO_KINDS_DAY).limit(1000),
+    seoQ().select("day,kind,page,data").in("kind", ["gsc", "gsc_query"]).lte("day", seoDayAdd(day, -7)).gte("day", seoDayAdd(day, -10)).order("day", { ascending: false }).limit(1000),
+  ]);
   if (r.error) return { error: r.error };
-  return { day, rows: r.data || [] };
+  const prevAll = p.error ? [] : p.data || [];
+  const prevDay = prevAll.length ? prevAll[0].day : null;
+  return { day, rows: r.data || [], prev: prevAll.filter((x) => x.day === prevDay) };
 }
-function seoModel(rows) {
-  const m = { summary: null, audits: [], psi: {}, gsc: {}, queries: [] };
+/* One series at a time: the site, one page or one query, a row per date Search Console reported. */
+async function seoLoadSeries() {
+  const v = seoView;
+  const last = seoDayAdd(new Date().toISOString().slice(0, 10), -1);
+  const r = await seoQ().select("day,data").eq("kind", SEO_SERIES_KIND[v.type]).eq("page", v.type === "site" ? "" : v.key)
+    .gte("day", seoDayAdd(last, -(v.range - 1))).order("day", { ascending: true }).limit(1000);
+  v.series = r.error ? [] : r.data || [];
+}
+function seoModel(rows, prev) {
+  const m = { summary: null, audits: [], psi: {}, gsc: {}, queries: [], prevGsc: {}, prevQ: {}, hasPrev: !!(prev && prev.length) };
   rows.forEach((r) => {
     const d = r.data || {};
     if (r.kind === "summary") m.summary = Object.assign({ created_at: r.created_at }, d);
@@ -493,7 +518,174 @@ function seoModel(rows) {
     else if (r.kind === "gsc") m.gsc[seoPath(r.page)] = d;
     else if (r.kind === "gsc_query") m.queries.push(Object.assign({ query: r.page }, d));
   });
+  (prev || []).forEach((r) => {
+    if (r.kind === "gsc") m.prevGsc[seoPath(r.page)] = r.data || {};
+    else if (r.kind === "gsc_query") m.prevQ[r.page] = r.data || {};
+  });
   return m;
+}
+/* Position change against the older snapshot: up = a better (lower) position. */
+function seoDeltaHtml(now, before, hasPrev) {
+  const a = seoNum(now && now.position), b = seoNum(before && before.position);
+  if (!hasPrev || a == null || a <= 0) return `<span class="u-muted">—</span>`;
+  if (b == null || b <= 0) return seoBadge("blue seo-delta", "new", "Not seen a week earlier");
+  const diff = Math.round((b - a) * 10) / 10;
+  if (!diff) return `<span class="u-muted">—</span>`;
+  return seoBadge((diff > 0 ? "green" : "red") + " seo-delta", (diff > 0 ? "▲ " : "▼ ") + Math.abs(diff).toFixed(1), `Position ${b.toFixed(1)} a week earlier`);
+}
+function seoHistBtn(type, key, label) {
+  return `<button type="button" class="btn btn-sm seo-hist-btn" data-seo-hist="${esc(type)}" data-key="${esc(key)}" title="Chart this ${esc(type)} over time">${esc(label || "History")}</button>`;
+}
+
+/* ----- R100 · history chart: three small charts on one date axis (clicks, impressions, position) ----- */
+/* A continuous run of dates (days without a row = nothing shown); weekly buckets once the span passes 120 days. */
+function seoPoints(series, range) {
+  if (!series.length) return [];
+  const last = seoDayAdd(new Date().toISOString().slice(0, 10), -1);
+  let first = seoDayAdd(last, -(range - 1));
+  const minFirst = seoDayAdd(last, -27);
+  const dataFirst = series[0].day < minFirst ? series[0].day : minFirst;
+  if (dataFirst > first) first = dataFirst;
+  const by = {};
+  series.forEach((r) => { by[r.day] = r.data || {}; });
+  const days = [];
+  for (let d = first; d <= last; d = seoDayAdd(d, 1)) {
+    const x = by[d];
+    days.push({ from: d, to: d, clicks: x ? seoNum(x.clicks) || 0 : 0, impressions: x ? seoNum(x.impressions) || 0 : 0, posW: x ? (seoNum(x.position) || 0) * (seoNum(x.impressions) || 0) : 0 });
+  }
+  const step = days.length > 120 ? 7 : 1;
+  const pts = [];
+  for (let i = 0; i < days.length; i += step) {
+    const g = days.slice(i, i + step);
+    const imp = g.reduce((n, x) => n + x.impressions, 0);
+    pts.push({ from: g[0].from, to: g[g.length - 1].to, clicks: g.reduce((n, x) => n + x.clicks, 0), impressions: imp, position: imp ? g.reduce((n, x) => n + x.posW, 0) / imp : null });
+  }
+  return pts;
+}
+function seoPtLabel(p) { return p.from === p.to ? seoFmtDay(p.from) : `${seoFmtDay(p.from)} – ${seoFmtDay(p.to)}`; }
+function seoRangeSummary(pts) {
+  const imp = pts.reduce((n, p) => n + p.impressions, 0);
+  const pos = imp ? pts.reduce((n, p) => n + (p.position || 0) * p.impressions, 0) / imp : null;
+  return { clicks: pts.reduce((n, p) => n + p.clicks, 0), impressions: imp, position: pos };
+}
+function seoBarsSvg(pts, key, label) {
+  const n = pts.length, max = Math.max(1, ...pts.map((p) => p[key]));
+  const bars = pts.map((p, i) => {
+    if (!p[key]) return "";
+    const h = Math.max(2, (p[key] / max) * 92);
+    return `<rect class="seo-bar" x="${(i + 0.12).toFixed(2)}" y="${(100 - h).toFixed(1)}" width="0.76" height="${h.toFixed(1)}"/>`;
+  }).join("");
+  return `<svg class="seo-svg" viewBox="0 0 ${n} 100" preserveAspectRatio="none" role="img" aria-label="${esc(label)} over time">`
+    + `<line class="seo-base" x1="0" x2="${n}" y1="100" y2="100"/>${bars}<line class="seo-cross" x1="-9" x2="-9" y1="0" y2="100"/></svg>`;
+}
+/* Position: a better (lower) number sits higher, so the line climbs as the ranking improves. */
+function seoLineSvg(pts) {
+  const n = pts.length, vals = pts.map((p) => p.position).filter((v) => v != null);
+  const lo = vals.length ? Math.min(...vals) : 1, hi = vals.length ? Math.max(...vals) : 2, span = Math.max(1, hi - lo);
+  const y = (v) => 8 + ((v - lo) / span) * 84;
+  let d = "", open = false;
+  pts.forEach((p, i) => {
+    if (p.position == null) { open = false; return; }
+    const lone = !open && (i + 1 >= n || pts[i + 1].position == null);
+    if (lone) d += `M${(i + 0.2).toFixed(2)} ${y(p.position).toFixed(1)}L${(i + 0.8).toFixed(2)} ${y(p.position).toFixed(1)}`;
+    else d += `${open ? "L" : "M"}${(i + 0.5).toFixed(2)} ${y(p.position).toFixed(1)}`;
+    open = !lone;
+  });
+  return `<svg class="seo-svg" viewBox="0 0 ${n} 100" preserveAspectRatio="none" role="img" aria-label="Average position over time">`
+    + `<line class="seo-base" x1="0" x2="${n}" y1="100" y2="100"/><path class="seo-line" d="${d}"/><line class="seo-cross" x1="-9" x2="-9" y1="0" y2="100"/></svg>`;
+}
+function seoChartBlock(metric, label, value, note, svg) {
+  return `<div class="seo-chart" data-metric="${metric}"><div class="seo-chart-h"><span class="seo-chart-l">${esc(label)}</span><b class="seo-chart-v">${esc(value)}</b><span class="seo-chart-s">${esc(note)}</span></div>${svg}</div>`;
+}
+function seoScopeOptions(m) {
+  const v = seoView;
+  const opt = (val, text) => `<option value="${esc(val)}"${val === (v.type === "site" ? "site" : v.type + ":" + v.key) ? " selected" : ""}>${esc(text)}</option>`;
+  const imp = (p) => seoNum((m.gsc[p] || {}).impressions) || 0;
+  const pages = [...new Set(m.audits.map((a) => a.page).concat(Object.keys(m.gsc)))];
+  if (v.type === "page" && !pages.includes(v.key)) pages.push(v.key);
+  pages.sort((a, b) => imp(b) - imp(a) || a.localeCompare(b));
+  const qs = m.queries.slice().sort((a, b) => (seoNum(b.impressions) || 0) - (seoNum(a.impressions) || 0)).slice(0, 50).map((q) => q.query);
+  if (v.type === "query" && !qs.includes(v.key)) qs.unshift(v.key);
+  return opt("site", "Whole site")
+    + `<optgroup label="Pages">${pages.map((p) => opt("page:" + p, p)).join("")}</optgroup>`
+    + `<optgroup label="Search queries">${qs.map((q) => opt("query:" + q, q)).join("")}</optgroup>`;
+}
+function seoHistoryHtml(m) {
+  const v = seoView;
+  const pts = v.pts = seoPoints(v.series, v.range);
+  const weekly = pts.length && pts[0].from !== pts[0].to;
+  const seg = `<span class="pipe-segment seo-range" role="group" aria-label="How far back">${SEO_RANGES.map((r) => `<button type="button" class="seg-btn${r[0] === v.range ? " active" : ""}" data-seo-range="${r[0]}" aria-pressed="${r[0] === v.range}">${esc(r[1])}</button>`).join("")}</span>`;
+  let body;
+  if (!pts.length) {
+    body = `<div class="seo-hist-empty u-muted" id="seo-hist-empty">No daily figures for this yet — they are added with each night's audit.</div>`;
+  } else {
+    const t = seoRangeSummary(pts), per = weekly ? "week" : "day";
+    const best = Math.min(...pts.map((p) => (p.position == null ? Infinity : p.position)));
+    body = `<div class="seo-charts" id="seo-charts" data-n="${pts.length}">`
+      + seoChartBlock("clicks", "Clicks", seoFmtInt(t.clicks), `most in a ${per} ${seoFmtInt(Math.max(...pts.map((p) => p.clicks)))}`, seoBarsSvg(pts, "clicks", "Clicks"))
+      + seoChartBlock("impressions", "Impressions", seoFmtInt(t.impressions), `most in a ${per} ${seoFmtInt(Math.max(...pts.map((p) => p.impressions)))}`, seoBarsSvg(pts, "impressions", "Impressions"))
+      + seoChartBlock("position", "Average position", seoFmtPos(t.position), isFinite(best) ? `best ${best.toFixed(1)} · the line climbs as the ranking improves` : "", seoLineSvg(pts))
+      + `<div class="seo-chart-x"><span>${esc(seoFmtDay(pts[0].from))}</span><span id="seo-hover" class="seo-hover">${weekly ? "Weekly totals" : ""}</span><span>${esc(seoFmtDay(pts[pts.length - 1].to))}</span></div>`
+      + `</div>`;
+  }
+  return `<div class="panel seo-history" id="seo-history"><h3>Search history ${seg}</h3>`
+    + `<div class="seo-hist-bar"><select id="seo-scope" class="seo-scope" aria-label="What to chart">${seoScopeOptions(m)}</select></div>`
+    + body + `</div>`;
+}
+
+/* ----- R100 · keyword recommendations: rules over the 28-day queries and the audited titles ----- */
+function seoWords(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w && !SEO_STOP.includes(w)).map((w) => (w.length > 3 ? w.replace(/s$/, "") : w));
+}
+/* The audited page whose title + H1 carry every significant word of the query, if any. */
+function seoPageFor(query, m) {
+  const want = seoWords(query);
+  if (!want.length) return null;
+  const hit = m.audits.find((a) => { const have = seoWords((a.d.title || "") + " " + (a.d.h1 || "")); return want.every((w) => have.includes(w)); });
+  return hit ? hit.page : null;
+}
+function seoRecs(m) {
+  const audited = new Set(m.audits.map((a) => a.page));
+  const out = [];
+  const nums = (q) => `position ${seoFmtPos(q.position)} · ${seoFmtInt(q.impressions)} impressions · ${seoFmtInt(q.clicks)} click${Number(q.clicks) === 1 ? "" : "s"}`;
+  m.queries.forEach((q) => {
+    const imp = seoNum(q.impressions) || 0, pos = seoNum(q.position) || 0, ctr = seoNum(q.ctr) || 0;
+    if (!pos || /nex\s?money|next\s?money/i.test(q.query)) return;
+    const pages = Array.isArray(q.pages) ? q.pages : [];
+    const top = pages[0] && pages[0].page, onSite = top && audited.has(top);
+    const target = seoPageFor(q.query, m);
+    const add = (rank, label, cls, action) => out.push({ rank, label, cls, query: q.query, imp, fact: nums(q), action });
+    if (pages.length > 1 && imp >= 20 && (seoNum(pages[1].impressions) || 0) >= 0.3 * (seoNum(pages[0].impressions) || 0)) {
+      add(1, "Two pages competing", "amber", `${pages[0].page} and ${pages[1].page} both show for this. Pick one, and link the other to it using this phrase.`);
+    } else if (pos <= 10 && imp >= 30 && ctr < (pos <= 3 ? 0.08 : 0.02)) {
+      add(2, "Page one, few clicks", "blue", `${top || "The page"} is already on page one. Rewrite its title and description so the result earns the click.`);
+    } else if (pos > 10 && pos <= 20 && imp >= 10) {
+      add(0, "Nearly page one", "green", target
+        ? `${target} already targets this. Add a section that answers it in full and link to the page from related pages.`
+        : `Work the phrase into the title and main heading of ${onSite ? top : "the most relevant page"}.`);
+    } else if (pos > 20 && imp >= 50) {
+      add(3, "Seen but buried", "grey", target
+        ? `${target} targets this but sits on page ${Math.ceil(pos / 10)}. It needs more depth, and links from other pages and sites.`
+        : `No page is built around this phrase. A page or guide of its own is the way up.`);
+    }
+  });
+  out.sort((a, b) => a.rank - b.rank || b.imp - a.imp);
+  const recs = out.slice(0, 10);
+  /* Old addresses Google still shows: worth a check that each redirects to the right page. */
+  Object.keys(m.gsc).filter((p) => !audited.has(p) && (seoNum(m.gsc[p].impressions) || 0) >= 20)
+    .sort((a, b) => m.gsc[b].impressions - m.gsc[a].impressions).slice(0, 3)
+    .forEach((p) => recs.push({ rank: 4, label: "Old address", cls: "amber", page: p, fact: nums(m.gsc[p]), action: "Google still lists this old address. Check it redirects to the page that best answers the same search." }));
+  return recs;
+}
+function seoRecsHtml(m) {
+  const recs = seoRecs(m);
+  return `<div class="panel seo-recs-panel"><h3>Keyword recommendations</h3><div id="seo-recs">`
+    + (recs.length
+      ? recs.map((r) => `<div class="seo-rec" data-rank="${r.rank}">`
+          + `<div class="seo-rec-h">${seoBadge(r.cls, r.label)}<b class="seo-rec-q">${esc(r.query || r.page)}</b><span class="seo-rec-f">${esc(r.fact)}</span>${seoHistBtn(r.query ? "query" : "page", r.query || r.page)}</div>`
+          + `<div class="seo-rec-a">${esc(r.action)}</div></div>`).join("")
+      : `<span class="u-muted">Nothing to act on yet — there are too few searches to judge.</span>`)
+    + `</div></div>`;
 }
 function seoRunBtnHtml() {
   return seoRunning
@@ -547,6 +739,7 @@ function seoRowHtml(a, m) {
     + `<td data-lbl="PSI" class="num">${seoPsiChip(psi && psi.performance)}</td>`
     + `<td data-lbl="Clicks" class="num">${gsc ? seoFmtInt(gsc.clicks) : "—"}</td>`
     + `<td data-lbl="Position" class="num">${gsc && seoNum(gsc.position) != null ? esc(seoNum(gsc.position).toFixed(1)) : "—"}</td>`
+    + `<td data-lbl="Change" class="seo-trend">${seoDeltaHtml(gsc, m.prevGsc[a.page], m.hasPrev)} ${seoHistBtn("page", a.page)}</td>`
     + `<td data-lbl="Issues" class="seo-iss-cell">${cell}</td>`
     + `</tr>`;
 }
@@ -557,7 +750,7 @@ function seoTableHtml(m) {
     || a.page.localeCompare(b.page));
   if (!rows.length) return "";
   return `<div class="u-ox-auto"><table class="imp-table mob-cards seo-table" id="seo-table">`
-    + `<tr><th>Page</th><th>Title</th><th>Description</th><th>H1</th><th>Words</th><th>PSI</th><th>Clicks</th><th>Position</th><th>Issues</th></tr>`
+    + `<tr><th>Page</th><th>Title</th><th>Description</th><th>H1</th><th>Words</th><th>PSI</th><th>Clicks</th><th>Position</th><th>Change</th><th>Issues</th></tr>`
     + rows.map((a) => seoRowHtml(a, m)).join("")
     + `</table></div>`;
 }
@@ -570,24 +763,44 @@ function seoQueriesHtml(m) {
       + `<li>Give Daniel the JSON — he adds it as the GSC_SERVICE_ACCOUNT secret.</li>`
       + `</ol></div>`;
   }
-  const qs = m.queries.slice().sort((a, b) => (seoNum(b.clicks) || 0) - (seoNum(a.clicks) || 0) || (seoNum(b.impressions) || 0) - (seoNum(a.impressions) || 0)).slice(0, 20);
-  const pct = (v) => (seoNum(v) == null ? "—" : (seoNum(v) * 100).toFixed(1) + "%");
-  return `<div class="panel seo-queries"><h3>Top queries</h3><div id="seo-queries">`
-    + (qs.length
-      ? qs.map((q) => rowItemHtml({
-          name: { text: q.query },
-          fact: esc(`${seoFmtInt(q.clicks)} clicks · ${seoFmtInt(q.impressions)} impressions · ${pct(q.ctr)} CTR · position ${seoNum(q.position) == null ? "—" : seoNum(q.position).toFixed(1)}`),
-          cls: "seo-q",
-        })).join("")
-      : `<span class="u-muted">No queries yet.</span>`)
-    + `</div></div>`;
+  return `<div class="panel seo-queries"><h3>Search queries <span class="seo-count">${seoFmtInt(m.queries.length)}</span></h3>`
+    + `<input type="search" id="seo-qfilter" class="seo-qfilter" placeholder="Filter queries" aria-label="Filter queries" value="${esc(seoView.filter)}">`
+    + `<div id="seo-qwrap">${seoQueriesBodyHtml(m)}</div></div>`;
+}
+const SEO_Q_COLS = [["query", "Query"], ["clicks", "Clicks"], ["impressions", "Impressions"], ["ctr", "CTR"], ["position", "Position"]];
+/* The table under the filter box: repainted alone on sort / filter so the box keeps its focus. */
+function seoQueriesBodyHtml(m) {
+  const v = seoView, f = v.filter.trim().toLowerCase();
+  const qs = m.queries.filter((q) => !f || String(q.query).toLowerCase().includes(f));
+  qs.sort((a, b) => (v.sort === "query"
+    ? v.dir * String(a.query).localeCompare(String(b.query))
+    : v.dir * ((seoNum(a[v.sort]) || 0) - (seoNum(b[v.sort]) || 0))) || (seoNum(b.impressions) || 0) - (seoNum(a.impressions) || 0));
+  if (!qs.length) return `<span class="u-muted" id="seo-qnone">${m.queries.length ? "No query matches." : "No queries yet."}</span>`;
+  const shown = v.all ? qs : qs.slice(0, SEO_Q_SHOWN);
+  const pct = (x) => (seoNum(x) == null ? "—" : (seoNum(x) * 100).toFixed(1) + "%");
+  const th = SEO_Q_COLS.map((c) => `<th data-seo-sort="${c[0]}"${v.sort === c[0] ? ` aria-sort="${v.dir < 0 ? "descending" : "ascending"}"` : ""}>${c[1]}${v.sort === c[0] ? (v.dir < 0 ? " ↓" : " ↑") : ""}</th>`).join("");
+  return `<div class="u-ox-auto"><table class="imp-table mob-cards seo-qtable" id="seo-queries"><tr>${th}<th>Change</th><th>Page</th></tr>`
+    + shown.map((q) => {
+        const pages = Array.isArray(q.pages) ? q.pages : [];
+        const pg = pages.length ? `${esc(pages[0].page)}${pages.length > 1 ? ` <span class="u-muted">+${pages.length - 1}</span>` : ""}` : `<span class="u-muted">—</span>`;
+        return `<tr class="seo-qrow" data-seo-hist="query" data-key="${esc(q.query)}" title="Chart this query over time">`
+          + `<td data-lbl="Query" class="seo-q">${esc(q.query)}</td>`
+          + `<td data-lbl="Clicks" class="num">${seoFmtInt(q.clicks)}</td>`
+          + `<td data-lbl="Impressions" class="num">${seoFmtInt(q.impressions)}</td>`
+          + `<td data-lbl="CTR" class="num">${pct(q.ctr)}</td>`
+          + `<td data-lbl="Position" class="num">${seoFmtPos(q.position)}</td>`
+          + `<td data-lbl="Change">${seoDeltaHtml(q, m.prevQ[q.query], m.hasPrev)}</td>`
+          + `<td data-lbl="Page" class="seo-qpage" title="${esc(pages.map((p) => p.page).join("\n"))}">${pg}</td></tr>`;
+      }).join("")
+    + `</table></div>`
+    + (qs.length > shown.length ? `<button type="button" class="btn btn-sm seo-qall" id="seo-qall">Show all ${seoFmtInt(qs.length)}</button>` : "");
 }
 function seoPaint(root, res) {
   if (!res.day || !res.rows.length) {
     root.innerHTML = `<div class="seo-empty" id="seo-empty">${emptyState({ headline: "No audit yet." })}${seoRunBtnHtml()}</div>`;
     return;
   }
-  const m = seoModel(res.rows);
+  const m = seoView.model = seoModel(res.rows, res.prev);
   const s = m.summary || {};
   const when = s.ran_at || s.created_at || res.day;
   const dur = seoNum(s.duration_ms);
@@ -595,6 +808,7 @@ function seoPaint(root, res) {
   const notesChip = notes.length ? seoBadge("amber seo-notes", `${notes.length} note${notes.length === 1 ? "" : "s"}`, notes.join("\n")) : "";
   root.innerHTML = `<div class="seo-head" id="seo-head"><span class="seo-last" title="${esc(String(when))}">Last audit ${esc(fmtAgo(when) || res.day)}${dur == null ? "" : ` · ${esc((dur / 1000).toFixed(1))}s`}</span>${notesChip}${seoRunBtnHtml()}</div>`
     + seoTilesHtml(m)
+    + (s.gsc_connected ? seoHistoryHtml(m) + seoRecsHtml(m) : "")
     + seoTableHtml(m)
     + seoQueriesHtml(m);
   syncNumHeaders(root);
@@ -604,6 +818,17 @@ function seoWire(root) {
   root.__seoWired = true;
   root.addEventListener("click", (e) => {
     if (e.target.closest("#seo-run")) { seoRunAudit(); return; }
+    const range = e.target.closest("[data-seo-range]");
+    if (range) { seoView.range = Number(range.getAttribute("data-seo-range")) || 90; seoShowSeries(false); return; }
+    const sort = e.target.closest("th[data-seo-sort]");
+    if (sort) {
+      const k = sort.getAttribute("data-seo-sort");
+      if (seoView.sort === k) seoView.dir = -seoView.dir; else { seoView.sort = k; seoView.dir = k === "query" ? 1 : -1; }
+      seoQueriesRepaint(); return;
+    }
+    if (e.target.closest("#seo-qall")) { seoView.all = true; seoQueriesRepaint(); return; }
+    const hist = e.target.closest("[data-seo-hist]");
+    if (hist) { seoView.type = hist.getAttribute("data-seo-hist"); seoView.key = hist.getAttribute("data-key") || ""; seoShowSeries(true); return; }
     const jump = e.target.closest("[data-seo-jump]");
     if (jump) { const t = document.getElementById(jump.getAttribute("data-seo-jump")); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
     const tr = e.target.closest("tr.seo-row");
@@ -611,10 +836,53 @@ function seoWire(root) {
     const det = tr.querySelector("details.seo-iss");
     if (det) det.open = !det.open;
   });
+  root.addEventListener("change", (e) => {
+    if (!e.target.closest("#seo-scope")) return;
+    const val = e.target.value, i = val.indexOf(":");
+    seoView.type = i < 0 ? "site" : val.slice(0, i);
+    seoView.key = i < 0 ? "" : val.slice(i + 1);
+    seoShowSeries(false);
+  });
+  root.addEventListener("input", (e) => {
+    if (!e.target.closest("#seo-qfilter")) return;
+    seoView.filter = e.target.value; seoView.all = false; seoQueriesRepaint();
+  });
+  /* Crosshair + read-out: the same date in all three charts. */
+  root.addEventListener("pointermove", (e) => {
+    const svg = e.target.closest && e.target.closest(".seo-svg");
+    const pts = seoView.pts;
+    if (!svg || !pts.length) return;
+    const box = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(pts.length - 1, Math.floor(((e.clientX - box.left) / Math.max(1, box.width)) * pts.length)));
+    seoCross(root, i + 0.5, `${seoPtLabel(pts[i])} · ${seoFmtInt(pts[i].clicks)} click${pts[i].clicks === 1 ? "" : "s"} · ${seoFmtInt(pts[i].impressions)} impressions · position ${seoFmtPos(pts[i].position)}`);
+  });
+  root.addEventListener("pointerout", (e) => {
+    const svg = e.target.closest && e.target.closest(".seo-svg");
+    if (svg && !svg.contains(e.relatedTarget)) seoCross(root, -9, seoView.pts.length && seoView.pts[0].from !== seoView.pts[0].to ? "Weekly totals" : "");
+  });
   root.addEventListener("keydown", (e) => {
     const jump = e.target.closest && e.target.closest("[data-seo-jump]");
     if (jump && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); jump.click(); }
   });
+}
+function seoCross(root, x, text) {
+  root.querySelectorAll(".seo-cross").forEach((l) => { l.setAttribute("x1", String(x)); l.setAttribute("x2", String(x)); });
+  const out = root.querySelector("#seo-hover");
+  if (out) out.textContent = text;
+}
+function seoQueriesRepaint() {
+  const wrap = document.getElementById("seo-qwrap");
+  if (!wrap || !seoView.model) return;
+  wrap.innerHTML = seoQueriesBodyHtml(seoView.model);
+  syncNumHeaders(wrap);
+}
+/* Re-read the chosen series and repaint the history panel alone. */
+async function seoShowSeries(scroll) {
+  try { await seoLoadSeries(); } catch (_) { seoView.series = []; }
+  const el = document.getElementById("seo-history");
+  if (!el || !seoView.model) return;
+  el.outerHTML = seoHistoryHtml(seoView.model);
+  if (scroll) { const t = document.getElementById("seo-history"); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); }
 }
 async function loadSiteSeo(o) {
   const root = document.getElementById("page-site-seo");
@@ -622,7 +890,7 @@ async function loadSiteSeo(o) {
   seoWire(root);
   if (!root.querySelector("#seo-head, #seo-empty")) root.innerHTML = `<div class="empty">Loading…</div>`;
   let res;
-  try { res = await seoLoadLatest(); } catch (e) { res = { error: { message: String((e && e.message) || e) } }; }
+  try { [res] = await Promise.all([seoLoadLatest(), seoLoadSeries().catch(() => { seoView.series = []; })]); } catch (e) { res = { error: { message: String((e && e.message) || e) } }; }
   if (res.error) { renderLoadError("#page-site-seo", res.error, () => loadSiteSeo({ refresh: true })); return; }
   seoPaint(root, res);
 }
@@ -651,4 +919,4 @@ async function seoRunAudit() {
 /* R93 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / site.js / app.js bumps the tag IN ALL EIGHT PLACES. */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_site = "r99a";   // bumped to r93 at the gate with the other seven
+window.__nxTag_site = "r100";   // bumped to r93 at the gate with the other seven

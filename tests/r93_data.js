@@ -114,7 +114,7 @@ const FIXTURE = {
      §B — edge functions
      ===================================================================== */
   console.log("\n— §B · edge functions");
-  const pub = rd("edge/site-publish-v1.ts"), seo = rd("edge/seo-snapshot-v2.ts");
+  const pub = rd("edge/site-publish-v1.ts"), seo = rd("edge/seo-snapshot-v3.ts");
   ok("B1 · site-publish carries session_ok", pub.includes('uc.rpc("session_ok")') && pub.includes("second factor required"));
   ok("B2 · seo-snapshot carries session_ok", seo.includes('uc.rpc("session_ok")') && seo.includes("second factor required"));
   ok("B3 · seo-snapshot admits x-cron-key against settings.cron_key", seo.includes('req.headers.get("x-cron-key")') && seo.includes('.eq("key", "cron_key")'));
@@ -205,14 +205,15 @@ const FIXTURE = {
       for (const t of ["site_pages", "site_posts", "site_publishes", "seo_snapshots"]) reg[t] = window.__mock.columnRegistry(t);
       return { pages: await read("site_pages"), posts: await read("site_posts"), pubs: await read("site_publishes"), snaps: await read("seo_snapshots"), reg };
     });
-    eq("D1 · fixture counts 3 / 3 / 2 / 27 (R93 · fixer: + the 404 audit page)", [d.pages.length, d.posts.length, d.pubs.length, d.snaps.length], [3, 3, 2, 27]);
+    const snapN = d.snaps.filter((x) => !/_day$/.test(x.kind)).length;
+    eq("D1 · fixture counts 3 / 3 / 2 / 35 snapshots + R100's daily series", [d.pages.length, d.posts.length, d.pubs.length, snapN, d.snaps.length > snapN], [3, 3, 2, 35, true]);
     for (const t of ["site_pages", "site_posts", "site_publishes", "seo_snapshots"]) eq(`D2 · ${t} registry = db/columns.json`, d.reg[t], cols[t]);
     eq("D3 · one post per status draft/approved/published", d.posts.map((p) => p.status).sort(), ["approved", "draft", "published"]);
     const kinds = {};
     d.snaps.forEach((s) => { kinds[s.kind] = (kinds[s.kind] || 0) + 1; });
-    eq("D4 · snapshot kinds", kinds, { audit: 15, psi: 3, gsc: 3, gsc_query: 5, summary: 1 });
+    eq("D4 · snapshot kinds (R100: + the daily series and the week-older gsc rows)", kinds, { audit: 15, psi: 3, gsc: 6, gsc_query: 10, summary: 1, gsc_day: 39, gsc_page_day: 33, gsc_query_day: 30 });
     const yday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    ok("D5 · all snapshots are yesterday (UTC)", d.snaps.every((s) => s.day === yday), [...new Set(d.snaps.map((s) => s.day))].join(","));
+    ok("D5 · the audit snapshot is yesterday (UTC); nothing is newer", d.snaps.filter((s) => ["audit", "psi", "summary"].includes(s.kind)).every((s) => s.day === yday) && d.snaps.every((s) => s.day <= yday), [...new Set(d.snaps.map((s) => s.day))].join(","));
     const aud = d.snaps.find((s) => s.kind === "audit").data;
     eq("D6 · audit data keys (contract shape)", Object.keys(aud).sort(), ["broken_links", "canonical", "canonical_ok", "h1", "h1_count", "has_jsonld", "images_no_alt", "internal_links", "issues", "meta", "meta_len", "status", "title", "title_len", "words"].sort());
     const sum = d.snaps.find((s) => s.kind === "summary");
@@ -220,7 +221,7 @@ const FIXTURE = {
     const errs = d.snaps.filter((s) => s.kind === "audit").reduce((n, s) => n + s.data.issues.filter((i) => i.level === "error").length, 0);
     ok("D8 · summary.errors agrees with the audit rows", sum.data.errors === errs && sum.page === "", `${sum.data.errors} vs ${errs}`);
     eq("D9 · psi data keys", Object.keys(d.snaps.find((s) => s.kind === "psi").data).sort(), ["cls", "fcp_ms", "fetched_at", "inp_ms", "lcp_ms", "performance", "strategy"]);
-    eq("D10 · gsc_query data keys", Object.keys(d.snaps.find((s) => s.kind === "gsc_query").data).sort(), ["clicks", "ctr", "impressions", "position"]);
+    eq("D10 · gsc_query data keys", Object.keys(d.snaps.find((s) => s.kind === "gsc_query").data).sort(), ["clicks", "ctr", "impressions", "pages", "position"]);
 
     const w = await p4.evaluate(async () => {
       const db = window.__mockDb;
@@ -268,7 +269,7 @@ const FIXTURE = {
       return { n, err: r.error && r.error.message, code: r.error && r.error.code, ins: ins.data && ins.data.status, author: ins.data && ins.data.author_id, keys, hookUnset, hookSet, keys2 };
     });
     eq("D25 · admin: hook key hidden, site_hook_is_set() false → true once set, author_id stamped server-side", [a1.keys, a1.hookUnset, a1.hookSet, a1.keys2, a1.author], [[], false, true, [], "p1"]);
-    ok("D20 · admin reads the snapshots", a1.n === 27);
+    ok("D20 · admin reads the snapshots (35 + R100 daily series 102)", a1.n === 137, String(a1.n));
     ok("D21 · admin cannot approve: 'Only the owner can approve' (42501)", a1.err === "Only the owner can approve" && a1.code === "42501", JSON.stringify(a1));
     eq("D22 · admin can write a draft", a1.ins, "draft");
     await p1.context().close();

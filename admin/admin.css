@@ -3888,6 +3888,41 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .seo-iss-body ul { margin: 0 0 4px; padding-left: 0; list-style: none; }
 .seo-iss-body li { margin: 3px 0; overflow-wrap: anywhere; }
 .seo-steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.7; }
+/* R100: history chart — three single-series charts on one date axis; marks stretch, labels are HTML. */
+.seo-history > h3 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.seo-range { margin: 0 0 0 auto; padding: 3px; }
+.seo-range .seg-btn { padding: 5px 12px; text-transform: none; letter-spacing: 0; }
+.seo-hist-bar { margin-bottom: 12px; }
+.seo-scope { max-width: 100%; min-width: 220px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--white); color: var(--dark); font: inherit; font-size: 13px; }
+.seo-chart { margin-bottom: 14px; }
+.seo-chart-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 12.5px; color: var(--muted); }
+.seo-chart-v { font-size: 16px; color: var(--dark); font-variant-numeric: tabular-nums; }
+.seo-chart-s { font-size: 12px; }
+.seo-svg { display: block; width: 100%; height: 84px; touch-action: pan-y; }
+.seo-bar { fill: var(--navy); }
+.seo-line { fill: none; stroke: var(--navy); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.seo-base { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.seo-cross { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.seo-chart-x { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
+.seo-hover { color: var(--dark); font-variant-numeric: tabular-nums; text-align: center; min-height: 1.4em; }
+.seo-hist-empty { padding: 18px 0; font-size: 13px; }
+.seo-hist-btn { padding: 2px 8px; font-size: 11.5px; }
+.seo-trend { white-space: nowrap; }
+.seo-delta { cursor: help; }
+.seo-rec { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.seo-rec:last-child { border-bottom: 0; }
+.seo-rec-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.seo-rec-q { color: var(--dark); }
+.seo-rec-f { font-size: 12.5px; color: var(--muted); }
+.seo-rec-h .seo-hist-btn { margin-left: auto; }
+.seo-rec-a { margin-top: 4px; font-size: 13px; max-width: 80ch; }
+.seo-qfilter { width: 100%; max-width: 320px; margin-bottom: 10px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); font: inherit; font-size: 13px; }
+.seo-qtable tr.seo-qrow { cursor: pointer; }
+.seo-qtable tr.seo-qrow:hover > td { background: var(--blue-bg); }
+.seo-qtable td.seo-q { white-space: normal; min-width: 180px; }
+.seo-qtable td.seo-qpage { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.seo-qall { margin-top: 10px; }
+.seo-count { font-weight: 500; color: var(--muted); }
 /* ===== END R93 · C CSS ===== */
 
 /* R90 · C utilities — what the fixed inline style="…" values became. !important on purpose: an
