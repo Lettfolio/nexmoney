@@ -1,5 +1,5 @@
 // =============================================================================
-// seo-snapshot v2 — R93 · A (Website › SEO tab); v2 R98 · A-1 (PSI concurrent)
+// seo-snapshot v3 — R93 · A (Website › SEO tab); v2 R98 · A-1 (PSI concurrent); v3 R100 (history)
 // Nightly by pg_cron 02:30 UTC (x-cron-key = settings.cron_key, process-emails' pattern; see
 // db/r93/02_cron.sql), or by an owner/admin JWT (owner-digest v7's gate: session_ok() → 403,
 // profiles.role owner/admin) with { force: true } from "Run audit now".
@@ -12,6 +12,13 @@
 //        GSC (when the GSC_SERVICE_ACCOUNT secret exists) runs alongside all three: RS256 JWT via
 //            WebCrypto → token → searchAnalytics.query, 28 days ending today−2;
 //        (4) upsert rows on (day, kind, page); (5) the summary row.
+// R100, v3: GSC also returns (a) query×page for the 28-day window — each gsc_query row gains
+//        pages: [{ page, clicks, impressions, position }] (top 3) — and (b) DAILY series keyed by
+//        the date itself: gsc_day (site, page ""), gsc_page_day (page = path), gsc_query_day
+//        (page = query). The first run (fewer than 20 gsc_day rows) or { backfill: true } reads
+//        480 days of site data and 90 of page/query data; every later run re-reads the last 10
+//        (Search Console keeps revising its newest days). History is upserted apart from the
+//        audit rows, so a failure there cannot cost the night's audit.
 // Row `data` shapes are frozen in R93-CONTRACT.md (the SEO tab renders them). R93 · fixer: the
 // summary also carries run_errors: string[] (≤20, ≤200 chars, redacted) — `errors` there is the
 // issue COUNT the tiles read, so the step failures cannot share that name.
@@ -46,7 +53,12 @@ const PSI_CALL_MS = 40_000;
 const PSI_STAGGER_MS = 250;      // between launches, so the ≤8 calls are not one burst
 const PSI_MIN_LEFT_MS = 10_000;    // don't start a PSI call with less than this left
 const RUN_ERRORS_MAX = 20;
-const GSC_QUERY_ROWS = 50;
+const GSC_QUERY_ROWS = 250;
+const GSC_BACKFILL_SITE_DAYS = 480;     // Search Console keeps 16 months
+const GSC_BACKFILL_DETAIL_DAYS = 90;
+const GSC_REFRESH_DAYS = 10;
+const GSC_HISTORY_MIN_ROWS = 20;        // fewer gsc_day rows than this = never backfilled
+const GSC_QUERY_PAGES = 3;
 
 type Issue = { code: string; level: "error" | "warn"; msg: string };
 type Audit = {
@@ -357,8 +369,23 @@ type GscRow = { keys?: string[]; clicks: number; impressions: number; ctr: numbe
 function gscData(r: GscRow) {
   return { clicks: r.clicks ?? 0, impressions: r.impressions ?? 0, ctr: Math.round((r.ctr ?? 0) * 10_000) / 10_000, position: Math.round((r.position ?? 0) * 10) / 10 };
 }
-async function runGsc(property: string, dl: Deadline, errors: string[]): Promise<{ connected: boolean; total: ReturnType<typeof gscData> | null; pages: Map<string, unknown>; queries: Map<string, unknown> }> {
-  const res = { connected: false, total: null as ReturnType<typeof gscData> | null, pages: new Map<string, unknown>(), queries: new Map<string, unknown>() };
+type GscAgg = { clicks: number; impressions: number; posW: number };
+// Several URLs (http/https, www/apex, trailing slash) fold to one path: sum them, position weighted by impressions.
+function gscFold(m: Map<string, GscAgg>, key: string, r: GscRow) {
+  const a = m.get(key) || { clicks: 0, impressions: 0, posW: 0 };
+  a.clicks += r.clicks ?? 0; a.impressions += r.impressions ?? 0; a.posW += (r.position ?? 0) * (r.impressions ?? 0);
+  m.set(key, a);
+}
+function gscAggData(a: GscAgg) {
+  return {
+    clicks: a.clicks, impressions: a.impressions,
+    ctr: a.impressions ? Math.round((a.clicks / a.impressions) * 10_000) / 10_000 : 0,
+    position: a.impressions ? Math.round((a.posW / a.impressions) * 10) / 10 : 0,
+  };
+}
+type GscResult = { connected: boolean; total: ReturnType<typeof gscData> | null; pages: Map<string, unknown>; queries: Map<string, unknown>; history: Row[]; backfill: boolean };
+async function runGsc(property: string, dl: Deadline, errors: string[], wantBackfill: boolean): Promise<GscResult> {
+  const res: GscResult = { connected: false, total: null, pages: new Map<string, unknown>(), queries: new Map<string, unknown>(), history: [], backfill: false };
   const raw = Deno.env.get("GSC_SERVICE_ACCOUNT");
   if (!raw) return res;
   try {
@@ -366,11 +393,11 @@ async function runGsc(property: string, dl: Deadline, errors: string[]): Promise
     if (!sa?.client_email || !sa?.private_key) throw new Error("GSC_SERVICE_ACCOUNT lacks client_email/private_key");
     const token = await googleToken(sa, dl);
     const endDate = utcDay(-2), startDate = utcDay(-29);   // 28 days inclusive, ending today−2
-    const q = async (dimensions: string[], rowLimit: number): Promise<GscRow[]> => {
+    const q = async (dimensions: string[], rowLimit: number, from = startDate, to = endDate): Promise<GscRow[]> => {
       const r = await fetchT(`https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(property)}/searchAnalytics/query`, {
         method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ startDate, endDate, dimensions, rowLimit }),
-      }, 10_000, dl);
+        body: JSON.stringify({ startDate: from, endDate: to, dimensions, rowLimit }),
+      }, 15_000, dl);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(`query[${dimensions.join(",") || "total"}] HTTP ${r.status}${j?.error?.message ? " " + String(j.error.message).slice(0, 120) : ""}`);
       return (j.rows || []) as GscRow[];
@@ -380,6 +407,44 @@ async function runGsc(property: string, dl: Deadline, errors: string[]): Promise
     res.total = totalRows[0] ? gscData(totalRows[0]) : { clicks: 0, impressions: 0, ctr: 0, position: 0 };
     for (const r of pageRows) if (r.keys?.[0]) res.pages.set(pathOf(r.keys[0]), gscData(r));
     for (const r of queryRows) if (r.keys?.[0]) res.queries.set(r.keys[0], gscData(r));
+
+    // R100: everything below is extra — a failure is noted and the 28-day rows above still stand.
+    try {
+      const qp = await q(["query", "page"], 2_000);
+      const by = new Map<string, Map<string, GscAgg>>();
+      for (const r of qp) {
+        const query = r.keys?.[0], url = r.keys?.[1];
+        if (!query || !url || !res.queries.has(query)) continue;
+        if (!by.has(query)) by.set(query, new Map());
+        gscFold(by.get(query)!, pathOf(url), r);
+      }
+      for (const [query, m] of by) {
+        const pages = [...m].map(([page, a]) => ({ page, ...gscAggData(a) }))
+          .sort((a, b) => b.impressions - a.impressions).slice(0, GSC_QUERY_PAGES)
+          .map(({ page, clicks, impressions, position }) => ({ page, clicks, impressions, position }));
+        res.queries.set(query, { ...(res.queries.get(query) as object), pages });
+      }
+    } catch (e) {
+      errors.push(`gsc query pages: ${msg(e)}`);
+    }
+    try {
+      const { count } = await admin.from("seo_snapshots").select("id", { count: "exact", head: true }).eq("kind", "gsc_day");
+      res.backfill = wantBackfill || (count ?? 0) < GSC_HISTORY_MIN_ROWS;
+      const siteFrom = utcDay(-(res.backfill ? GSC_BACKFILL_SITE_DAYS : GSC_REFRESH_DAYS));
+      const detailFrom = utcDay(-(res.backfill ? GSC_BACKFILL_DETAIL_DAYS : GSC_REFRESH_DAYS));
+      const to = utcDay(-1);
+      const [dayRows, pageDayRows, queryDayRows] = await Promise.all([
+        q(["date"], 1_000, siteFrom, to), q(["date", "page"], 25_000, detailFrom, to), q(["date", "query"], 25_000, detailFrom, to),
+      ]);
+      for (const r of dayRows) if (r.keys?.[0]) res.history.push({ day: r.keys[0], kind: "gsc_day", page: "", data: gscData(r) });
+      const pd = new Map<string, GscAgg>(), qd = new Map<string, GscAgg>();
+      for (const r of pageDayRows) if (r.keys?.[0] && r.keys?.[1]) gscFold(pd, `${r.keys[0]}\n${pathOf(r.keys[1])}`, r);
+      for (const r of queryDayRows) if (r.keys?.[0] && r.keys?.[1]) gscFold(qd, `${r.keys[0]}\n${r.keys[1]}`, r);
+      for (const [k, a] of pd) { const i = k.indexOf("\n"); res.history.push({ day: k.slice(0, i), kind: "gsc_page_day", page: k.slice(i + 1), data: gscAggData(a) }); }
+      for (const [k, a] of qd) { const i = k.indexOf("\n"); res.history.push({ day: k.slice(0, i), kind: "gsc_query_day", page: k.slice(i + 1), data: gscAggData(a) }); }
+    } catch (e) {
+      errors.push(`gsc history: ${msg(e)}`);
+    }
   } catch (e) {
     errors.push(`gsc: ${msg(e)}`);
   }
@@ -396,7 +461,7 @@ Deno.serve(async (req) => {
     if (who === "mfa") return json({ ok: false, error: "second factor required" }, 403);
     if (!who) return json({ ok: false, error: "unauthorized" }, 401);
 
-    let body: { force?: boolean } | null = null;
+    let body: { force?: boolean; backfill?: boolean } | null = null;
     try { body = await req.json(); } catch { /* empty body = cron */ }
     const force = body?.force === true;
 
@@ -408,7 +473,7 @@ Deno.serve(async (req) => {
     const day = utcDay(0);
 
     // Audit fetch → PSI → link check with what remains — GSC runs alongside all three.
-    const gscP = runGsc(settings.get("gsc_property") || "sc-domain:nexmoney.co.uk", dl, errors);
+    const gscP = runGsc(settings.get("gsc_property") || "sc-domain:nexmoney.co.uk", dl, errors, body?.backfill === true);
     const run = await runAudit(dl, errors);
     const { audits } = run;
     const psi = await runPsi(run.pages, dl, errors);
@@ -439,8 +504,16 @@ Deno.serve(async (req) => {
       const { error } = await admin.from("seo_snapshots").upsert(chunk, { onConflict: "day,kind,page" });
       if (error) errors.push(`upsert: ${msg(error.message)}`); else written += chunk.length;
     }
+    // R100: the daily series go in after the audit rows and never decide `ok`.
+    let history = 0;
+    for (let i = 0; i < gsc.history.length; i += 500) {
+      const chunk = gsc.history.slice(i, i + 500);
+      const { error } = await admin.from("seo_snapshots").upsert(chunk, { onConflict: "day,kind,page" });
+      if (error) { errors.push(`history upsert: ${msg(error.message)}`); break; }
+      history += chunk.length;
+    }
     summary.duration_ms = Date.now() - started;
-    return json({ ok: written > 0 && written === rows.length, summary, rows: written, errors: errors.map(redact) });
+    return json({ ok: written > 0 && written === rows.length, summary, rows: written, history_rows: history, backfill: gsc.backfill, errors: errors.map(redact) });
   } catch (err) {
     errors.push(msg(err));
     return json({ ok: false, summary: null, errors: errors.map(redact) });

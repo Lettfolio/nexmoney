@@ -3876,7 +3876,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .seo-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -2px; animation: seo-spin .8s linear infinite; }
 @keyframes seo-spin { to { transform: rotate(360deg); } }
 .seo-table { margin-bottom: 20px; }
-.seo-table tr.seo-row { cursor: pointer; }
+.seo-table tr.seo-row, .seo-qtable tr.seo-qrow { cursor: pointer; }
 .seo-table tr.seo-row > td { vertical-align: top; }
 .seo-table td.seo-iss-cell { white-space: normal; }
 .seo-iss > summary { list-style: none; cursor: pointer; display: inline-flex; flex-wrap: wrap; gap: 4px; }
@@ -3888,6 +3888,25 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .seo-iss-body ul { margin: 0 0 4px; padding-left: 0; list-style: none; }
 .seo-iss-body li { margin: 3px 0; overflow-wrap: anywhere; }
 .seo-steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.7; }
+/* R100: history chart — three single-series charts on one date axis; marks stretch, labels are HTML. */
+.seo-range { margin: 0 0 0 auto; padding: 3px; }
+.seo-range .seg-btn { padding: 5px 12px; text-transform: none; letter-spacing: 0; }
+.seo-scope, .seo-qfilter { display: block; width: 100%; max-width: 320px; margin-bottom: 12px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--white); color: var(--dark); font: inherit; font-size: 13px; }
+.seo-chart { margin-bottom: 14px; }
+.seo-chart-h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 12.5px; color: var(--muted); }
+.seo-chart-v { font-size: 16px; color: var(--dark); font-variant-numeric: tabular-nums; }
+.seo-svg { display: block; width: 100%; height: 84px; touch-action: pan-y; }
+.seo-bar { fill: var(--navy); }
+.seo-line { fill: none; stroke: var(--navy); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.seo-base { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.seo-cross { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.seo-chart-x { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
+.seo-hover { color: var(--dark); font-variant-numeric: tabular-nums; text-align: center; min-height: 1.4em; }
+.seo-rec { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.seo-rec-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.seo-rec-h .seo-hist-btn { margin-left: auto; }
+.seo-rec-a { margin-top: 4px; font-size: 13px; max-width: 80ch; }
+.seo-qtable td.seo-q { white-space: normal; min-width: 180px; }
 /* ===== END R93 · C CSS ===== */
 
 /* R90 · C utilities — what the fixed inline style="…" values became. !important on purpose: an
