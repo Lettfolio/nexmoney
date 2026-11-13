@@ -617,7 +617,7 @@ function seoHistoryHtml(m) {
   const seg = `<span class="pipe-segment seo-range" role="group" aria-label="How far back">${SEO_RANGES.map((r) => `<button type="button" class="seg-btn${r[0] === v.range ? " active" : ""}" data-seo-range="${r[0]}" aria-pressed="${r[0] === v.range}">${esc(r[1])}</button>`).join("")}</span>`;
   let body;
   if (!pts.length) {
-    body = `<div class="seo-hist-empty u-muted" id="seo-hist-empty">No daily figures for this yet — they are added with each night's audit.</div>`;
+    body = `<div class="u-muted u-mt-12" id="seo-hist-empty">No daily figures for this yet — they are added with each night's audit.</div>`;
   } else {
     const t = seoRangeSummary(pts), per = weekly ? "week" : "day";
     const best = Math.min(...pts.map((p) => (p.position == null ? Infinity : p.position)));
@@ -629,7 +629,7 @@ function seoHistoryHtml(m) {
       + `</div>`;
   }
   return `<div class="panel seo-history" id="seo-history"><h3>Search history ${seg}</h3>`
-    + `<div class="seo-hist-bar"><select id="seo-scope" class="seo-scope" aria-label="What to chart">${seoScopeOptions(m)}</select></div>`
+    + `<select id="seo-scope" class="seo-scope" aria-label="What to chart">${seoScopeOptions(m)}</select>`
     + body + `</div>`;
 }
 
@@ -682,7 +682,7 @@ function seoRecsHtml(m) {
   return `<div class="panel seo-recs-panel"><h3>Keyword recommendations</h3><div id="seo-recs">`
     + (recs.length
       ? recs.map((r) => `<div class="seo-rec" data-rank="${r.rank}">`
-          + `<div class="seo-rec-h">${seoBadge(r.cls, r.label)}<b class="seo-rec-q">${esc(r.query || r.page)}</b><span class="seo-rec-f">${esc(r.fact)}</span>${seoHistBtn(r.query ? "query" : "page", r.query || r.page)}</div>`
+          + `<div class="seo-rec-h">${seoBadge(r.cls, r.label)}<b class="seo-rec-q">${esc(r.query || r.page)}</b><span class="u-muted">${esc(r.fact)}</span>${seoHistBtn(r.query ? "query" : "page", r.query || r.page)}</div>`
           + `<div class="seo-rec-a">${esc(r.action)}</div></div>`).join("")
       : `<span class="u-muted">Nothing to act on yet — there are too few searches to judge.</span>`)
     + `</div></div>`;
@@ -763,7 +763,7 @@ function seoQueriesHtml(m) {
       + `<li>Give Daniel the JSON — he adds it as the GSC_SERVICE_ACCOUNT secret.</li>`
       + `</ol></div>`;
   }
-  return `<div class="panel seo-queries"><h3>Search queries <span class="seo-count">${seoFmtInt(m.queries.length)}</span></h3>`
+  return `<div class="panel seo-queries"><h3>Search queries <span class="u-muted">${seoFmtInt(m.queries.length)}</span></h3>`
     + `<input type="search" id="seo-qfilter" class="seo-qfilter" placeholder="Filter queries" aria-label="Filter queries" value="${esc(seoView.filter)}">`
     + `<div id="seo-qwrap">${seoQueriesBodyHtml(m)}</div></div>`;
 }
@@ -793,7 +793,7 @@ function seoQueriesBodyHtml(m) {
           + `<td data-lbl="Page" class="seo-qpage" title="${esc(pages.map((p) => p.page).join("\n"))}">${pg}</td></tr>`;
       }).join("")
     + `</table></div>`
-    + (qs.length > shown.length ? `<button type="button" class="btn btn-sm seo-qall" id="seo-qall">Show all ${seoFmtInt(qs.length)}</button>` : "");
+    + (qs.length > shown.length ? `<button type="button" class="btn btn-sm u-mt-10" id="seo-qall">Show all ${seoFmtInt(qs.length)}</button>` : "");
 }
 function seoPaint(root, res) {
   if (!res.day || !res.rows.length) {
