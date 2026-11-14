@@ -164,7 +164,9 @@ const shiftMv = (mv, n) => {
         kpis.includes(wantChip), JSON.stringify({ wantChip, got: kpis.slice(0, 160) }));
       const chipCount = await page.evaluate(() =>
         [...document.querySelectorAll("#month-kpis .kpi")].map((k) => k.querySelectorAll(".kpi-delta .delta").length));
-      ok("S8 · every KPI tile carries exactly two chips (MoM · YoY)", chipCount.length === 4 && chipCount.every((n) => n === 2), JSON.stringify(chipCount));
+      /* R103 · O1: three tiles now — "Completed £" is the hero's figure, and its two chips moved there with it. */
+      const heroChips = await page.evaluate(() => document.querySelectorAll("#report-hero .kpi-delta .delta").length);
+      ok("S8 · every KPI tile carries exactly two chips (MoM · YoY), and so does the hero", chipCount.length === 3 && chipCount.every((n) => n === 2) && heroChips === 2, JSON.stringify({ chipCount, heroChips }));
 
       /* "No data" vs "a fall to zero" — the property this block is really about.
          R8 — the three months these chips are read in used to be hardcoded to (this month − 12)
@@ -183,7 +185,7 @@ const shiftMv = (mv, n) => {
       const months = [];
       for (let back = 0; back <= 30; back++) months.push(shiftMv(fx.thisMv, -back));
       const chipsNow = (p) => p.evaluate(() =>
-        [...document.querySelectorAll("#month-kpis .kpi")].map((k) => [...k.querySelectorAll(".kpi-delta .delta")]
+        [...document.querySelectorAll("#month-kpis .kpi, #report-hero")].map((k) => [...k.querySelectorAll(".kpi-delta .delta")]   // R103: the hero carries the Completed £ pair
           .map((d) => ({ cls: d.className, text: d.textContent.trim() }))));
 
       const completionsIn = (mv) => fx.cases.filter((c) => inM(c.completed_at, mv)).length;
@@ -303,8 +305,8 @@ const shiftMv = (mv, n) => {
         "(all-time · earned · completed cases)",      // introducer Revenue column
       ];
       strings.forEach((s) => ok(`R5-17 · label present: "${s}"`, pageText.includes(s)));
-      ok("R5-17 · '(earned · all fee types)' labels BOTH earned tiles",
-        (pageText.match(/\(earned · all fee types\)/g) || []).length === 2,
+      ok("R5-17 · (R103) '(earned · all fee types)' labels the one earned tile left — Submitted £",
+        (pageText.match(/\(earned · all fee types\)/g) || []).length === 1,
         String((pageText.match(/\(earned · all fee types\)/g) || []).length));
       const legend = await domText(page, "#report-basis-legend");   // R74: behind "How these are counted" now
       ok("R5-17 · one legend links the three bases",
@@ -330,7 +332,9 @@ const shiftMv = (mv, n) => {
       const wantDone = sum(fx.cases.filter((c) => inM(c.completed_at, fx.thisMv)));
       const kpiNums = await page.evaluate(() => [...document.querySelectorAll("#month-kpis .kpi .num")].map((n) => n.textContent.trim()));
       eq("R5-17 · Submitted £ unchanged by the labelling", kpiNums[1], money(wantSub));
-      eq("R5-17 · Completed £ unchanged by the labelling", kpiNums[3], money(wantDone));
+      const heroNum = await page.evaluate(() => (document.querySelector("#report-hero .rep-hero-num") || {}).textContent || "");
+      eq("R5-17 · (R103) Completed £ — the hero's figure now — unchanged by the labelling", heroNum.replace(/ earned$/, ""), money(wantDone));
+      ok("R103 · O2 · the basis is a tooltip, not a visible caption", await page.evaluate(() => { const i = document.querySelector("#month-kpis .kpi-i"); return !!i && /earned/.test(i.title) && !document.querySelector("#month-kpis .kpi > div.s"); }));
       eq("R5-17 · no console errors", page.__err || [], []);
       await page.close();
     }
