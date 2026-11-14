@@ -3997,8 +3997,10 @@ async function loadTeam(session) {
     briefingScope = "all"; protScope = "all";
     ["#brief-scope-mine", "#prot-scope-mine"].forEach((s) => $(s).classList.remove("scope-active"));
     ["#brief-scope-all", "#prot-scope-all"].forEach((s) => $(s).classList.add("scope-active"));
-  } else if (isAdminOrOwner()) {
-    /* R12b · W-7: WHOSE DAY THIS SCREEN OPENS ON, decided by the job the reader actually does. The Today strip now
+  } else if (isAdminOrOwner() && (!isOwner() || window.__NEX_TODAY_SCOPE === "all")) {   // the harness seam: mock-supabase.js sets it so the suites keep the firm-wide fixture view
+    /* R102 · T3 (Daniel, 14 Nov 2026): the OWNER's Today opens on Mine too — he advises, and his own day is the
+       thing to see first; All is one press away. An Administrator still opens on All: the firm-wide desk is the job.
+       R12b · W-7: WHOSE DAY THIS SCREEN OPENS ON, decided by the job the reader actually does. The Today strip now
        follows this same Mine/All toggle (see loadDashboard), and an adviser opening the app to "33 active cases"
        when twelve of them are his was the defect: his home screen described somebody else's week. Both buttons are
        still there, both still work, and nothing is remembered between sessions (no store — the round-5 rule about
@@ -9664,7 +9666,8 @@ function renderBriefing() {
          lead_new's priority (12) sorts it after a run of overdue tasks… */
       const shown = [], folded = [];
       b.rows.forEach((r) => {
-        if (r.head.kind === "lead_new" || shown.length < BRIEF_BAND_CAP) shown.push(r); else folded.push(r);
+        /* R102 · T3: "Worth doing" opens folded — overdue and today are the first screen; the backlog is one press away. */
+        if (r.head.kind === "lead_new" || (b.key !== "rest" && shown.length < BRIEF_BAND_CAP)) shown.push(r); else folded.push(r);
       });
       unfoldedRows += shown.length;
       /* R87 · today (T1 / 02 #1): the band's sub-caption is no longer printed on the header; the rows under

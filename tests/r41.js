@@ -280,7 +280,7 @@ const readRow = (page, table, id) => page.evaluate(async ({ table, id }) => {
          are Worth doing rows inside #briefing-panel. #watchtower-panel (now the Checks <details>)
          keeps its place directly under My Day. */
       eq("§A2b · #page-dashboard's own child order is the locked one",
-        order, ["dash-notices", "whatsnew-band", "locale-note-host", "ops-strip", "today-heading", "kpi-row", "dash-cap-notice", "briefing-panel", "watchtower-panel", "grid-2:rate-erc-panel,revenue-panel"]);
+        order, ["dash-notices", "whatsnew-band", "locale-note-host", "today-heading", "briefing-panel", "kpi-row", "dash-cap-notice", "ops-strip", "watchtower-panel", "grid-2:rate-erc-panel,revenue-panel"]);   // R102 · T1: My Day leads
 
       ok("§A2 · no console errors", noNewErr(page, errBefore), JSON.stringify(page.__err));
       await page.close();
