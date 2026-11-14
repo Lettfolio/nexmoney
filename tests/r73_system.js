@@ -474,7 +474,7 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
       const page = await boot(browser, "p4");
 
       /* C1 — the inventory. Every VISIBLE .btn on every page, tallied by type
-         size. The contract is three sizes: 13.5 / 12.5 / 11.5. `.btn-block`
+         size. The contract is three sizes: 13.5 / 12.5 / 12 (R101 raised the small rung from 11.5: nothing under 12px). `.btn-block`
          (the login/full-width variant, 14px) is excluded by name because it is
          a width, not a rung — it never appears beside the other three. */
       const sizes = {};
@@ -487,7 +487,7 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
             if (b.offsetParent === null) return;
             const f = getComputedStyle(b).fontSize;
             out[f] = (out[f] || 0) + 1;
-            if (!["13.5px", "12.5px", "11.5px"].includes(f)) {
+            if (!["13.5px", "12.5px", "12px"].includes(f)) {
               const k = f + " " + (b.className || "").slice(0, 60);
               bad[k] = (bad[k] || 0) + 1;
             }
@@ -499,8 +499,8 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
       }
       console.log("    button size inventory: " + JSON.stringify(sizes));
       eq("C1 · three button sizes across all thirteen pages, and no more", Object.keys(offenders), []);
-      ok("C2 · all three rungs are actually in use (13.5 / 12.5 / 11.5)",
-        sizes["13.5px"] > 0 && sizes["12.5px"] > 0 && sizes["11.5px"] > 0, JSON.stringify(sizes));
+      ok("C2 · all three rungs are actually in use (13.5 / 12.5 / 12)",
+        sizes["13.5px"] > 0 && sizes["12.5px"] > 0 && sizes["12px"] > 0, JSON.stringify(sizes));
 
       /* C3 — navy fill no longer means "selected filter". The class name
          .scope-active is KEPT on purpose (twenty JS call sites and several

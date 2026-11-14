@@ -20247,7 +20247,7 @@ function auditChangesHtml(entry) {
   return `<table class="audit-changes">${rows}</table>`;
 }
 function auditEntryHtml(r) {
-  const when = r.happened_at ? new Date(r.happened_at).toLocaleString("en-GB") : "";
+  const when = r.happened_at ? fmtDT(r.happened_at) : "";
   return `<details class="audit-entry" data-table="${esc(r.table_name)}" data-action="${esc(r.action)}">
       <summary><span class="audit-act audit-${esc(r.action)}">${esc(r.action)}</span><span class="audit-sum">${esc(r.summary || "")}</span>${authorChipHtml(r.actor)}<span class="audit-when">${esc(when)}</span></summary>
       ${auditChangesHtml(r)}
@@ -20349,7 +20349,7 @@ function chSummaryText(r) {
   return chPlainSummary(who && s.indexOf(who + " ") === 0 ? s.slice(who.length + 1) : s);
 }
 function chEntryHtml(r) {
-  const when = r.happened_at ? new Date(r.happened_at).toLocaleString("en-GB") : "";
+  const when = r.happened_at ? fmtDT(r.happened_at) : "";
   return `<details class="audit-entry" data-table="${esc(r.table_name)}" data-action="${esc(r.action)}">
       <summary><span class="audit-act audit-${esc(r.action)}" title="${esc(r.action)}">${esc(chActionWord(r.action))}</span><span class="audit-tbl">${esc(auditTableLabel(r.table_name))}</span><span class="audit-sum">${esc(chSummaryText(r))}</span><span class="audit-who">${esc(r.actor_label || actorName(r.actor))}</span><span class="audit-when">${esc(when)}</span></summary>
       ${auditChangesHtml(r)}
@@ -21908,7 +21908,7 @@ async function loadEmails() {
       ${emQ.cb(e)}
       <div class="row-main">
         <div class="t${titleClick ? " u-pointer" : ""}"${titleClick}>${esc(emailTypeLabel(e.email_type))} — ${esc(whoTxt)}${leadRow ? ` <span class="badge grey lead-email-chip" title="This is a website enquiry, not a client — there is no case behind it yet.">enquiry</span>` : ""} ${propCtxChip(emailCtx, e.case_id, "row-prop")}</div>
-        <div class="s">${esc(e.to_email || (noContact ? "no address on file" : ""))} · ${e.sent_at ? "sent " + new Date(e.sent_at).toLocaleString("en-GB") : "created " + new Date(e.created_at).toLocaleString("en-GB")}${errLine}${staleAddr ? ` · now <strong>${esc(curEmail)}</strong>` : ""}${emDeferred ? ` · <strong>deferred to ${fmtD(e.scheduled_for)}</strong> — the 8am run leaves it until then` : ""}</div>
+        <div class="s">${esc(e.to_email || (noContact ? "no address on file" : ""))} · ${e.sent_at ? "sent " + fmtDT(e.sent_at) : "created " + fmtDT(e.created_at)}${errLine}${staleAddr ? ` · now <strong>${esc(curEmail)}</strong>` : ""}${emDeferred ? ` · <strong>deferred to ${fmtD(e.scheduled_for)}</strong> — the 8am run leaves it until then` : ""}</div>
         
         ${QUEUE_SELECTABLE.includes(e.status) ? emailPreviewFoldHtml(e, emPreviewCtx(e)) : ""}
       </div>
@@ -21958,7 +21958,7 @@ async function loadEmails() {
       ${smsQ.cb(s)}
       <div class="row-main">
         <div class="t${clickable ? " u-pointer" : ""}"${clickable ? " " + actAttr("openCase", s.case_id) : ""}>${esc(smsTypeLabel(s.sms_type))} — ${esc(s.clients ? [s.clients.first_name, s.clients.last_name].filter(Boolean).join(" ") : s.to_phone || "")} ${propCtxChip(smsCtx, s.case_id, "row-prop")}</div>
-        <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + new Date(s.sent_at).toLocaleString("en-GB") : "created " + new Date(s.created_at).toLocaleString("en-GB")}${errLine}</div>
+        <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + fmtDT(s.sent_at) : "created " + fmtDT(s.created_at)}${errLine}</div>
       </div>
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
       ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" ${actAttr("fixContactOpen", "sms", s.id, s.client_id, s.to_phone)} title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
@@ -26369,6 +26369,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r100";   // R89
+window.__nxTag_app = "r101";   // R89
 
 init();

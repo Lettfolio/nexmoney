@@ -203,6 +203,12 @@ function debounce(fn, wait) {
    differently on two machines with different ICU versions. Eleven strings is a
    cheaper guarantee than a locale negotiation. */
 const FMT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/* R101: one date-and-time style site-wide — "12 Nov 2026, 11:10", no seconds. */
+const fmtDT = (d) => {
+  const t = new Date(d);
+  if (!d || isNaN(t.getTime())) return "—";
+  return `${t.getDate()} ${FMT_MONTHS[t.getMonth()]} ${t.getFullYear()}, ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+};
 const fmtD = (d) => {
   if (!d) return "—";
   if (typeof d === "string" && !/^\d{4}-\d{2}-\d{2}/.test(d)) return esc(d);
@@ -365,4 +371,4 @@ async function readAll(q, opts) {
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_core = "r100";   // R89
+window.__nxTag_core = "r101";   // R89
