@@ -156,7 +156,7 @@ const recount = (page, who) => page.evaluate(async (who) => {
     ok("A1 · #client-tools is a .list-tools row", !!tools && /\blist-tools\b/.test(tools.cls), JSON.stringify(tools));
     ok("A2 · …holding the search box #client-search", tools && tools.search);
     eq("A3 · …the Mine|All scope (#cl-scope-mine / #cl-scope-all), All pressed for the owner", tools && tools.scope, [["cl-scope-mine", "mine", "false"], ["cl-scope-all", "all", "true"]]);
-    ok("A4 · …and the sort <select id=cl-sort> with its three orders", tools && tools.sort && JSON.stringify(tools.sortOpts) === JSON.stringify(["name", "rate_end", "recent"]), JSON.stringify(tools && tools.sortOpts));
+    ok("A4 · …and the sort <select id=cl-sort> with its four orders (R102 · B2)", tools && tools.sort && JSON.stringify(tools.sortOpts) === JSON.stringify(["touched", "name", "rate_end", "recent"]), JSON.stringify(tools && tools.sortOpts));
     ok("A5 · the three controls share ONE line at 1440", tools && tools.tops === 1, JSON.stringify(tools && tools.tops));
     eq("A6 · the saved-views trio, the adviser row and both note lines are gone", tools && tools.gone.concat(tools.oldRow ? ["client-controls"] : []), []);
     ok("A7 · #client-adviser survives as a HIDDEN compat select carrying the scope (\"all\")", tools && tools.compatHidden === true && tools.compatVal === "all", JSON.stringify(tools));

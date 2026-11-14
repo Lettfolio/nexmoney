@@ -7,6 +7,10 @@
    Personas (?as=…): p1 Kim Martin (admin, DEFAULT) · p2 Wayne Kellow (adviser) · p3 Luke Richards
    (adviser) · p4 Daniel Potts (owner) · p5 Rachel Foyle (introducer — fails the staff login gate)
    ========================================================================== */
+/* R102 · T3 / B2 — in the app the owner's Today opens on Mine and Clients opens on "Recently touched". The
+   suites were written against the firm-wide list and the A–Z book, so the harness keeps those two starting
+   points unless a test says ?scope=default (the tests OF the defaults do). */
+if (!/[?&]scope=default\b/.test(location.search)) window.__NEX_TODAY_SCOPE = "all";
 (function () {
   "use strict";
 

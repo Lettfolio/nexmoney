@@ -644,7 +644,7 @@ function segmentChipsHtml(o) {
     const on = !!c.active;
     const n = c.count == null ? "" : ` <span class="seg-count">${esc(c.count)}</span>`;
     return `<button type="button" class="seg-btn${on ? " active" : ""}${c.cls ? " " + esc(c.cls) : ""}"${kitAttr("id", c.id)} data-seg="${esc(c.key)}" aria-pressed="${on}"${kitAttr("title", c.title)}${kitDataAttrs(c.attrs)}>${esc(c.label == null ? c.key : c.label)}${n}</button>`;
-  }).join("") + `</div>`;
+  }).join("") + (o.tailHtml || "") + `</div>`;
 }
 /* Pressing a chip flips aria-pressed / .active inside ITS strip at once; the page's own data-seg
    handler then re-renders. One delegated listener for every strip on every page. */
@@ -3997,8 +3997,10 @@ async function loadTeam(session) {
     briefingScope = "all"; protScope = "all";
     ["#brief-scope-mine", "#prot-scope-mine"].forEach((s) => $(s).classList.remove("scope-active"));
     ["#brief-scope-all", "#prot-scope-all"].forEach((s) => $(s).classList.add("scope-active"));
-  } else if (isAdminOrOwner()) {
-    /* R12b · W-7: WHOSE DAY THIS SCREEN OPENS ON, decided by the job the reader actually does. The Today strip now
+  } else if (isAdminOrOwner() && (!isOwner() || window.__NEX_TODAY_SCOPE === "all")) {   // the harness seam: mock-supabase.js sets it so the suites keep the firm-wide fixture view
+    /* R102 · T3 (Daniel, 14 Nov 2026): the OWNER's Today opens on Mine too — he advises, and his own day is the
+       thing to see first; All is one press away. An Administrator still opens on All: the firm-wide desk is the job.
+       R12b · W-7: WHOSE DAY THIS SCREEN OPENS ON, decided by the job the reader actually does. The Today strip now
        follows this same Mine/All toggle (see loadDashboard), and an adviser opening the app to "33 active cases"
        when twelve of them are his was the defect: his home screen described somebody else's week. Both buttons are
        still there, both still work, and nothing is remembered between sessions (no store — the round-5 rule about
@@ -7649,7 +7651,7 @@ async function renderRateErcDrawer(isStale) {   // R83
   const rateSub = $("#rate-erc-sub");
   if (rateSub) {
     rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.alertsFirmWide} alerts firm-wide.`}`   // R83 — counted once in rateBookSelect
+      + (rateScope === "all" ? "" : `Showing ${rateScopeWord(rateScope)} — ${rateFeed.alertsFirmWide} alerts firm-wide.`)   // R102 · B7: the firm-wide view no longer says it is firm-wide   // R83 — counted once in rateBookSelect
       /* R61 — the money-line basis, once for the drawer (the rows no longer repeat it). */
       + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy." : "");
   }
@@ -8196,8 +8198,8 @@ async function loadRetentionRates(scope) {
     const lead = outFiltered
       ? `Rates that ended in the last 12 months recorded as “${RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter}”, on ${whose}.`
       : monthKey === "all"
-        ? `Showing ${whose}: the whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`
-        : `${retMonthWindowCopy(monthKey, todayIdx)} Showing ${whose}.`;
+        ? `${scope === "all" ? "The" : `Showing ${whose}: the`} whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`   // R102 · B7 (Daniel): on All the pressed toggle says whose; the sentence does not repeat it
+        : `${retMonthWindowCopy(monthKey, todayIdx)}${scope === "all" ? "" : ` Showing ${whose}.`}`;
     sub.innerHTML = esc(lead)
       + (tally.money && tally.counts && tally.counts.none ? ` <span class="ret-outcome-atrisk" id="ret-outcome-atrisk" title="${esc(`The loan on each of the ${tally.atRiskRows} case${tally.atRiskRows === 1 ? "" : "s"} with no outcome recorded, added up.` + (tally.atRiskUnpriced ? ` ${tally.atRiskUnpriced} of them carry no loan amount and contribute nothing to this total.` : "") + " It is the borrowing this firm no longer knows the fate of, not a fee forecast.")}"><strong>${fmtM(tally.atRisk)}</strong> at risk</span>` : "");
   }
@@ -8327,7 +8329,7 @@ async function loadRetentionPipelinePanel(scope) {
   const rows = (data || []).filter((c) => !mine || c.assigned_to === ME.id);
   const st = retentionPipelineStats(rows);
   const stats = $("#ret-pipeline-stats");
-  if (stats) stats.textContent = retentionStatsLine(st) + ` Showing ${rateScopeWord(scope)}.`;
+  if (stats) stats.textContent = retentionStatsLine(st) + (scope === "all" ? "" : ` Showing ${rateScopeWord(scope)}.`);
   const how = $("#ret-pipeline-how");
   if (how) how.innerHTML = howFold({ id: "ret-pipeline-how-fold", title: "Where these come from", html: `<p id="ret-pipeline-basis">${esc(RETENTION_PIPELINE_HOW)} Open, won and lost are counted over ${esc(rateScopeWord(scope))}.</p>` });
   $("#ret-pipeline-list").innerHTML = st.open.length
@@ -8379,7 +8381,7 @@ function renderRetColdList(data, sorted, scope, seq) {
     return t + (d && d >= todayStr && d <= coldRateEdge && x.loan_amount ? Number(x.loan_amount) : 0);
   }, 0), 0);
   const coldFull = clientColdDefinition(clientContactCutoff())
-    + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`
+    + (scope === "mine" ? " Showing clients with at least one case assigned to you." : "")
     + (silent ? ` ${silent === sorted.length ? "Every client here has" : `${silent} of these have`} no contact of any kind on record in the last ${clientCommsWindowDays()} days — the rows say so only where there IS a last contact to name.` : "")
     + (coldNoEmail.length ? ` ${coldNoEmail.length === 1 ? "One of these clients has" : `${coldNoEmail.length} of these clients have`} no email on file, so every automated chase skips them — the call is the only chase there is${showMoney() && coldNoEmailLoan ? ` (${fmtM(coldNoEmailLoan)} of maturing lending rides on it — the loan on their completed cases maturing inside the reminder window, not a fee forecast; Data health's missing-email list is where the address gets fixed)` : ""}.` : "")
     + " Ordered by the next rate end, soonest first: that is the deadline, and it is what makes one of these calls worth making today.";
@@ -8819,9 +8821,8 @@ async function loadProtection() {
   const protCtx = await loadPropContext((opps || []).map((c) => c.id), { clientIds: (opps || []).map((c) => c.client_id) });
   /* R82 · A6 — say whose list this is, the way the Fees tab says what its own list is narrowed to.
      A count with no scope on it is the thing that made this panel readable as the firm's book. */
-  const protTabCaption = `<div class="panel-sub u-m-0-0-8" id="protection-scope-note">${
-    mine ? "Showing <strong>your cases only</strong> — My Day's Mine/All toggle above decides this."
-      : "Showing <strong>every adviser's cases</strong> — My Day's Mine/All toggle above decides this."}</div>`;
+  const protTabCaption = mine   // R102 · B7: said only when the list is narrowed — on All the toggle is the statement
+    ? `<div class="panel-sub u-m-0-0-8" id="protection-scope-note">Showing <strong>your cases only</strong> — My Day's Mine/All toggle above decides this.</div>` : "";
   $("#protection-list").innerHTML = protTabCaption + ((opps || []).length ? opps.map((c) => `
     <div class="row-item">
       <div class="row-main">
@@ -9664,7 +9665,8 @@ function renderBriefing() {
          lead_new's priority (12) sorts it after a run of overdue tasks… */
       const shown = [], folded = [];
       b.rows.forEach((r) => {
-        if (r.head.kind === "lead_new" || shown.length < BRIEF_BAND_CAP) shown.push(r); else folded.push(r);
+        /* R102 · T3: "Worth doing" opens folded — overdue and today are the first screen; the backlog is one press away. */
+        if (r.head.kind === "lead_new" || (b.key !== "rest" && shown.length < BRIEF_BAND_CAP)) shown.push(r); else folded.push(r);
       });
       unfoldedRows += shown.length;
       /* R87 · today (T1 / 02 #1): the band's sub-caption is no longer printed on the header; the rows under
@@ -19292,7 +19294,13 @@ function clientTextMatch(c, f, fPhone, phoneSearch) {
 }
 /* R11-6: SORTING THE CLIENT LIST, AND THE ROW DETAIL THAT MAKES A SORT READABLE. Alphabetical answers "where is Mrs
    Okafor" and nothing else. … */
-let clientSort = "name";
+/* R102 · B2 (Daniel, 14 Nov 2026): the list opens on the clients somebody has just worked on, not on the As.
+   "Touched" = the latest change to the client record or to any of their cases. (The harness keeps A–Z: see mock-supabase.js.) */
+let clientSort = window.__NEX_TODAY_SCOPE === "all" ? "name" : "touched";
+let clientSegMore = window.__NEX_TODAY_SCOPE === "all";   // R102 · B1 — "More filters" open? (the harness starts open, as the suites expect all eight)
+function clientTouchedAt(c) {
+  return (c.cases || []).reduce((m, x) => { const u = String((x && x.updated_at) || ""); return u > m ? u : m; }, String(c.updated_at || c.created_at || ""));
+}
 /* The earliest rate end on any of this client's cases that has not already passed. Past rate ends are
    deliberately not counted: "next" means next… */
 function clientNextRateEnd(c, todayStr) {
@@ -19338,6 +19346,10 @@ function clientRateKey(c, rateYear, todayStr) {
   return rateYear ? clientRateEndInYear(c, rateYear) : clientNextRateEnd(c, todayStr);
 }
 function sortClientList(list, sort, todayStr, rateYear) {
+  if (sort === "touched") {
+    const nm = (c) => `${c.last_name || ""} ${c.first_name || ""}`.toLowerCase();
+    return list.slice().sort((a, b) => clientTouchedAt(b).localeCompare(clientTouchedAt(a)) || nm(a).localeCompare(nm(b)));
+  }
   if (sort === "recent") {
     // clients.created_at — when the record was added here, not when they became a client of the
     // firm. Said on the control, because those are not the same date for an imported book.
@@ -19553,9 +19565,14 @@ function renderClientSegments(searched, ctx, segs, cutoff) {
   const slot = $("#client-segment-slot");
   if (!slot) return;
   const coldDef = clientColdDefinition(cutoff);
+  /* R102 · B1 (Daniel, 14 Nov 2026): four chips on show — All, No live case, No protection outcome, Not
+     contacted — and the rate-end years and Missing DOB behind "More filters". A folded chip that is the one
+     pressed stays visible. */
+  const folded = (k) => /^rate_|^no_dob$/.test(k) && !clientSegMore && clientSegment !== k;
   slot.innerHTML = segmentChipsHtml({
     id: "client-segment", ariaLabel: "Client segment",
-    chips: segs.map(([k, l, d]) => ({ key: k, label: l, count: searched.filter((c) => clientInSegment(c, k, ctx)).length, active: clientSegment === k, title: k === "cold" ? coldDef : d })),
+    chips: segs.map(([k, l, d]) => ({ key: k, label: l, count: searched.filter((c) => clientInSegment(c, k, ctx)).length, active: clientSegment === k, title: k === "cold" ? coldDef : d, attrs: { hidden: folded(k) } })),
+    tailHtml: `<button type="button" class="btn btn-sm btn-ghost" id="client-seg-more" aria-expanded="${clientSegMore}">${clientSegMore ? "Fewer filters" : "More filters"}</button>`,
   });
   const def = $("#client-seg-def");
   if (def) {
@@ -19655,7 +19672,7 @@ function syncClientBulk(list) {
     scope: { id: "cl-scope", value: "all", options: ["mine", "all"], ariaLabel: "Whose clients",
       titles: { mine: "Clients with at least one case assigned to you — remembered for next time", all: "Every client on the book — remembered for next time" } },
     sort: { id: "cl-sort", value: clientSort, ariaLabel: "Sort the client list",
-      options: [{ value: "name", label: "Name A–Z" }, { value: "rate_end", label: "Next rate end" }, { value: "recent", label: "Recently added" }] },
+      options: [{ value: "touched", label: "Recently touched" }, { value: "name", label: "Name A–Z" }, { value: "rate_end", label: "Next rate end" }, { value: "recent", label: "Recently added" }] },
     extra: `<button type="button" class="btn btn-sm list-scope-other hidden" id="cl-scope-other"></button>`,
   });
   const tools = $("#client-tools");
@@ -19673,6 +19690,11 @@ function syncClientBulk(list) {
     const b = e.target.closest(".seg-btn");
     if (!b || !b.dataset.seg || b.dataset.seg === clientSegment) return;
     clientSegment = b.dataset.seg;
+    loadClients($("#client-search").value);
+  });
+  if (segSlot) segSlot.addEventListener("click", (e) => {
+    if (!e.target.closest("#client-seg-more")) return;
+    clientSegMore = !clientSegMore;
     loadClients($("#client-search").value);
   });
 })();
@@ -26416,6 +26438,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r101";   // R89
+window.__nxTag_app = "r102";   // R89
 
 init();

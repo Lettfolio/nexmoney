@@ -349,6 +349,8 @@ const openDrawer = async (page, panelId) => {
       await page.click('#topnav button[data-page="dashboard"]');
       await page.waitForTimeout(SETTLE + 500);
       const restored = await page.evaluate(() => {
+        /* R102 · T3 — fee chases are "Worth doing" rows, and that band opens folded now: unfold it to read them. */
+        document.querySelectorAll("#briefing-list details.brief-fold").forEach((d) => { d.open = true; });
         const allRows = [...document.querySelectorAll("#briefing-list .brief-row")];
         const rows = allRows.filter((r) => /\bFEE\b/.test(r.innerText));
         // groupBriefRows folds a case's other items behind a "+N more …: <kind> · <kind>" summary
@@ -370,6 +372,8 @@ const openDrawer = async (page, panelId) => {
 
       const owner = await newPage(browser, "p4");
       const ownerState = await owner.evaluate(() => {
+        /* R102 · T3 — fee chases are "Worth doing" rows, and that band opens folded now: unfold it to read them. */
+        document.querySelectorAll("#briefing-list details.brief-fold").forEach((d) => { d.open = true; });
         const rows = [...document.querySelectorAll("#briefing-list .brief-row")].filter((r) => /\bFEE\b/.test(r.innerText));
         return { rows: rows.length, links: rows.filter((r) => /Open Settings/.test(r.innerText)).length };
       });

@@ -170,26 +170,7 @@
            Intl's resolved locale is not en-GB. Sits with the notices, above the pinned
            #today-heading → #kpi-row → #briefing-panel adjacency (r11_ux). -->
       <div id="locale-note-host"></div>
-      <!-- R68 · M16 — ADMIN OPS STRIP. The half-dozen numbers that say whether the machinery
-           behind the book is keeping up — queued mail, leads nobody has picked up, cases nobody
-           owns, documents that have run out of chases, sends that failed. Each already exists on
-           some other page; none of them was ever in one place, so "is anything stuck this
-           morning" took five page loads to answer.
-           It sits HERE, above the heading with the health banners, and not between the heading
-           and the KPI row, because R11-1 put the five headline figures immediately after the
-           title and tests/r11_ux.js locks that adjacency: #today-heading → #kpi-row →
-           #briefing-panel. This is system health, which is exactly what lives above the title.
-           Admin and Owner only (renderOpsStrip); an adviser never sees it. -->
-      <div id="ops-strip" class="ops-strip hidden"></div>
       <h2 id="today-heading">Today</h2>
-      <!-- R11-1 — THE NUMBERS COME FIRST. This row used to sit BELOW the Watchtower panel, which
-           on a real book put the five headline figures roughly 1,500px down the page: on a phone
-           nobody ever reached them, and on a laptop the first thing the screen said was "here are
-           23 problems" rather than "here is where the firm is". A dashboard's summary belongs
-           above its worklists. Nothing about the tiles themselves changed — same markup, same
-           click-throughs, same money gate on the fees tile; only their position in the page. -->
-      <div class="kpi-row" id="kpi-row"></div>
-      <p class="dq-notice hidden" id="dash-cap-notice"></p>
       <div class="panel" id="briefing-panel">
         <h3>☀️ My Day
           <!-- R87 · today (T1) — the date is a quiet span in the heading, not a 32px line under
@@ -250,6 +231,13 @@
              panel's). Its cases are rows in the Worth doing band above; hidden unless a read bit. -->
         <p class="panel-sub unactioned-cap hidden" id="unactioned-cap-notice"></p>
       </div>
+      <!-- R102 · T1 — WORK FIRST. The headline tiles (R11-1) and the admin ops strip (R68 · M16) used to
+           sit above My Day, which left three task rows on a laptop's first screen. Daniel's decision
+           (14 Nov 2026, UI/UX review): My Day leads; the firm's numbers and the machinery's health follow
+           it. Same elements, same ids, same click-throughs; only their place in the page. -->
+      <div class="kpi-row" id="kpi-row"></div>
+      <p class="dq-notice hidden" id="dash-cap-notice"></p>
+      <div id="ops-strip" class="ops-strip hidden"></div>
       <!-- R88 · A — ONE WORKLIST. The Watchtower's alerts are My Day rows now (CRITICAL →
            Urgent, WARNING → Today, FYI → Worth doing, one row per case), and the No-next-action
            radar's cases are Worth doing rows with one verb, "Add next step" — its panel is gone.
