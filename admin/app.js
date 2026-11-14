@@ -7651,7 +7651,7 @@ async function renderRateErcDrawer(isStale) {   // R83
   const rateSub = $("#rate-erc-sub");
   if (rateSub) {
     rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
-      + `Showing ${rateScopeWord(rateScope)}${rateScope === "all" ? "" : ` — ${rateFeed.alertsFirmWide} alerts firm-wide.`}`   // R83 — counted once in rateBookSelect
+      + (rateScope === "all" ? "" : `Showing ${rateScopeWord(rateScope)} — ${rateFeed.alertsFirmWide} alerts firm-wide.`)   // R102 · B7: the firm-wide view no longer says it is firm-wide   // R83 — counted once in rateBookSelect
       /* R61 — the money-line basis, once for the drawer (the rows no longer repeat it). */
       + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy." : "");
   }
@@ -8198,8 +8198,8 @@ async function loadRetentionRates(scope) {
     const lead = outFiltered
       ? `Rates that ended in the last 12 months recorded as “${RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter}”, on ${whose}.`
       : monthKey === "all"
-        ? `Showing ${whose}: the whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`
-        : `${retMonthWindowCopy(monthKey, todayIdx)} Showing ${whose}.`;
+        ? `${scope === "all" ? "The" : `Showing ${whose}: the`} whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`   // R102 · B7 (Daniel): on All the pressed toggle says whose; the sentence does not repeat it
+        : `${retMonthWindowCopy(monthKey, todayIdx)}${scope === "all" ? "" : ` Showing ${whose}.`}`;
     sub.innerHTML = esc(lead)
       + (tally.money && tally.counts && tally.counts.none ? ` <span class="ret-outcome-atrisk" id="ret-outcome-atrisk" title="${esc(`The loan on each of the ${tally.atRiskRows} case${tally.atRiskRows === 1 ? "" : "s"} with no outcome recorded, added up.` + (tally.atRiskUnpriced ? ` ${tally.atRiskUnpriced} of them carry no loan amount and contribute nothing to this total.` : "") + " It is the borrowing this firm no longer knows the fate of, not a fee forecast.")}"><strong>${fmtM(tally.atRisk)}</strong> at risk</span>` : "");
   }
@@ -8329,7 +8329,7 @@ async function loadRetentionPipelinePanel(scope) {
   const rows = (data || []).filter((c) => !mine || c.assigned_to === ME.id);
   const st = retentionPipelineStats(rows);
   const stats = $("#ret-pipeline-stats");
-  if (stats) stats.textContent = retentionStatsLine(st) + ` Showing ${rateScopeWord(scope)}.`;
+  if (stats) stats.textContent = retentionStatsLine(st) + (scope === "all" ? "" : ` Showing ${rateScopeWord(scope)}.`);
   const how = $("#ret-pipeline-how");
   if (how) how.innerHTML = howFold({ id: "ret-pipeline-how-fold", title: "Where these come from", html: `<p id="ret-pipeline-basis">${esc(RETENTION_PIPELINE_HOW)} Open, won and lost are counted over ${esc(rateScopeWord(scope))}.</p>` });
   $("#ret-pipeline-list").innerHTML = st.open.length
@@ -8381,7 +8381,7 @@ function renderRetColdList(data, sorted, scope, seq) {
     return t + (d && d >= todayStr && d <= coldRateEdge && x.loan_amount ? Number(x.loan_amount) : 0);
   }, 0), 0);
   const coldFull = clientColdDefinition(clientContactCutoff())
-    + ` Showing ${scope === "mine" ? "clients with at least one case assigned to you" : "every adviser's clients"}.`
+    + (scope === "mine" ? " Showing clients with at least one case assigned to you." : "")
     + (silent ? ` ${silent === sorted.length ? "Every client here has" : `${silent} of these have`} no contact of any kind on record in the last ${clientCommsWindowDays()} days — the rows say so only where there IS a last contact to name.` : "")
     + (coldNoEmail.length ? ` ${coldNoEmail.length === 1 ? "One of these clients has" : `${coldNoEmail.length} of these clients have`} no email on file, so every automated chase skips them — the call is the only chase there is${showMoney() && coldNoEmailLoan ? ` (${fmtM(coldNoEmailLoan)} of maturing lending rides on it — the loan on their completed cases maturing inside the reminder window, not a fee forecast; Data health's missing-email list is where the address gets fixed)` : ""}.` : "")
     + " Ordered by the next rate end, soonest first: that is the deadline, and it is what makes one of these calls worth making today.";
@@ -8821,9 +8821,8 @@ async function loadProtection() {
   const protCtx = await loadPropContext((opps || []).map((c) => c.id), { clientIds: (opps || []).map((c) => c.client_id) });
   /* R82 · A6 — say whose list this is, the way the Fees tab says what its own list is narrowed to.
      A count with no scope on it is the thing that made this panel readable as the firm's book. */
-  const protTabCaption = `<div class="panel-sub u-m-0-0-8" id="protection-scope-note">${
-    mine ? "Showing <strong>your cases only</strong> — My Day's Mine/All toggle above decides this."
-      : "Showing <strong>every adviser's cases</strong> — My Day's Mine/All toggle above decides this."}</div>`;
+  const protTabCaption = mine   // R102 · B7: said only when the list is narrowed — on All the toggle is the statement
+    ? `<div class="panel-sub u-m-0-0-8" id="protection-scope-note">Showing <strong>your cases only</strong> — My Day's Mine/All toggle above decides this.</div>` : "";
   $("#protection-list").innerHTML = protTabCaption + ((opps || []).length ? opps.map((c) => `
     <div class="row-item">
       <div class="row-main">

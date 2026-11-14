@@ -344,7 +344,8 @@ async function selectRows(page, ids) {
        (#ret-rates-money-basis inside #ret-rates-how) — the sub is the one ≤25-word line now. */
     const moneyBasis = await page.evaluate(() => (document.getElementById("ret-rates-money-basis") || {}).textContent || "");
     ok("§B3d · the R61 'basis said once' sentence survives the addition (in the fold)", /value at risk/.test(moneyBasis) && /proxy/.test(moneyBasis), moneyBasis.slice(0, 120));
-    ok("§B3e · the sub still names the scope it composes with", /Showing every adviser's cases|Showing your cases/.test(subs.all), subs.all.slice(0, 160));
+    /* R102 · B7 (Daniel, 14 Nov 2026): on All the sentence no longer says whose — the pressed toggle does; narrowed to Mine it still does. */
+    ok("§B3e · the sub names the scope only when it is narrowed (All: no scope clause)", /Showing your cases/.test(subs.all) || (!/Showing every adviser/.test(subs.all) && /whole \d+-month window/.test(subs.all)), subs.all.slice(0, 160));
 
     /* h3 counts + grouping, on the filtered set. */
     await pick("ended");

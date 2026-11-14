@@ -789,8 +789,9 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
         note: (document.querySelector("#protection-scope-note") || {}).textContent || "",
         rows: document.querySelectorAll("#protection-list .row-item").length,
       }));
-      ok("G2a · flipping My Day to All widens this panel with it, and the note says so",
-        /every adviser's cases/i.test(allView.note), allView.note);
+      /* R102 · B7 (Daniel, 14 Nov 2026): the note is said only when the list is narrowed — on All it is gone. */
+      ok("G2a · flipping My Day to All widens this panel with it, and the 'your cases only' note goes",
+        allView.note === "", allView.note);
       eq("G2b · …to the firm-wide set (same cap)", allView.rows, Math.min(gt.all, 12));
       ok("no console errors (§G)", !page.__err.length, JSON.stringify(page.__err));
       await page.context().close();

@@ -365,7 +365,7 @@ async function groupHeadings(page, containerSel) {
       const afterPipelineNote = await page.$eval("#ret-pipeline-stats", (e) => e.textContent);
       const afterCold = await rowIds(page, "#ret-cold-list", "openClient");
       ok("§B2c · All widens the rates panel to include the p3 case too", afterRates.includes(mine.caseId) && afterRates.includes(other.caseId), JSON.stringify(afterRates));
-      ok("§B2d · …and the pipeline panel's sub-line says \"every adviser\"", /every adviser/.test(afterPipelineNote), afterPipelineNote);
+      ok("§B2d · …and the pipeline panel's sub-line drops its scope clause on All (R102 · B7)", !/Showing/.test(afterPipelineNote) && /open/.test(afterPipelineNote), afterPipelineNote);
       ok("§B2e · …and the cold panel to include the p3 client too", afterCold.includes(coldMine.clId) && afterCold.includes(coldOther.clId), JSON.stringify(afterCold));
 
       await page.reload();
