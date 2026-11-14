@@ -288,7 +288,7 @@ const gotoDiary = async (page) => {
       const page = await newPage(browser, "p2");
       await gotoDiary(page);
       const toggleButtons = await page.evaluate(() => [...document.querySelectorAll("#diary-view-toggle button")].map((b) => b.textContent.trim()));
-      eq("the toggle is exactly Month | Week | Day", toggleButtons, ["Month", "Week", "Day"]);
+      eq("the toggle is exactly List | Month | Week | Day (R104 added List)", toggleButtons, ["List", "Month", "Week", "Day"]);
       const week = await page.evaluate(() => ({
         container: !!document.querySelector("#diary-week-view"),
         lanes: document.querySelectorAll("#diary-week-view .dw-lane").length,

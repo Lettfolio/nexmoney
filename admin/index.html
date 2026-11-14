@@ -418,7 +418,8 @@
                (a month is context, a week is the working horizon, a day is the detail). It is the
                DESKTOP DEFAULT now (owner decision, 28 Aug) — see restoreUserPrefs. -->
           <div class="pipe-segment segment" id="diary-view-toggle" role="group" aria-label="Diary view">
-            <button type="button" class="btn btn-sm seg-btn seg-first scope-active" id="diary-view-month" aria-pressed="true">Month</button>
+            <button type="button" class="btn btn-sm seg-btn seg-first" id="diary-view-agenda" aria-pressed="false" title="The next 14 days as one list">List</button>
+            <button type="button" class="btn btn-sm seg-btn scope-active" id="diary-view-month" aria-pressed="true">Month</button>
             <button type="button" class="btn btn-sm seg-btn" id="diary-view-week" aria-pressed="false">Week</button>
             <button type="button" class="btn btn-sm seg-btn seg-last" id="diary-view-day" aria-pressed="false">Day</button>
           </div>
@@ -431,6 +432,7 @@
       </div>
       <div class="diary-legend" id="diary-legend"></div>
       <div class="diary-grid" id="diary-grid"></div>
+      <div class="diary-agenda hidden" id="diary-agenda"></div>
       <!-- R75 · A1 — Week view: seven time-axis lanes sharing one hour column, Mon–Sun. Built
            entirely by loadDiaryWeek() into this one container (a CSS grid of head cells + lane
            cells), so the month grid and the day lane above/below are never touched by it — the

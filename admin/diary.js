@@ -414,7 +414,8 @@ async function loadDiary() {
 
 /* Diary: Day view Additive: a second render path that shares the appointments table, the staff filter and
    openAppt/adviserColor with the month grid above… */
-let diaryViewMode = "month"; // "month" | "week" | "day" — overwritten from localStorage by restoreUserPrefs
+let diaryAgendaFrom = new Date();   // R104 · B10 — first day of the 14-day list
+let diaryViewMode = "month"; // "agenda" | "month" | "week" | "day" — overwritten from localStorage by restoreUserPrefs
 let diaryDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
 /* R75 · A1: the Monday the Week view is showing. Kept separate from diaryMonth/diaryDay for the same reason
    those two are separate from each other: switching views must never move the OTHER view's position. */
@@ -908,7 +909,47 @@ $("#diary-day-lane").addEventListener("click", (e) => {
 
 /* R75 · A1: ONE ROUTER FOR THREE VIEWS. Every "the diary has to repaint" caller used to carry its own `mode
    === "day" ? … : …` ternary, which is exactly the shape that breaks the moment a third view exists. */
+/* R104 · B10: THE LIST VIEW. The question asked of a diary most often is "what is coming up" — and a grid answers
+   it with mostly empty cells. This is the next 14 days as rows: only days that hold something (today always),
+   appointments in time order with the tasks due that day above them. Same read as the other three views. */
+const DIARY_AGENDA_DAYS = 14;
+async function loadDiaryAgenda() {
+  const start = new Date(diaryAgendaFrom.getFullYear(), diaryAgendaFrom.getMonth(), diaryAgendaFrom.getDate());
+  diaryAgendaFrom = start;
+  const end = new Date(start); end.setDate(end.getDate() + DIARY_AGENDA_DAYS);
+  const last = new Date(end); last.setDate(last.getDate() - 1);
+  const who = $("#diary-staff").value || "all";
+  const seq = ++diaryLoadSeq;
+  const { appts, ctx, tasks, error } = await loadDiaryRange(start, end, who);
+  if (seq !== diaryLoadSeq || error) return;
+  const dm = { day: "numeric", month: "short" };   // short months: the header stays on one line beside four view buttons
+  $("#diary-title").textContent = `Diary — ${start.toLocaleDateString("en-GB", dm)} – ${last.toLocaleDateString("en-GB", { ...dm, year: "numeric" })}`;
+  const tasksBy = diaryTasksByDay(tasks), apptsBy = {};
+  (appts || []).forEach((a) => { const k = diaryYmd(new Date(a.starts_at)); (apptsBy[k] = apptsBy[k] || []).push(a); });
+  const todayYmd = diaryYmd(new Date()), hm = { hour: "2-digit", minute: "2-digit" };
+  let html = "";
+  for (let i = 0; i < DIARY_AGENDA_DAYS; i++) {
+    const d = new Date(start); d.setDate(d.getDate() + i);
+    const k = diaryYmd(d), da = apptsBy[k] || [], dt = tasksBy[k] || [];
+    if (!da.length && !dt.length && k !== todayYmd) continue;
+    html += `<h3 data-day="${k}">${k === todayYmd ? "Today · " : ""}${esc(d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }))}</h3>`
+      + diaryAbsenceBandsHtml(k, who)
+      + dt.map((t) => diaryTaskChipHtml(t, todayYmd)).join("")
+      + (da.length ? da.map((a) => {
+        const struck = a.outcome === "no_show" || a.outcome === "rearranged";
+        const chip = propCtxChip(ctx, a.case_id, "row-prop");
+        return `<div class="row-item${struck ? " outcome-struck" : ""}" data-appt="${esc(a.id)}" ${actAttr("openAppt", a.id)}>
+          <span class="da-time">${new Date(a.starts_at).toLocaleTimeString("en-GB", hm)}–${new Date(a.ends_at || a.starts_at).toLocaleTimeString("en-GB", hm)}</span>
+          <span class="row-main"><strong>${esc(a.title)}</strong>${isApptOutcome(a.outcome) ? " " + apptOutcomeChipHtml(a.outcome) : ""}${chip ? " " + chip : ""}${apptClientLine(a, chip)}</span>
+          ${a.staff_id && who === "all" ? `<span class="u-muted">${esc(staffName(a.staff_id))}</span>` : ""}
+        </div>`;
+      }).join("") : (dt.length ? "" : `<p class="u-muted">Nothing booked.</p>`));
+  }
+  $("#diary-agenda").innerHTML = html;
+  await renderAbsencePanel();
+}
 function loadDiaryForMode() {
+  if (diaryViewMode === "agenda") return loadDiaryAgenda();
   if (diaryViewMode === "day") return loadDiaryDay();
   if (diaryViewMode === "week") return loadDiaryWeek();
   return loadDiary();
@@ -917,7 +958,7 @@ function loadDiaryForMode() {
 // view it is leaving. `opts.skipLoad`/`skipPersist` are used only by initDiaryViewFromPrefs.
 function setDiaryViewMode(mode, opts = {}) {
   diaryViewMode = mode;
-  const segs = [["#diary-view-month", "month"], ["#diary-view-week", "week"], ["#diary-view-day", "day"]];
+  const segs = [["#diary-view-agenda", "agenda"], ["#diary-view-month", "month"], ["#diary-view-week", "week"], ["#diary-view-day", "day"]];
   segs.forEach(([sel, m]) => {
     const b = $(sel);
     if (!b) return;
@@ -927,7 +968,8 @@ function setDiaryViewMode(mode, opts = {}) {
   $("#diary-grid").classList.toggle("hidden", mode !== "month");
   /* The adviser-colour legend belongs to any view that colours its blocks by adviser, which is both the month
      grid and the week lanes — not the day view… */
-  $("#diary-legend").classList.toggle("hidden", mode === "day");
+  $("#diary-legend").classList.toggle("hidden", mode === "day" || mode === "agenda");
+  if ($("#diary-agenda")) $("#diary-agenda").classList.toggle("hidden", mode !== "agenda");
   if ($("#diary-week-view")) $("#diary-week-view").classList.toggle("hidden", mode !== "week");
   /* R78 · B3 — leaving the week view must take its chevrons with it: the wrap's can-scroll-*
      classes are what show the discs, and a stale pair would float over the month grid. */
@@ -943,6 +985,7 @@ function setDiaryViewMode(mode, opts = {}) {
 function initDiaryViewFromPrefs() {
   setDiaryViewMode(diaryViewMode, { skipPersist: true, skipLoad: true });
 }
+if ($("#diary-view-agenda")) $("#diary-view-agenda").addEventListener("click", () => setDiaryViewMode("agenda"));
 $("#diary-view-month").addEventListener("click", () => setDiaryViewMode("month"));
 if ($("#diary-view-week")) $("#diary-view-week").addEventListener("click", () => setDiaryViewMode("week"));
 $("#diary-view-day").addEventListener("click", () => setDiaryViewMode("day"));
@@ -950,17 +993,20 @@ $("#diary-view-day").addEventListener("click", () => setDiaryViewMode("day"));
 /* R75 · A1 — ‹ / Today / › move by whatever the view is ABOUT: a month, a week, a day. A Week
    view whose arrows stepped a month would be a week view in name only. */
 $("#diary-prev").addEventListener("click", () => {
-  if (diaryViewMode === "day") { diaryDay.setDate(diaryDay.getDate() - 1); loadDiaryDay(); }
+  if (diaryViewMode === "agenda") { diaryAgendaFrom.setDate(diaryAgendaFrom.getDate() - DIARY_AGENDA_DAYS); loadDiaryAgenda(); }
+  else if (diaryViewMode === "day") { diaryDay.setDate(diaryDay.getDate() - 1); loadDiaryDay(); }
   else if (diaryViewMode === "week") { diaryWeek.setDate(diaryWeek.getDate() - 7); loadDiaryWeek(); }
   else { diaryMonth = new Date(diaryMonth.getFullYear(), diaryMonth.getMonth() - 1, 1); loadDiary(); }
 });
 $("#diary-next").addEventListener("click", () => {
-  if (diaryViewMode === "day") { diaryDay.setDate(diaryDay.getDate() + 1); loadDiaryDay(); }
+  if (diaryViewMode === "agenda") { diaryAgendaFrom.setDate(diaryAgendaFrom.getDate() + DIARY_AGENDA_DAYS); loadDiaryAgenda(); }
+  else if (diaryViewMode === "day") { diaryDay.setDate(diaryDay.getDate() + 1); loadDiaryDay(); }
   else if (diaryViewMode === "week") { diaryWeek.setDate(diaryWeek.getDate() + 7); loadDiaryWeek(); }
   else { diaryMonth = new Date(diaryMonth.getFullYear(), diaryMonth.getMonth() + 1, 1); loadDiary(); }
 });
 $("#diary-today").addEventListener("click", () => {
-  if (diaryViewMode === "day") { diaryDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()); loadDiaryDay(); }
+  if (diaryViewMode === "agenda") { diaryAgendaFrom = new Date(); loadDiaryAgenda(); }
+  else if (diaryViewMode === "day") { diaryDay = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()); loadDiaryDay(); }
   else if (diaryViewMode === "week") { diaryWeek = mondayOf(new Date()); loadDiaryWeek(); }
   else { diaryMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1); loadDiary(); }
 });
@@ -1374,4 +1420,4 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_diary = "r103";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_diary = "r104";   // R89 — the CTO bumps all seven together at each gate

@@ -889,7 +889,10 @@ function restoreUserPrefs(uid) {
   const dv = lsGet(diaryViewStoreKey(uid));
   /* R75 · A1 — "week" is a third stored value. A STORED CHOICE ALWAYS WINS, whichever of the
      three it is: the two defaults below only ever decide a first visit. */
-  if (dv === "day" || dv === "month" || dv === "week") diaryViewMode = dv;
+  if (dv === "day" || dv === "month" || dv === "week" || dv === "agenda") diaryViewMode = dv;
+  /* R104 · B10 (owner decision, 14 Nov 2026): WITH NO STORED CHOICE THE DIARY OPENS ON THE LIST, phone and desktop —
+     "what is coming up" before "where is the gap". The two older defaults below are what the harness still opens on. */
+  else if (window.__NEX_TODAY_SCOPE !== "all") diaryViewMode = "agenda";
   /* R73 · A4: WITH NO STORED CHOICE, A PHONE OPENS ON DAY. The month grid is seven columns of date cells; at 390px
      each one is ~50px wide and holds an appointment's time, its title and its client, so the grid renders as 42
      unreadable stamps and the day somebody actually wants is a pinch-zoom away. Chosen over "open Month and
@@ -26438,6 +26441,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r103";   // R89
+window.__nxTag_app = "r104";   // R89
 
 init();
