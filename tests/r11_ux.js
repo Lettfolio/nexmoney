@@ -110,11 +110,15 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
         if (afterKpi && afterKpi.id === "dash-cap-notice") afterKpi = afterKpi.nextElementSibling;
         return {
           afterHeading: h && h.nextElementSibling && h.nextElementSibling.id,
-          beforeBrief: afterKpi && afterKpi.id,
+          afterBrief: brief && brief.nextElementSibling && brief.nextElementSibling.id,
+          afterKpi: afterKpi && afterKpi.id,
         };
       });
-      eq("R11-A · #kpi-row sits immediately after #today-heading", order.afterHeading, "kpi-row");
-      eq("R11-A · #kpi-row sits immediately before #briefing-panel (skipping R23's hidden cap-notice)", order.beforeBrief, "briefing-panel");
+      /* R102 · T1 (Daniel, 14 Nov 2026): work first — My Day follows the heading; the tiles, their cap notice
+         and the ops strip follow My Day, ahead of the Checks drawer. R11's "numbers above the worklists" is retired. */
+      eq("R11-A/R102 · #briefing-panel sits immediately after #today-heading", order.afterHeading, "briefing-panel");
+      eq("R11-A/R102 · #kpi-row sits immediately after #briefing-panel", order.afterBrief, "kpi-row");
+      eq("R11-A/R102 · the ops strip follows the tiles (skipping R23's hidden cap-notice)", order.afterKpi, "ops-strip");
 
       const gt = await page.evaluate(async () => {
         const db = window.__mockDb;
@@ -216,12 +220,9 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       const advOrder = await page.evaluate(() => {
         const h = document.getElementById("today-heading");
         const brief = document.getElementById("briefing-panel");
-        // Skip R23's hidden #dash-cap-notice between the numbers and the briefing (see the owner block above).
-        let prev = brief.previousElementSibling;
-        if (prev && prev.id === "dash-cap-notice") prev = prev.previousElementSibling;
-        return { afterHeading: h.nextElementSibling.id, kpiBeforeBrief: prev.id };
+        return { afterHeading: h.nextElementSibling.id, afterBrief: brief.nextElementSibling.id };
       });
-      eq("R11-A · same top-of-page order for an adviser", advOrder, { afterHeading: "kpi-row", kpiBeforeBrief: "kpi-row" });
+      eq("R11-A/R102 · same top-of-page order for an adviser (My Day, then the tiles)", advOrder, { afterHeading: "briefing-panel", afterBrief: "kpi-row" });
       noErr(page, "adviser KPI");
 
       /* R11-REGRESSION — no horizontal overflow at 390px, on the persona most likely to be on a

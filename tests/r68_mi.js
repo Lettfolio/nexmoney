@@ -626,14 +626,16 @@ const money = (n) => "£" + Math.round(Number(n) || 0).toLocaleString("en-GB");
       ok("D1b (R87) · …as chips only: the 50-word caption is gone, every chip still carries its own title",
         await page.evaluate(() => !document.querySelector("#ops-strip-sub") && [...document.querySelectorAll("#ops-strip .ops-chip")].every((c) => (c.getAttribute("title") || "").length > 20)));
 
-      /* R11-1's adjacency is load-bearing and tests/r11_ux.js locks it — the strip must not have
-         got between the heading and the numbers. */
+      /* R102 · T1 (Daniel, 14 Nov 2026): My Day leads; the tiles and then the ops strip follow it
+         (tests/r11_ux.js holds the same order). */
       const order = await page.evaluate(() => {
-        const h = document.getElementById("today-heading");
-        return { afterHeading: h.nextElementSibling && h.nextElementSibling.id, beforeHeading: h.previousElementSibling && h.previousElementSibling.id };
+        const h = document.getElementById("today-heading"), s = document.getElementById("ops-strip");
+        let prev = s.previousElementSibling;
+        if (prev && prev.id === "dash-cap-notice") prev = prev.previousElementSibling;
+        return { afterHeading: h.nextElementSibling && h.nextElementSibling.id, beforeStrip: prev && prev.id };
       });
-      eq("D2 · #kpi-row still sits immediately after #today-heading (R11-1 intact)", order.afterHeading, "kpi-row");
-      eq("D2b · …and the ops strip sits above the title, with the health banners", order.beforeHeading, "ops-strip");
+      eq("D2 · My Day sits immediately after #today-heading (R102)", order.afterHeading, "briefing-panel");
+      eq("D2b · …and the ops strip follows the tiles, below My Day", order.beforeStrip, "kpi-row");
 
       const gt = await page.evaluate(async () => {
         const db = window.__mockDb;
