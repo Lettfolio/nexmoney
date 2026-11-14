@@ -165,7 +165,7 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
 .sidenav button.active .si, .sidenav button:hover .si { opacity: 1; filter: none; }
 /* GROUPED NAV. Work / Book / Money are labels, not controls: aria-hidden, no pointer events, no tab stop. */
 .nav-group-head, .sidenav .nav-group-toggle {
-  font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
   color: #a9bfda; opacity: .55; padding: 12px 11px 4px; line-height: 1.4;
 }
 .nav-group-head { pointer-events: none; user-select: none; }
@@ -176,7 +176,7 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
   transition: opacity .15s ease, background .15s ease, color .15s ease;
 }
 .sidenav button.nav-group-toggle:hover { opacity: .95; color: #e8f0fa; background: rgba(255,255,255,.06); }
-.nav-caret { display: inline-block; font-size: 9px; transition: transform .15s ease; }
+.nav-caret { display: inline-block; font-size: 12px; transition: transform .15s ease; }
 .nav-group-toggle[aria-expanded="false"] .nav-caret { transform: rotate(-90deg); }
 #nav-firm-group { display: flex; flex-direction: column; gap: 2px; }
 #nav-firm-group.collapsed { display: none; }
@@ -195,7 +195,8 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
 /* Gave <main> 88px (mobile: 148px) of bottom padding purely so the last row on a page could clear the FIXED Ask-AI pill. */
 main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 32px 40px; }
 .page-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
-.page-head h2 { margin: 0; }
+.page-head h2 { margin: 0; white-space: nowrap; }
+#page-diary .page-tools select, #board-views, #board-search { max-width: 160px; }
 .page-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .page-tools .search { margin: 0; max-width: 220px; }
 
@@ -229,7 +230,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .wt-group-all,          /* "Select all 5" on a Watchtower rule header */
 .sec-copy, .vf-copy, .vf-reveal,   /* the copy/reveal pair on one vault field */
 #report-advocacy-panel .adv-open-btn
-  { padding: 3px 8px; font-size: 11.5px; border-radius: 6px; line-height: 1.35; }
+  { padding: 3px 8px; font-size: 12px; border-radius: 6px; line-height: 1.35; }
 .btn-danger { color: var(--red); }
 .btn-danger:hover { color: var(--red); background: var(--red-bg); border-color: #eec3bb; }
 .btn-ghost.btn-danger:hover { border-color: transparent; }
@@ -290,7 +291,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   display: inline-block; min-width: 20px; text-align: center;
   padding: 1px 8px; border-radius: 20px;
   background: var(--light); color: var(--muted-on-tint);
-  font-size: 11px; font-weight: 700; letter-spacing: 0;
+  font-size: 12px; font-weight: 700; letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 .panel h3 .count.hot, .adopt-h .count.hot { background: var(--amber-bg); color: var(--amber); }
@@ -306,7 +307,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .panel.dash-drawer > h3::after {
   content: "\25BE"; /* ▾ */
   position: absolute; right: 0; top: 1px;
-  color: var(--muted); font-size: 10px;
+  color: var(--muted); font-size: 12px;
 }
 .panel.dash-drawer.collapsed > h3::after { content: "\25B8"; } /* ▸ */
 .panel.dash-drawer.collapsed > *:not(h3) { display: none; }
@@ -354,7 +355,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .brief-more { display: block; margin-top: 4px; }
 .brief-more > summary {
   display: inline-block; padding: 1px 0; list-style: none;
-  color: var(--muted); font-size: 11.5px; font-weight: 600; cursor: pointer;
+  color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .brief-more > summary::-webkit-details-marker { display: none; }
 .brief-more > summary::before { content: "▸ "; }
@@ -387,7 +388,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   display: inline-block; min-width: 18px; text-align: center; margin-left: 4px;
   padding: 0 6px; border-radius: 20px;
   background: var(--light); color: var(--muted-on-tint);
-  font-size: 11px; font-weight: 700; letter-spacing: 0;
+  font-size: 12px; font-weight: 700; letter-spacing: 0;
   font-variant-numeric: tabular-nums;
 }
 .dash-tab-panel.hidden { display: none; }
@@ -481,7 +482,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* Badges (soft, pill) · R6-B4 — THE BADGE COLOUR VOCABULARY. */
 .badge {
   display: inline-block; padding: 3px 10px; border-radius: 999px;
-  font-size: 11px; font-weight: 600; letter-spacing: .01em;
+  font-size: 12px; font-weight: 600; letter-spacing: .01em;
   white-space: nowrap; font-variant-numeric: tabular-nums;
   /* A transparent 1px edge on every badge so adding .is-est (which needs a real border) cannot shift a badge's size relative to its neighbours in a row. */
   border: 1px solid transparent;
@@ -546,7 +547,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .prop-chip .pc-dot-n {
   width: auto; min-width: 14px; height: 14px; padding: 0 2px;
   border-radius: 999px; flex: 0 0 auto;
-  color: var(--white); font-size: 9px; font-weight: 700; line-height: 14px;
+  color: var(--white); font-size: 12px; font-weight: 700; line-height: 14px;
   text-align: center; font-variant-numeric: tabular-nums;
 }
 .prop-chip .pc-dot-n::after { content: attr(data-n); }
@@ -557,7 +558,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* Something IS in the field but it is not an address ("TBC", "n/a"). */
 .prop-chip-unusable { font-style: italic; }
 /* Property chip on the OTHER surfaces (R6 batch 2) · Same pill, four sizes of hole to fit it in. */
-.row-prop { max-width: 210px; font-size: 11.5px; padding: 1px 8px 1px 7px; }
+.row-prop { max-width: 210px; font-size: 12px; padding: 1px 8px 1px 7px; }
 .row-prop .pc-dot { width: 7px; height: 7px; }
 /* The rest of the canonical identity (type · lender · stage) next to the chip: quiet, because the chip is the thing being scanned for. */
 .case-tag {
@@ -575,7 +576,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .pipe-col-prop { max-width: 240px; }
 .pipe-col-prop .prop-chip { max-width: 224px; }
 /* Client timeline — the per-row case tag, where the chip REPLACES the round-5 kind · lender pill whenever the case has an address. */
-.tl-prop { max-width: 220px; font-size: 11px; padding: 1px 8px 1px 7px; }
+.tl-prop { max-width: 220px; font-size: 12px; padding: 1px 8px 1px 7px; }
 .tl-prop .pc-dot { width: 7px; height: 7px; }
 .cprop-group { margin-bottom: 10px; }
 .cprop-hd {
@@ -585,9 +586,9 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 }
 /* The heading carries the FULL address — it has the width the chip does not. */
 .cprop-addr { font-size: 12.5px; font-weight: 700; color: var(--dark); min-width: 0; overflow-wrap: anywhere; }
-.cprop-n { font-size: 11px; font-weight: 700; color: var(--muted-on-tint); background: var(--light); border-radius: 999px; padding: 1px 8px; }
+.cprop-n { font-size: 12px; font-weight: 700; color: var(--muted-on-tint); background: var(--light); border-radius: 999px; padding: 1px 8px; }
 .cprop-group .row-item { padding-left: 8px; }
-.cl-case-chip { max-width: 100%; font-size: 11.5px; padding: 1px 8px 1px 7px; }
+.cl-case-chip { max-width: 100%; font-size: 12px; padding: 1px 8px 1px 7px; }
 .cl-case-chip .pc-dot { width: 7px; height: 7px; }
 /* A · L6 — the protection pill on a client-record case row. */
 .badge.cl-prot-chip { white-space: nowrap; }
@@ -596,7 +597,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* .hidden wins over the flex above, so an empty About line collapses rather than leaving a gap where a property used to be. */
 .appt-case-line.hidden { display: none !important; }
 /* The Case field's one-line explanation, under the select. */
-.appt-case-note { display: block; font-size: 11.5px; font-weight: 400; color: var(--muted); margin-top: 4px; }
+.appt-case-note { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 4px; }
 #case-prop-pick { margin-bottom: 6px; }
 #case-prop-input { min-height: 40px; resize: vertical; }
 #case-prop-hint { display: block; color: var(--muted); margin-top: 4px; }
@@ -622,20 +623,18 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
   transition: box-shadow .15s ease, border-color .15s ease, transform .15s ease;
 }
 .card:hover { border-color: #b7cbe2; box-shadow: var(--shadow-lift); transform: translateY(-1px); }
-.card .cn { font-weight: 700; font-size: 14.5px; color: var(--dark); letter-spacing: -0.01em; line-height: 1.3; }
-.card .cn .cn-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card .cn .card-dupe-hint { font-size: 10.5px; padding: 2px 7px; font-weight: 600; letter-spacing: 0; flex: 0 0 auto; }
+.card .cn { font-weight: 700; font-size: 14.5px; color: var(--dark); letter-spacing: -0.01em; line-height: 1.3; flex-wrap: wrap; }
+.card .cn .cn-name { flex: 1 1 0; min-width: min-content; }
+.card .cn .card-dupe-hint { font-size: 12px; padding: 2px 7px; font-weight: 600; letter-spacing: 0; flex: 0 0 auto; }
 .card .cd { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .card .flags { margin-top: 7px; display: flex; gap: 4px 4px; flex-wrap: wrap; }
-.card .flags .badge { font-size: 10.5px; padding: 2px 8px; letter-spacing: 0; }
+.card .flags .badge { font-size: 12px; padding: 2px 8px; letter-spacing: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 /* Even a badge cannot widen a 244px column: its text clips at the card's edge rather than being sliced mid-glyph by the column's own overflow (W23). */
-.card .flags .badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 /* Time-in-stage aging (SP2b): subtle muted line + coloured left edge only when amber/red. */
-.card .age-line { margin-top: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.card.age-amber { border-left-width: 3px; border-left-color: #e0a100; }
+.card .age-line { margin-top: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.card.age-amber, .card.age-amber:hover { border-left-width: 3px; border-left-color: #e0a100; }
 .card.age-red { border-left-width: 3px; border-left-color: #d64545; }
 /* Keep the coloured edge on hover (the generic .card:hover recolours all borders). */
-.card.age-amber:hover { border-left-color: #e0a100; }
 .card.age-red:hover { border-left-color: #d64545; }
 /* #a97a00 measured 3.84:1 on white, under AA. */
 .card.age-amber .age-line { color: #8a6400; }
@@ -676,7 +675,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .seg-btn:hover { color: var(--navy); }
 .seg-btn.active { background: var(--white); color: var(--navy); font-weight: 600; box-shadow: 0 1px 2px rgba(16,24,40,.14); }
 .seg-count {
-  font-variant-numeric: tabular-nums; font-size: 11.5px; line-height: 1;
+  font-variant-numeric: tabular-nums; font-size: 12px; line-height: 1;
   background: rgba(16,24,40,.07); color: var(--muted-on-tint);
   border-radius: 999px; padding: 3px 7px; min-width: 20px; text-align: center;
 }
@@ -821,7 +820,7 @@ main input:focus, main select:focus, main textarea:focus,
 .note { background: #f4f7fb; border: 1px solid #eaeff6; border-radius: 8px; padding: 9px 12px; margin-bottom: 8px; font-size: 13px; }
 .note.note-refiled { background: #f7f7f8; border-color: #ececf0; }
 .note-refiled-badge { margin-left: 6px; vertical-align: middle; }
-.note-refile-btn { margin-left: 8px; padding: 1px 7px; font-size: 11px; line-height: 1.5; }
+.note-refile-btn { margin-left: 8px; padding: 1px 7px; font-size: 12px; line-height: 1.5; }
 /* The timeline's own strike — same meaning, inline rather than in a card. */
 .tl-refiled { color: var(--muted); }
 .tl-row .note-refile-btn { margin-left: 6px; }
@@ -853,7 +852,7 @@ main input:focus, main select:focus, main textarea:focus,
 .tl-case-sel { width: auto; max-width: 42%; flex: 0 1 auto; }
 /* The composer's target when nothing has been chosen yet. */
 .tl-case-unset { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(243, 111, 35, .15); }
-.tl-case-hint { font-size: 11.5px; color: var(--muted); margin: 5px 0 0; }
+.tl-case-hint { font-size: 12px; color: var(--muted); margin: 5px 0 0; }
 .tl-filters { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
 .tl-list { margin-top: 8px; max-height: 46vh; overflow-y: auto; }
 .tl-day {
@@ -867,47 +866,47 @@ main input:focus, main select:focus, main textarea:focus,
 .tl-main { flex: 1 1 auto; min-width: 0; }
 .tl-title { font-size: 13px; color: var(--dark); overflow-wrap: anywhere; }
 .tl-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 2px; }
-.tl-case { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--navy); background: var(--blue-bg); border-radius: 5px; padding: 1px 6px; }
-.tl-ago { font-size: 11.5px; color: var(--muted); }
+.tl-case { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--navy); background: var(--blue-bg); border-radius: 5px; padding: 1px 6px; }
+.tl-ago { font-size: 12px; color: var(--muted); }
 .tl-muted { color: var(--muted); }
-.tl-fail { color: var(--red); font-weight: 600; font-size: 11.5px; }
+.tl-fail { color: var(--red); font-weight: 600; font-size: 12px; }
 /* The inbound email's stored snippet under its subject: muted, clamped to two lines so a long client email never swallows the timeline it sits in. */
 .tl-snippet { color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tl-mark-handled { margin-left: 6px; vertical-align: 1px; }
-.tl-handled-done { font-size: 11.5px; margin-left: 6px; }
+.tl-handled-done { font-size: 12px; margin-left: 6px; }
 .tl-more { margin: 10px auto 2px; display: block; }
 .client-details { margin-top: 14px; }
 /* Change history drawer (audit_log) — collapsed by default so the forensic log sits under the working view rather than on top of it. */
 .audit-panel { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; background: #fbfcfe; }
 .audit-panel > summary { cursor: pointer; padding: 9px 12px; font-size: 13px; font-weight: 600; color: var(--navy); }
-.audit-count { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 700; color: var(--muted); background: var(--blue-bg); border-radius: 9px; padding: 1px 7px; }
-.audit-intro { margin: 0 12px 6px; font-size: 11.5px; }
+.audit-count { display: inline-block; margin-left: 6px; font-size: 12px; font-weight: 700; color: var(--muted); background: var(--blue-bg); border-radius: 9px; padding: 1px 7px; }
+.audit-intro { margin: 0 12px 6px; font-size: 12px; }
 .audit-list { max-height: 40vh; overflow-y: auto; padding: 0 12px 10px; }
 .audit-entry { border-bottom: 1px solid #f0f3f8; }
 .audit-entry:last-of-type { border-bottom: none; }
 .audit-entry > summary { cursor: pointer; padding: 7px 2px; font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-.audit-act { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; border-radius: 5px; padding: 1px 6px; color: #fff; background: var(--muted); }
+.audit-act { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; border-radius: 5px; padding: 1px 6px; color: #fff; background: var(--muted); }
 .audit-act.audit-insert { background: var(--green); }
 .audit-act.audit-update { background: var(--navy); }
 .audit-act.audit-delete { background: var(--red); }
 .audit-sum { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; color: var(--dark); }
-.audit-when { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.audit-when { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .audit-changes { width: 100%; border-collapse: collapse; margin: 2px 0 9px; font-size: 12px; }
 .audit-changes th { text-align: left; font-weight: 600; color: var(--muted); padding: 3px 8px 3px 24px; white-space: nowrap; vertical-align: top; width: 1%; }
 .audit-changes td { padding: 3px 8px; overflow-wrap: anywhere; vertical-align: top; }
 .audit-arrow { color: var(--muted); width: 1%; }
 .audit-nil { color: var(--muted); }
 .audit-hidden { color: var(--muted); font-style: italic; }
-.audit-note { font-size: 11.5px; color: var(--muted); padding: 8px 2px 2px; }
+.audit-note { font-size: 12px; color: var(--muted); padding: 8px 2px 2px; }
 .audit-more { margin: 10px auto 2px; display: block; }
-.audit-tbl { font-size: 10.5px; font-weight: 600; color: var(--navy); background: var(--blue-bg); border-radius: 5px; padding: 1px 7px; white-space: nowrap; }
-.audit-who { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.audit-tbl { font-size: 12px; font-weight: 600; color: var(--navy); background: var(--blue-bg); border-radius: 5px; padding: 1px 7px; white-space: nowrap; }
+.audit-who { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .ch-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 12px; }
-.ch-filters label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.ch-filters label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .ch-filters select, .ch-filters input { min-width: 140px; }
 .ch-list { max-height: 55vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 0 12px; background: #fbfcfe; }
 .ch-pager { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; margin-top: 10px; }
-.ch-count { font-size: 11.5px; color: var(--muted); }
+.ch-count { font-size: 12px; color: var(--muted); }
 
 /* ---------- Tables (import preview, reports, pipeline table) ---------- */
 .imp-table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -936,7 +935,7 @@ main input:focus, main select:focus, main textarea:focus,
 details.imp-conflict summary { cursor: pointer; color: #8a5a00; font-weight: 600; padding: 8px 0; font-size: 12.5px; }
 details.imp-conflict .merge-table { max-width: 760px; margin: 4px 0 2px; background: var(--white); border-radius: 6px; }
 details.imp-conflict .merge-table th { padding-top: 6px; padding-bottom: 6px; }
-details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
+details.imp-conflict .s { color: var(--muted); font-size: 12px; }
 
 /* ---------- Duplicate-client merge modal (BUILD 5b) ---------- */
 .merge-keep { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
@@ -997,7 +996,7 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
 .diary-hour-labels { position: relative; width: 52px; flex: none; border-right: 1px solid var(--border); }
 .diary-hour-label {
   position: absolute; left: 0; right: 0; transform: translateY(-50%);
-  font-size: 11px; color: var(--muted); padding: 0 8px; box-sizing: border-box;
+  font-size: 12px; color: var(--muted); padding: 0 8px; box-sizing: border-box;
   font-variant-numeric: tabular-nums;
 }
 .diary-day-lane { position: relative; flex: 1; min-height: 200px; cursor: pointer; }
@@ -1028,13 +1027,13 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
 .dw-today-tag {
   display: inline-block; margin-left: 5px; padding: 0 6px;
   background: var(--navy); color: #fff; border-radius: 999px;
-  font-size: 9.5px; letter-spacing: .04em; vertical-align: 1px;
+  font-size: 12px; letter-spacing: .04em; vertical-align: 1px;
 }
 .dw-hours { position: relative; border-right: 1px solid var(--border); }
-.dw-hours .diary-hour-label { position: absolute; left: 0; right: 0; transform: translateY(-50%); font-size: 11px; color: var(--muted); padding: 0 8px; box-sizing: border-box; font-variant-numeric: tabular-nums; }
+.dw-hours .diary-hour-label { position: absolute; left: 0; right: 0; transform: translateY(-50%); font-size: 12px; color: var(--muted); padding: 0 8px; box-sizing: border-box; font-variant-numeric: tabular-nums; }
 .dw-lane { position: relative; border-left: 1px solid var(--border); cursor: pointer; min-width: 0; }
 .dw-lane.today { background: rgba(0,72,140,.035); }
-.dw-head .diary-away, .dw-head .diary-task { font-size: 10.5px; }
+.dw-head .diary-away, .dw-head .diary-task { font-size: 12px; }
 .appt.dragging, .appt-block.dragging { opacity: .45; }
 .diary-day.dragover { border-color: var(--navy); box-shadow: 0 0 0 2px var(--navy); }
 .dw-lane.dragover, .diary-day-lane.dragover { background: var(--blue-bg); box-shadow: inset 0 0 0 2px var(--navy); }
@@ -1065,7 +1064,7 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
 .appt-block.clash:hover { background: #f9d9d5; }
 /* The property chip inside a diary tile or a day-view block. */
 .diary-day .appt .prop-chip,
-.appt-block .prop-chip { max-width: 100%; font-size: 11px; padding: 1px 7px 1px 6px; }
+.appt-block .prop-chip { max-width: 100%; font-size: 12px; padding: 1px 7px 1px 6px; }
 /* …but "ellipsise inside it" was the wrong trade HERE. */
 .diary-day .appt .prop-chip,
 .appt-block .prop-chip { align-items: flex-start; border-radius: 9px; }
@@ -1094,7 +1093,7 @@ details.imp-conflict .s { color: var(--muted); font-size: 11.5px; }
   display: inline-flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; border-radius: 50%;
   background: linear-gradient(135deg, #135a9e, var(--navy-600));
-  color: #fff; font-size: 10px; font-weight: 700;
+  color: #fff; font-size: 12px; font-weight: 700;
   box-shadow: 0 1px 3px rgba(0,72,140,.3);
 }
 /* Assignee chip that doubles as the reassign control (task rows) — T1-6. */
@@ -1174,7 +1173,7 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 .chat-err { background: var(--red-bg); color: var(--red); border-color: #f2cdc7; }
 .chat-typing { font-style: italic; color: var(--muted); }
 .chat-action-chip {
-  display: inline-block; font-size: 11px; font-weight: 600;
+  display: inline-block; font-size: 12px; font-weight: 600;
   background: var(--blue-bg); color: var(--navy);
   border-radius: 999px; padding: 2px 9px; margin: 4px 4px 0 0;
 }
@@ -1213,7 +1212,7 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   background: transparent;
 }
 /* Hint text that swaps between desktop and mobile wording (see .mobile-hint in the mobile block). */
-.mobile-hint { display: none; }
+.mobile-hint, #board-hint .desktop-hint { display: none; }
 
 /* ---------- Protection & GI page ---------- */
 .prot-client { font-weight: 600; color: var(--dark); cursor: pointer; }
@@ -1321,7 +1320,7 @@ details.snooze-menu > .snooze-menu-items {
   background: #fff; color: var(--dark);
 }
 .cs-stat { display: flex; flex-direction: column; line-height: 1.25; }
-.cs-lbl { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.cs-lbl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .cs-val { font-size: 14px; font-weight: 600; color: var(--dark); }
 .cs-stat.cs-warn .cs-val { color: #b45309; }
 .cs-stat.cs-danger .cs-val { color: var(--red); }
@@ -1374,7 +1373,7 @@ select.combo-native { display: none !important; }
 .combo-opt.combo-cur { font-weight: 700; }
 .combo-opt.combo-active { background: var(--navy); color: #fff; }
 .combo-opt.combo-active.combo-pin { color: #fff; }
-.combo-more { padding: 6px 9px; font-size: 11.5px; color: var(--muted); }
+.combo-more { padding: 6px 9px; font-size: 12px; color: var(--muted); }
 /* Clickable KPI tiles (QW15). */
 /* T1-19 — a report table cell that navigates. A link, not another button in a table full of them. */
 .linkish {
@@ -1383,10 +1382,10 @@ select.combo-native { display: none !important; }
 }
 .linkish:hover { color: var(--orange-600); }
 /* T1-18 — a figure carrying its sample size, greyed where the sample is too small to rank on. */
-.stat-n { font-weight: 400; color: var(--muted); font-size: 11px; }
+.stat-n { font-weight: 400; color: var(--muted); font-size: 12px; }
 .stat-weak { color: var(--muted); }
 /* T1-18 — this month's value printed beside the shared-scale sparkline. */
-.spark-now { font-size: 11px; font-weight: 600; color: var(--muted); vertical-align: middle; }
+.spark-now { font-size: 12px; font-weight: 600; color: var(--muted); vertical-align: middle; }
 /* T1-18 — the Unassigned / off-team scoreboard rows: real work, nobody's name against it. */
 #report-advisers tr.row-warn td { background: var(--amber-50, #fff7ec); }
 #report-advisers tr.row-warn td:first-child { font-weight: 600; color: var(--orange-600); }
@@ -1434,7 +1433,7 @@ select.combo-native { display: none !important; }
 .global-search .gs-ic { font-size: 13px; opacity: .85; line-height: 1; }
 .global-search .gs-txt { flex: 1; text-align: left; }
 .global-search .gs-kbd {
-  font-family: var(--font); font-size: 11px; font-weight: 700;
+  font-family: var(--font); font-size: 12px; font-weight: 700;
   background: rgba(255,255,255,.12); color: #cddcef;
   border-radius: 5px; padding: 1px 6px; line-height: 1.5;
 }
@@ -1460,7 +1459,7 @@ select.combo-native { display: none !important; }
 .palette-input::placeholder { color: var(--muted); }
 /* A real close button now (was an inert <kbd>Esc</kbd>), styled the same at rest. */
 .palette-esc {
-  font-size: 11px; font-weight: 600; color: var(--muted); background: var(--light);
+  font-size: 12px; font-weight: 600; color: var(--muted); background: var(--light);
   border: none; border-radius: 5px; padding: 2px 7px; flex-shrink: 0;
   font-family: inherit; cursor: pointer;
 }
@@ -1530,10 +1529,10 @@ select.combo-native { display: none !important; }
 .client-dob-add { font-weight: 600; }
 .client-lastcontact { font-variant-numeric: tabular-nums; }
 /* Date of birth in the client form: the one field the touch programme cannot work without. */
-.client-dob-field .field-hint { display: block; margin-top: 3px; font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.client-dob-field .field-hint { display: block; margin-top: 3px; font-size: 12px; color: var(--muted); font-weight: 400; }
 .client-dob-flag {
   display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
-  background: #fef3f2; color: #b42318; font-size: 10.5px; font-weight: 700;
+  background: #fef3f2; color: #b42318; font-size: 11px; font-weight: 700;
   letter-spacing: .02em; text-transform: uppercase; vertical-align: middle;
 }
 /* Team roster — each row wraps its .row-item so the "remove access" panel can open underneath it (BATCH B). */
@@ -1544,16 +1543,16 @@ select.combo-native { display: none !important; }
 /* 17 — the basis line under a money figure. */
 .kpi .s,
 .money-basis {
-  font-size: 11px; line-height: 1.35; color: var(--muted);
+  font-size: 12px; line-height: 1.35; color: var(--muted);
   margin-top: 4px; font-weight: 500;
 }
 .money-basis { display: block; }
 th .money-basis {
   text-transform: none; letter-spacing: 0; font-weight: 500;
-  white-space: normal; max-width: 168px; font-size: 10.5px;
+  white-space: normal; max-width: 168px; font-size: 12px;
 }
 /* S8 / R5-19 — month-on-month and year-on-year delta chips under a KPI number. */
-.kpi-delta { margin-top: 6px; font-size: 11px; line-height: 1.5; display: flex; flex-wrap: wrap; gap: 2px 6px; }
+.kpi-delta { margin-top: 6px; font-size: 12px; line-height: 1.5; display: flex; flex-wrap: wrap; gap: 2px 6px; }
 .kpi-delta .delta { font-weight: 600; white-space: nowrap; }
 .kpi-delta .delta.up { color: var(--green, #1d7a4c); }
 .kpi-delta .delta.down { color: var(--red); }
@@ -1611,10 +1610,10 @@ th .money-basis {
 }
 /* 34 — the case-level verdict under the person-level Match badge. */
 .imp-prop-verdict { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
-.imp-prop-verdict .s { color: var(--muted); font-size: 11.5px; }
+.imp-prop-verdict .s { color: var(--muted); font-size: 12px; }
 .imp-prop-verdict .imp-prop-hint {
   flex: 0 0 100%; max-width: 52ch; white-space: normal;
-  color: var(--muted); font-size: 11.5px; line-height: 1.45;
+  color: var(--muted); font-size: 12px; line-height: 1.45;
 }
 /* 38 — Data health's shared-address groups. */
 .dh-sharedprop { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
@@ -1626,7 +1625,7 @@ th .money-basis {
 /* The pipeline board's legend (index.html #board-legend) · Deliberately quiet: it explains furniture, so it must never compete with the cards. */
 .board-legend {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px;
-  margin: -6px 0 12px; font-size: 11.5px; color: var(--muted);
+  margin: -6px 0 12px; font-size: 12px; color: var(--muted);
 }
 .board-legend .bl-item { display: inline-flex; align-items: center; gap: 6px; }
 .board-legend .bl-edge {
@@ -1638,7 +1637,7 @@ th .money-basis {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 16px; padding: 0 4px; flex: 0 0 auto;
   border: 1px dashed #9dbbe0; border-radius: 999px;
-  background: var(--blue-bg); color: var(--navy); font-weight: 700; font-size: 10px;
+  background: var(--blue-bg); color: var(--navy); font-weight: 700; font-size: 12px;
 }
 /* Table view has no accent bars and no card left-edge, so app.js hides the legend with #board-hint whenever the board itself is hidden. */
 .row-main .t, .row-main .s { min-width: 0; overflow-wrap: anywhere; }
@@ -1685,7 +1684,7 @@ th .money-basis {
   position: absolute; top: -1px; bottom: -1px; width: 2px;
   background: var(--dark); opacity: .55;
 }
-.fee-bar-mark-lbl { font-size: 11px; color: var(--muted); margin-top: 3px; display: block; }
+.fee-bar-mark-lbl { font-size: 12px; color: var(--muted); margin-top: 3px; display: block; }
 .wt-row { position: relative; padding-left: 12px; }
 .wt-row::before {
   content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
@@ -1718,7 +1717,7 @@ th .money-basis {
 }
 .wt-group-head:hover { background: #e3e9f1; }
 /* The caret is the only thing that changes when a group folds, so it has to be unmistakable — same ▾ / ▸ pair the Today drawers already use. */
-.wt-group-caret::before { content: "\25BE"; font-size: 9px; color: var(--muted); }
+.wt-group-caret::before { content: "\25BE"; font-size: 12px; color: var(--muted); }
 .wt-group.wt-folded .wt-group-caret::before { content: "\25B8"; }
 .wt-group-label { flex: 0 1 auto; min-width: 0; }
 .wt-group-n::before { content: "\2014\00a0"; font-weight: 400; color: var(--muted); }
@@ -1738,7 +1737,7 @@ th .money-basis {
 .pipe-col-prop .prop-chip .pc-dot.pc-dot-n,
 .diary-day .appt .prop-chip .pc-dot.pc-dot-n,
 .appt-block .prop-chip .pc-dot.pc-dot-n {
-  width: auto; min-width: 13px; height: 13px; line-height: 13px; font-size: 8.5px;
+  width: auto; min-width: 13px; height: 13px; line-height: 13px; font-size: 12px;
   padding: 0 2px; border-radius: 999px; text-align: center;
 }
 /* The diary tiles top-align their dot against a wrapping label (line ~1189); a 13px numbered dot next to an 11px line needs no nudge. */
@@ -1770,7 +1769,7 @@ th .money-basis {
 .rb-case-cell .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .rb-total-row > td { border-top: 2px solid var(--navy); }
 /* The word that stops the expected-fee column being read as a forecast. */
-.rb-proxy { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.rb-proxy { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 .rb-recover-row .btn-retention { flex: 0 0 auto; }
 
 /* ---- Rate & ERC alerts, now carrying money (Today) ------------------------ */
@@ -1836,7 +1835,7 @@ th .money-basis {
 .rev-map-table td.rev-eg { color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rev-map-table select { font-size: 12.5px; padding: 4px 6px; min-width: 190px; }
 .rev-map-table tr.rev-unstored td.rev-h, .rev-map-table tr.rev-ignored td.rev-h { font-weight: 500; color: var(--muted); }
-.rev-why { display: block; font-size: 11.5px; color: var(--muted); margin-top: 2px; white-space: normal; }
+.rev-why { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; white-space: normal; }
 .rev-map-summary { font-size: 13px; margin: 0 0 10px; }
 .rev-map-scroll { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 
@@ -1851,7 +1850,7 @@ th .money-basis {
 .rev-diff-table tr.rev-same td { color: var(--muted); }
 .rev-diff-table select { font-size: 12px; padding: 3px 5px; }
 .rev-nostore { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
-.rev-nostore code { font-size: 11.5px; }
+.rev-nostore code { font-size: 12px; }
 .rev-stage-move { font-size: 12.5px; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--amber-bg); color: var(--amber); }
 .rev-stage-move label { display: inline-flex; gap: 6px; align-items: center; font-weight: 600; }
 .rev-stage-move input { width: auto; margin: 0; }
@@ -1887,7 +1886,7 @@ th .money-basis {
 .client-advocacy-line a:hover { color: var(--navy-700); }
 
 /* ---- Review score chip (case notes + client timeline + dashboard) ---- */
-.review-score-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700;
+.review-score-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700;
   border-radius: 999px; padding: 1px 8px; white-space: nowrap; font-variant-numeric: tabular-nums; vertical-align: middle; }
 .review-score-chip.detractor { color: var(--red); background: var(--red-bg); border: 1px solid #f3c8c2; }
 .review-score-chip.passive { color: var(--amber); background: var(--amber-bg); border: 1px solid #e8d5a8; }
@@ -1900,7 +1899,7 @@ th .money-basis {
 #report-advocacy-panel .adv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 16px; margin-top: 12px; min-width: 0; }
 #report-advocacy-panel .adv-block { min-width: 0; }
 #report-advocacy-panel .adv-block h4 { font-size: 13px; margin: 0 0 2px; color: var(--dark); }
-#report-advocacy-panel .adv-basis { font-size: 11.5px; color: var(--muted); margin: 0 0 8px; line-height: 1.45; }
+#report-advocacy-panel .adv-basis { font-size: 12px; color: var(--muted); margin: 0 0 8px; line-height: 1.45; }
 #report-advocacy-panel table { width: 100%; max-width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
 #report-advocacy-panel td, #report-advocacy-panel th { overflow-wrap: anywhere; }
 #report-advocacy-panel #adv-nps-table th:first-child, #report-advocacy-panel #adv-top-table th:first-child { width: 40%; }
@@ -1921,8 +1920,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #report-advocacy-panel .adv-series { display: flex; align-items: flex-end; gap: 6px; margin: 6px 0 2px; }
 #report-advocacy-panel .adv-mon { flex: 1 1 0; text-align: center; min-width: 0; }
 #report-advocacy-panel .adv-mon .adv-bar { background: var(--navy); border-radius: 3px 3px 0 0; min-height: 2px; }
-#report-advocacy-panel .adv-mon .adv-mlbl { font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
-#report-advocacy-panel .adv-mon .adv-mn { font-size: 11px; font-weight: 700; color: var(--dark); font-variant-numeric: tabular-nums; }
+#report-advocacy-panel .adv-mon .adv-mlbl { font-size: 12px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
+#report-advocacy-panel .adv-mon .adv-mn { font-size: 12px; font-weight: 700; color: var(--dark); font-variant-numeric: tabular-nums; }
 #report-advocacy-panel .adv-headline { display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline; margin: 2px 0 6px; }
 /* The promoters list: the score leads each row's sub-line (green, like the NPS list's promoter tint), and the verb chips reuse .ret-row-acts wholesale. */
 #report-advocacy-panel .adv-promo-score { font-weight: 700; color: var(--green); font-variant-numeric: tabular-nums; }
@@ -1951,11 +1950,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #case-docs .doc-main, #case-files .doc-main { flex: 1 1 auto; min-width: 0; }
 #case-docs .doc-item, #case-files .doc-item { font-size: 13px; font-weight: 600; color: var(--dark); overflow-wrap: anywhere; }
 #case-docs .doc-meta, #case-files .doc-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
-#case-docs .doc-date, #case-files .doc-date { font-size: 11px; color: var(--muted); }
-#case-docs .doc-note { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-style: italic; overflow-wrap: anywhere; }
-#case-docs .doc-meta .doc-open, #case-files .doc-meta .cf-open { padding: 1px 7px; font-size: 11px; line-height: 1.5; min-height: 0; }
+#case-docs .doc-date, #case-files .doc-date { font-size: 12px; color: var(--muted); }
+#case-docs .doc-note { font-size: 12px; color: var(--muted); margin-top: 3px; font-style: italic; overflow-wrap: anywhere; }
+#case-docs .doc-meta .doc-open, #case-files .doc-meta .cf-open { padding: 1px 7px; font-size: 12px; line-height: 1.5; min-height: 0; }
 #case-docs .doc-acts, #case-files .doc-acts { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
-#case-docs .doc-acts .btn, #case-files .doc-acts .btn { padding: 2px 8px; font-size: 11.5px; }
+#case-docs .doc-acts .btn, #case-files .doc-acts .btn { padding: 2px 8px; font-size: 12px; }
 #case-docs .doc-actions, #case-files .doc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 #case-docs .doc-link-out { margin-top: 10px; }
 #case-docs .doc-link-out input { font-size: 12px; }
@@ -1978,7 +1977,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #report-conveyancer-panel td.num, #report-conveyancer-panel th.num { text-align: right; font-variant-numeric: tabular-nums; }
 #report-conveyancer-panel .conv-slowest td { background: var(--red-bg); }
 #report-conveyancer-panel .conv-slow-badge { margin-left: 6px; }
-#report-conveyancer-panel .adv-basis { font-size: 11.5px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
+#report-conveyancer-panel .adv-basis { font-size: 12px; color: var(--muted); margin: 8px 0 0; line-height: 1.45; }
 #report-conveyancer-panel .adv-empty { font-size: 12.5px; color: var(--muted); background: var(--light);
   border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; line-height: 1.5; }
 /* Round-11 UI additions */
@@ -2015,7 +2014,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   list-style: none;
 }
 .report-ledger > summary::-webkit-details-marker { display: none; }
-.report-ledger > summary::after { content: "\25BE"; font-size: 11px; color: var(--muted); }
+.report-ledger > summary::after { content: "\25BE"; font-size: 12px; color: var(--muted); }
 .report-ledger[open] > summary::after { content: "\25B4"; }
 .report-ledger > summary:hover { border-color: #b9c7d8; color: var(--navy); }
 .report-ledger[open] > summary { margin-bottom: 12px; }
@@ -2042,7 +2041,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* ROUND 12b (pass A) — scope honesty, the call pack, and the two new filters */
 /* W-7 — the scope word under every Today KPI number. */
 .kpi-scope {
-  margin-top: 5px; font-size: 10px; font-weight: 600;
+  margin-top: 5px; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); opacity: .85;
 }
@@ -2066,7 +2065,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* The case↔diary and documents flow */
 .appt-outcome {
   display: inline-flex; align-items: center; gap: 3px;
-  font-size: 10.5px; font-weight: 700; line-height: 1.5;
+  font-size: 12px; font-weight: 700; line-height: 1.5;
   padding: 0 6px; border-radius: 999px;
   border: 1px solid transparent; white-space: nowrap;
 }
@@ -2105,7 +2104,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   display: flex; align-items: baseline; gap: 5px;
   background: var(--amber-bg); border-left: 3px solid var(--amber);
   border-radius: 6px; padding: 3px 7px; margin-bottom: 4px;
-  font-size: 11.5px; color: var(--dark); cursor: pointer;
+  font-size: 12px; color: var(--dark); cursor: pointer;
   transition: background .12s ease;
 }
 .diary-task:hover { background: #f4e6c6; }
@@ -2125,7 +2124,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .diary-day-tasks .diary-task { margin-bottom: 0; max-width: 320px; }
 /* W-26 · the month cell's "+N more" · Reads as a control, not as another entry: no left bar, no fill, just a link that says how much is behind it. */
 .diary-more {
-  display: block; font-size: 11.5px; font-weight: 700; color: var(--navy);
+  display: block; font-size: 12px; font-weight: 700; color: var(--navy);
   padding: 2px 4px; margin-bottom: 4px; cursor: pointer; border-radius: 4px;
 }
 .diary-more:hover { background: var(--light); text-decoration: underline; }
@@ -2172,7 +2171,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .care-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; vertical-align: middle; }
 .care-chip {
   display: inline-block; padding: 2px 9px; border-radius: 999px;
-  font-size: 11px; font-weight: 600; white-space: nowrap;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
   border: 1px solid transparent; cursor: help;
 }
 .care-chip-vuln { background: #f3ecfb; color: #6d3fa8; border-color: #e0d0f2; }
@@ -2224,7 +2223,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* STAFF ABSENCES The Away band is deliberately the QUIETEST thing in a diary cell: grey, striped, no colour of its own. */
 .diary-away {
   display: block; border-radius: 6px; padding: 3px 7px; margin-bottom: 4px;
-  font-size: 11.5px; font-weight: 600; color: var(--muted);
+  font-size: 12px; font-weight: 600; color: var(--muted);
   border-left: 3px solid #b9c2cd; cursor: help;
   background: repeating-linear-gradient(135deg, #eef1f5 0 6px, #e5e9ef 6px 12px);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2269,7 +2268,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .sec-card:not(.sec-collapsed) .sec-toggle-show { display: none; }
 .sec-card:not(.sec-collapsed) .sec-toggle-hide { display: inline; }
 .sec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 18px; margin-top: 10px; }
-.sec-grid-note { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+.sec-grid-note { grid-column: 1 / -1; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .sec-item { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .sec-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); flex: 0 0 92px; }
 .sec-val { font-size: 13.5px; color: var(--dark); font-weight: 600; min-width: 0; overflow-wrap: anywhere; display: flex; align-items: center; gap: 6px; }
@@ -2292,20 +2291,20 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .vault-card-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
 .vault-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .vault-name { font-weight: 700; color: var(--dark); font-size: 14px; overflow-wrap: anywhere; }
-.vault-user { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+.vault-user { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .vault-card-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 /* The vault card's ⋯ menu (was inline styles, R88 · E): a native <details> whose menu floats under the button. */
 details.vault-more { position: relative; display: inline-block; }
 details.vault-more > summary.vault-more-btn { list-style: none; display: inline-flex; }
 details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: #fff; border: 1px solid var(--border, #e4e9f0); border-radius: 8px; padding: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.12); min-width: 120px; }
-.vault-owner { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .01em; }
+.vault-owner { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .01em; }
 .vault-owner-daniel { background: var(--blue-bg); color: var(--navy); }
 .vault-owner-luke   { background: var(--green-bg); color: var(--green); }
 .vault-owner-wayne  { background: #f3ecfc; color: #6b21a8; }
 /* R73 · B5 — likewise: a credential IS shared or it isn't. Solid amber. */
 .vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
 .vault-owner-other  { background: #eef1f5; color: #556275; }
-.vault-vis { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
+.vault-vis { font-size: 12px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
 .vault-vis-restricted { background: var(--amber-bg); color: var(--amber); }
 .vault-fields { margin-top: 10px; display: grid; gap: 4px; }
 .vault-field { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
@@ -2448,7 +2447,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .row-item.cl-mini .t { font-weight: 600; color: #445066; cursor: pointer; font-size: 12.5px; }
 .cl-mini-loan { color: #66738a; font-weight: 400; }
 .cl-mini-hint { color: #7a8699; font-size: 12px; white-space: nowrap; }
-.row-item.cl-mini .cl-prot-chip { font-size: 10.5px; opacity: 0.9; }
+.row-item.cl-mini .cl-prot-chip { font-size: 12px; opacity: 0.9; }
 /* R61 — site-wide hierarchy pass: banded sections + current-first, quieter repetition. */
 /* A · My Day bands */
 .brief-sec { display: flex; align-items: baseline; gap: 8px; margin: 12px 0 4px; padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
@@ -2456,8 +2455,8 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .brief-sec-ic { font-size: 13px; }
 .brief-sec-n { font-weight: 800; background: rgba(255,255,255,0.75); border-radius: 10px; padding: 0 8px; }
 /* The unit beside the count chip ("rows · 6 items"). */
-.brief-sec-unit { margin-left: 5px; font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 11.5px; opacity: .8; }
-.brief-sec-why { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11.5px; opacity: 0.75; }
+.brief-sec-unit { margin-left: 5px; font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 12px; opacity: .8; }
+.brief-sec-why { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 12px; opacity: 0.75; }
 .brief-sec-hot  { background: #fdecea; color: #b3261e; border-left: 4px solid #d93025; }
 .brief-sec-warm { background: #fef3e0; color: #9a6200; border-left: 4px solid #f5a623; }
 .brief-sec-rest { background: #eef1f5; color: #556275; border-left: 4px solid #aab4c3; }
@@ -2479,7 +2478,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .ret-group-h.ret-g-soon { background: #fef3e0; border-left: 4px solid #f5a623; }
 /* The third group the list always contained and never headed: rows carried by an ERC conflict alone, whose rate ends beyond the reminder window. */
 .ret-group-h.ret-g-erc { background: #eef1f7; border-left: 4px solid #6b7c99; }
-.ret-year-h { margin: 10px 0 2px; font-size: 11.5px; font-weight: 800; letter-spacing: 0.06em; color: #8a93a5; border-bottom: 1px solid #e3e7ee; padding-bottom: 2px; }
+.ret-year-h { margin: 10px 0 2px; font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: #8a93a5; border-bottom: 1px solid #e3e7ee; padding-bottom: 2px; }
 /* R62 — the R61 leftovers: Emails current-first, fee-status weighting, Settings bands. */
 .row-item.qrow-cancelled { opacity: 0.55; }
 .row-item.qrow-cancelled:hover { opacity: 0.9; }
@@ -2491,7 +2490,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .settings-details[open] > summary { margin-bottom: 10px; }
 .ret-month-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .ret-month-chips .due-chips-lbl { margin-right: 2px; }
-.ret-month-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+.ret-month-chip .count { margin-left: 5px; background: rgba(16,42,78,.08); border-radius: 10px; padding: 0 6px; font-size: 12px; font-weight: 700; }
 /* The chosen chip is a WHITE pill, so a white-on-white count would vanish. */
 .ret-month-chip.scope-active .count { background: var(--navy); color: #fff; }
 .bulk-bar #ret-bulk-clear { margin-left: auto; }
@@ -2574,7 +2573,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .client-portfolio .cpf-dot { color: #9aa5b8; }
 /* The two "this figure is incomplete" notes. */
 .client-portfolio .cpf-excl,
-.client-portfolio .cpf-miss { font-size: 11.5px; color: #8a6d1f; font-weight: 600; }
+.client-portfolio .cpf-miss { font-size: 12px; color: #8a6d1f; font-weight: 600; }
 .client-portfolio-sub { margin: 0 0 10px; font-size: 12px; line-height: 1.55; }
 /* The timeline fold (3+ cases). Styled like the .cprop-prev fold below it so the record has ONE visual language for "there is more here, folded". */
 .tl-fold { margin: 6px 0 10px; }
@@ -2673,15 +2672,15 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
   padding: 5px 9px; font-size: 12px; line-height: 1.4; color: var(--text);
 }
 .whatsnew-text { flex: 0 1 auto; max-width: 96ch; }
-.whatsnew-band .btn { flex: none; padding: 1px 8px; font-size: 11.5px; margin-left: auto; }
+.whatsnew-band .btn { flex: none; padding: 1px 8px; font-size: 12px; margin-left: auto; }
 /* R87 · today (A2) — the release's clauses live in a "Details" howFold on the same line. */
 .whatsnew-band .whatsnew-fold { margin: 0; flex: 1 1 auto; min-width: 0; }
-.whatsnew-band .whatsnew-fold > summary { font-size: 11.5px; padding: 0; }
+.whatsnew-band .whatsnew-fold > summary { font-size: 12px; padding: 0; }
 .whatsnew-band .whatsnew-fold .rep-howcounted-body { margin-top: 4px; }
 .whatsnew-band .whatsnew-fold ul { margin: 0 0 0 16px; font-size: 12px; color: var(--muted); line-height: 1.45; }
 /* B1/B2/B3 — default assignees, Watchtower bulk triage, email preview. */
 /* B1 — the "new cases start unassigned / on you" sentence, inside the new-case core grid. */
-.case-assign-sub { margin: -4px 0 0; font-size: 11.5px; line-height: 1.45; }
+.case-assign-sub { margin: -4px 0 0; font-size: 12px; line-height: 1.45; }
 /* B1 — "this goes in Wayne's diary, not yours", under the appointment form's Who select. */
 /* B2 — the Watchtower's per-row tick and its per-rule Select all. */
 .wt-cb { width: 18px; height: 18px; cursor: pointer; accent-color: var(--navy); margin: 0; flex: 0 0 auto; align-self: center; }
@@ -2718,7 +2717,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .em-prev-body p:last-child { margin-bottom: 0; }
 /* A link in a preview is TEXT, never a link — the URL is shown so it can be read and judged. */
 .em-prev-link { text-decoration: underline; text-decoration-style: dotted; }
-.em-prev-note { margin-top: 8px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.em-prev-note { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.45; }
 /* R73 · BUILD A — LAYOUT, OVERFLOW AND THE PHONE PASS. */
 /* A2 · BULK BARS THAT STAY WITH YOU (panel #3). */
 /* Watchtower: pinned to the top of the list's OWN scroller (#watchtower-list is the .dash-scroll), above the rows it acts on. */
@@ -2812,7 +2811,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .rep-hero-num { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
 .rep-hero-pct { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rep-hero-lbl { font-size: 13px; color: var(--muted); }
-.rep-hero-basis { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
+.rep-hero-basis { flex-basis: 100%; font-size: 12px; color: var(--muted); }
 /* The other three month figures, one quiet line under the hero. */
 .rep-hero-sec { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: -4px 0 12px; font-size: 13px; color: var(--muted); }
 .rep-hero-sec[hidden], .rep-hero-sec.hidden { display: none; }
@@ -2823,7 +2822,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
   list-style: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 0;
 }
 .rep-howcounted > summary::-webkit-details-marker { display: none; }
-.rep-howcounted > summary::before { content: "▸"; font-size: 11px; }
+.rep-howcounted > summary::before { content: "▸"; font-size: 12px; }
 .rep-howcounted[open] > summary::before { content: "▾"; }
 .rep-howcounted > summary:focus-visible { border-radius: 4px; }
 .rep-howcounted-body { margin-top: 6px; max-width: 78ch; }
@@ -2836,7 +2835,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 /* R87 · book · C3 — the .row-more rules moved to the R88 list kit block below. */
 /* R87 · book · C3 — the row's dial pair sits on the verb line. */
 #ret-rates-list .ret-row-acts { display: inline-flex; vertical-align: middle; margin-left: 8px; }
-.prot-rank { font-size: 11.5px; font-variant-numeric: tabular-nums; margin-right: 2px; }
+.prot-rank { font-size: 12px; font-variant-numeric: tabular-nums; margin-right: 2px; }
 /* A5c — the two band headings the Data health tile wall is sorted inside. */
 #dh-kpi-row { grid-auto-rows: auto; }
 .dh-band-h {
@@ -2887,7 +2886,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 /* --- B2 · required marks and field-anchored errors ------------------------ */
 .req-mark {
   display: inline-block; margin-left: 6px;
-  font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
   color: var(--muted); background: var(--light);
   border-radius: 4px; padding: 1px 5px; vertical-align: 1px;
 }
@@ -3113,7 +3112,7 @@ details.case-details.case-fold { border-top: 1px solid var(--border); padding: 0
 .checks-drawer > summary { list-style: none; cursor: pointer; user-select: none; }
 .checks-drawer > summary::-webkit-details-marker { display: none; }
 .checks-drawer > summary > h3 { display: flex; align-items: center; gap: 8px; margin: 0; }
-.checks-drawer > summary > h3::after { content: "\25B8"; color: var(--muted); font-size: 10px; margin-left: auto; }
+.checks-drawer > summary > h3::after { content: "\25B8"; color: var(--muted); font-size: 12px; margin-left: auto; }
 .checks-drawer[open] > summary > h3::after { content: "\25BE"; }
 .checks-drawer[open] > summary { margin-bottom: 8px; }
 .checks-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
@@ -3154,7 +3153,7 @@ details.case-details.case-fold { border-top: 1px solid var(--border); padding: 0
 /* ---- PHONE — the one phone breakpoint (was 760 + 767) ---- */
 
 /* R87 · today (T1 / 02 #10) — the scope word is said ONCE, on the Today heading. */
-#today-heading .kpi-row-scope { display: inline; margin: 0 0 0 2px; vertical-align: middle; font-size: 11px; }
+#today-heading .kpi-row-scope { display: inline; margin: 0 0 0 2px; vertical-align: middle; font-size: 12px; }
 /* R87 · today (T1) — the date inside My Day's heading. */
 #briefing-panel > h3 .brief-date { font-weight: 500; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--muted); margin-left: 4px; }
 /* R87 · today (A6) — My Day's ⋯ overflow menu: a closed <details> in the panel heading; every former header control keeps its id inside it. */
@@ -3215,7 +3214,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .sidenav { flex-direction: row; padding: 0; gap: 2px; }
   .sidenav button {
     flex-direction: column; gap: 2px;
-    padding: 6px 8px; font-size: 11.5px;
+    padding: 6px 8px; font-size: 12px;
     white-space: nowrap;
     border-left: none; border-bottom: 3px solid transparent;
     border-radius: 8px 8px 0 0;
@@ -3307,7 +3306,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   /* ---- 390px hardening ---------------------------------------------------- */
   .board-legend { gap: 4px 14px; margin: -4px 0 10px; }
   /* A card is a third of the phone's height mostly because of an always-visible stage <select> (SM-22). */
-  .card .flags .badge { font-size: 10.5px; }
+  .card .flags .badge { font-size: 12px; }
   .kpi .lbl { margin-top: auto; }
   /* An empty diary/board slot should not claim a whole screen on a phone. */
   .board-empty { max-width: 100%; padding: 16px; }
@@ -3342,15 +3341,15 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
     padding: 6px 10px 6px 9px;
   }
   #page-dashboard #kpi-row > .kpi .num { font-size: 16px; }
-  #page-dashboard #kpi-row > .kpi .lbl { font-size: 10.5px; }
-  #page-dashboard #kpi-row > .kpi .kpi-delta { font-size: 10px; }
+  #page-dashboard #kpi-row > .kpi .lbl { font-size: 12px; }
+  #page-dashboard #kpi-row > .kpi .kpi-delta { font-size: 12px; }
   #ops-strip { gap: 6px; margin-bottom: 8px; }
   /* Six chips whose labels are sentences ("document chases exhausted") wrapped onto FOUR lines at 390px. */
   #ops-strip .ops-chips {
     display: flex; flex-wrap: nowrap; gap: 6px; width: 100%;
     overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 3px;
   }
-  #ops-strip .ops-chip { flex: 0 0 auto; font-size: 11px; padding: 4px 8px; gap: 4px; white-space: nowrap; }
+  #ops-strip .ops-chip { flex: 0 0 auto; font-size: 12px; padding: 4px 8px; gap: 4px; white-space: nowrap; }
   .dash-notice .dash-notice-why { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   /* The two -webkit-line-clamp rules that used to live here are gone. */
   .wt-cb { width: 24px; height: 24px; }
@@ -3450,7 +3449,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   table.mob-cards > tbody > tr > td::before {
     content: attr(data-lbl);
     display: inline-block; min-width: 84px; padding-right: 8px; vertical-align: baseline;
-    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
     color: var(--muted); line-height: 1.6;
   }
   /* Nothing to say and no label to hang on it — a blank cell is a line of card wasted. */
@@ -3623,7 +3622,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .kit-row .row-head > .t { min-width: 0; overflow-wrap: anywhere; }
 .kit-row a.t { text-decoration: none; }
 .kit-row .row-chips { display: inline-flex; align-items: center; gap: 4px; }
-.kit-row .row-chip { font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; line-height: inherit; }
+.kit-row .row-chip { font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; line-height: inherit; }
 .kit-row .row-chip:hover { filter: brightness(.95); }
 /* R88 · fixer (10 D3): the fact TEXT takes the ellipsis; the 📞 / 💬 pair (.row-contact) never shrinks, so it is never clipped off a desktop row. */
 .kit-row .row-fact { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; overflow: hidden; }
@@ -3881,7 +3880,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .seo-table td.seo-iss-cell { white-space: normal; }
 .seo-iss > summary { list-style: none; cursor: pointer; display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .seo-iss > summary::-webkit-details-marker { display: none; }
-.seo-iss > summary::after { content: "▸"; color: var(--muted); font-size: 11px; align-self: center; }
+.seo-iss > summary::after { content: "▸"; color: var(--muted); font-size: 12px; align-self: center; }
 .seo-iss[open] > summary::after { content: "▾"; }
 .seo-chip { cursor: help; }
 .seo-iss-body { margin-top: 6px; max-width: 46ch; font-size: 12.5px; }
@@ -3908,6 +3907,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .seo-rec-a { margin-top: 4px; font-size: 13px; max-width: 80ch; }
 .seo-qtable td.seo-q { white-space: normal; min-width: 180px; }
 /* ===== END R93 · C CSS ===== */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 /* R90 · C utilities — what the fixed inline style="…" values became. !important on purpose: an
    inline style beat every stylesheet rule, so the class that replaces one must too (else a more

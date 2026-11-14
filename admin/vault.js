@@ -399,4 +399,4 @@ async function deleteVaultEntry(id) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_vault = "r100";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_vault = "r101";   // R89 — the CTO bumps all seven together at each gate
