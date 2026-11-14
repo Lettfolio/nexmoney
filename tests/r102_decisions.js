@@ -82,6 +82,27 @@ const scope = (p) => p.evaluate(() => ({
   await firm.waitForSelector("#cl-sort");
   ok("D3 · the harness seam keeps A–Z for the older suites", await firm.evaluate(() => document.getElementById("cl-sort").value) === "name");
 
+  console.log("E · B1 — four filter chips and More filters");
+  const chips = () => owner.evaluate(() => ({
+    shown: [...document.querySelectorAll("#client-segment > .seg-btn")].filter((b) => !b.hidden).map((b) => b.dataset.seg.replace(/^rate_\d+$/, "rate_Y")),
+    all: document.querySelectorAll("#client-segment > .seg-btn").length,
+    more: (document.getElementById("client-seg-more") || {}).textContent, expanded: (document.getElementById("client-seg-more") || { getAttribute: () => null }).getAttribute("aria-expanded"),
+  }));
+  const c0 = await chips();
+  ok("E1 · four chips on show, eight in the strip", JSON.stringify(c0.shown) === '["all","no_live_case","no_protection","cold"]' && c0.all === 8, JSON.stringify(c0));
+  ok("E2 · a More filters button, collapsed", c0.more === "More filters" && c0.expanded === "false", JSON.stringify(c0));
+  await owner.click("#client-seg-more");
+  await owner.waitForFunction(() => document.getElementById("client-seg-more").textContent === "Fewer filters", null, { timeout: 5000 });
+  const c1 = await chips();
+  ok("E3 · More filters shows all eight", c1.shown.length === 8 && c1.expanded === "true", JSON.stringify(c1));
+  await owner.click('#client-segment > .seg-btn[data-seg="no_dob"]');
+  await owner.waitForTimeout(700);
+  await owner.click("#client-seg-more");
+  await owner.waitForFunction(() => document.getElementById("client-seg-more").textContent === "More filters", null, { timeout: 5000 });
+  const c2 = await chips();
+  ok("E4 · folded again, the pressed chip stays on show", JSON.stringify(c2.shown) === '["all","no_live_case","no_protection","no_dob","cold"]', JSON.stringify(c2.shown));
+  ok("E5 · the harness seam starts with all eight shown", await firm.evaluate(() => [...document.querySelectorAll("#client-segment > .seg-btn")].filter((b) => !b.hidden).length) === 8);
+
   const errs = [owner, admin, adv, firm].flatMap((p) => p.__errs);
   ok("Z · no page errors", errs.length === 0, errs.join(" | ").slice(0, 300));
   console.log(`\nr102_decisions: ${pass} passed, ${fail} failed`);

@@ -644,7 +644,7 @@ function segmentChipsHtml(o) {
     const on = !!c.active;
     const n = c.count == null ? "" : ` <span class="seg-count">${esc(c.count)}</span>`;
     return `<button type="button" class="seg-btn${on ? " active" : ""}${c.cls ? " " + esc(c.cls) : ""}"${kitAttr("id", c.id)} data-seg="${esc(c.key)}" aria-pressed="${on}"${kitAttr("title", c.title)}${kitDataAttrs(c.attrs)}>${esc(c.label == null ? c.key : c.label)}${n}</button>`;
-  }).join("") + `</div>`;
+  }).join("") + (o.tailHtml || "") + `</div>`;
 }
 /* Pressing a chip flips aria-pressed / .active inside ITS strip at once; the page's own data-seg
    handler then re-renders. One delegated listener for every strip on every page. */
@@ -19297,6 +19297,7 @@ function clientTextMatch(c, f, fPhone, phoneSearch) {
 /* R102 · B2 (Daniel, 14 Nov 2026): the list opens on the clients somebody has just worked on, not on the As.
    "Touched" = the latest change to the client record or to any of their cases. (The harness keeps A–Z: see mock-supabase.js.) */
 let clientSort = window.__NEX_TODAY_SCOPE === "all" ? "name" : "touched";
+let clientSegMore = window.__NEX_TODAY_SCOPE === "all";   // R102 · B1 — "More filters" open? (the harness starts open, as the suites expect all eight)
 function clientTouchedAt(c) {
   return (c.cases || []).reduce((m, x) => { const u = String((x && x.updated_at) || ""); return u > m ? u : m; }, String(c.updated_at || c.created_at || ""));
 }
@@ -19564,9 +19565,14 @@ function renderClientSegments(searched, ctx, segs, cutoff) {
   const slot = $("#client-segment-slot");
   if (!slot) return;
   const coldDef = clientColdDefinition(cutoff);
+  /* R102 · B1 (Daniel, 14 Nov 2026): four chips on show — All, No live case, No protection outcome, Not
+     contacted — and the rate-end years and Missing DOB behind "More filters". A folded chip that is the one
+     pressed stays visible. */
+  const folded = (k) => /^rate_|^no_dob$/.test(k) && !clientSegMore && clientSegment !== k;
   slot.innerHTML = segmentChipsHtml({
     id: "client-segment", ariaLabel: "Client segment",
-    chips: segs.map(([k, l, d]) => ({ key: k, label: l, count: searched.filter((c) => clientInSegment(c, k, ctx)).length, active: clientSegment === k, title: k === "cold" ? coldDef : d })),
+    chips: segs.map(([k, l, d]) => ({ key: k, label: l, count: searched.filter((c) => clientInSegment(c, k, ctx)).length, active: clientSegment === k, title: k === "cold" ? coldDef : d, attrs: { hidden: folded(k) } })),
+    tailHtml: `<button type="button" class="btn btn-sm btn-ghost" id="client-seg-more" aria-expanded="${clientSegMore}">${clientSegMore ? "Fewer filters" : "More filters"}</button>`,
   });
   const def = $("#client-seg-def");
   if (def) {
@@ -19684,6 +19690,11 @@ function syncClientBulk(list) {
     const b = e.target.closest(".seg-btn");
     if (!b || !b.dataset.seg || b.dataset.seg === clientSegment) return;
     clientSegment = b.dataset.seg;
+    loadClients($("#client-search").value);
+  });
+  if (segSlot) segSlot.addEventListener("click", (e) => {
+    if (!e.target.closest("#client-seg-more")) return;
+    clientSegMore = !clientSegMore;
     loadClients($("#client-search").value);
   });
 })();
