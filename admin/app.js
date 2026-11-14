@@ -19294,7 +19294,12 @@ function clientTextMatch(c, f, fPhone, phoneSearch) {
 }
 /* R11-6: SORTING THE CLIENT LIST, AND THE ROW DETAIL THAT MAKES A SORT READABLE. Alphabetical answers "where is Mrs
    Okafor" and nothing else. … */
-let clientSort = "name";
+/* R102 · B2 (Daniel, 14 Nov 2026): the list opens on the clients somebody has just worked on, not on the As.
+   "Touched" = the latest change to the client record or to any of their cases. (The harness keeps A–Z: see mock-supabase.js.) */
+let clientSort = window.__NEX_TODAY_SCOPE === "all" ? "name" : "touched";
+function clientTouchedAt(c) {
+  return (c.cases || []).reduce((m, x) => { const u = String((x && x.updated_at) || ""); return u > m ? u : m; }, String(c.updated_at || c.created_at || ""));
+}
 /* The earliest rate end on any of this client's cases that has not already passed. Past rate ends are
    deliberately not counted: "next" means next… */
 function clientNextRateEnd(c, todayStr) {
@@ -19340,6 +19345,10 @@ function clientRateKey(c, rateYear, todayStr) {
   return rateYear ? clientRateEndInYear(c, rateYear) : clientNextRateEnd(c, todayStr);
 }
 function sortClientList(list, sort, todayStr, rateYear) {
+  if (sort === "touched") {
+    const nm = (c) => `${c.last_name || ""} ${c.first_name || ""}`.toLowerCase();
+    return list.slice().sort((a, b) => clientTouchedAt(b).localeCompare(clientTouchedAt(a)) || nm(a).localeCompare(nm(b)));
+  }
   if (sort === "recent") {
     // clients.created_at — when the record was added here, not when they became a client of the
     // firm. Said on the control, because those are not the same date for an imported book.
@@ -19657,7 +19666,7 @@ function syncClientBulk(list) {
     scope: { id: "cl-scope", value: "all", options: ["mine", "all"], ariaLabel: "Whose clients",
       titles: { mine: "Clients with at least one case assigned to you — remembered for next time", all: "Every client on the book — remembered for next time" } },
     sort: { id: "cl-sort", value: clientSort, ariaLabel: "Sort the client list",
-      options: [{ value: "name", label: "Name A–Z" }, { value: "rate_end", label: "Next rate end" }, { value: "recent", label: "Recently added" }] },
+      options: [{ value: "touched", label: "Recently touched" }, { value: "name", label: "Name A–Z" }, { value: "rate_end", label: "Next rate end" }, { value: "recent", label: "Recently added" }] },
     extra: `<button type="button" class="btn btn-sm list-scope-other hidden" id="cl-scope-other"></button>`,
   });
   const tools = $("#client-tools");

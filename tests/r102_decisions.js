@@ -65,6 +65,23 @@ const scope = (p) => p.evaluate(() => ({
   ok("C1 · heading, My Day, tiles, cap notice, ops strip", JSON.stringify(order.ids) === '["today-heading","briefing-panel","kpi-row","dash-cap-notice","ops-strip"]', JSON.stringify(order.ids));
   ok("C2 · the first task row starts in the top half of a 768px screen", order.firstRow < 384 && order.kpiBelow, JSON.stringify(order));
 
+  console.log("D · B2 — Clients opens on Recently touched");
+  await owner.evaluate(() => window.nav("clients"));
+  await owner.waitForSelector("#cl-sort");
+  await owner.waitForTimeout(900);
+  const cl = await owner.evaluate(() => {
+    const byId = {}; window.__mock.db.clients.forEach((c) => { byId[c.id] = String(c.updated_at || c.created_at || ""); });
+    window.__mock.db.cases.forEach((x) => { const u = String(x.updated_at || ""); if (x.client_id && u > (byId[x.client_id] || "")) byId[x.client_id] = u; });
+    const ids = [...document.querySelectorAll("#page-clients [data-act='openClient'], #page-clients .kit-row .t")].map((e) => { try { return JSON.parse(e.getAttribute("data-args") || "[]")[0]; } catch (_) { return null; } }).filter(Boolean);
+    const stamps = ids.map((id) => byId[id]);
+    return { sort: document.getElementById("cl-sort").value, n: ids.length, desc: stamps.every((v, i) => i === 0 || stamps[i - 1] >= v) };
+  });
+  ok("D1 · the sort control starts on Recently touched", cl.sort === "touched", cl.sort);
+  ok("D2 · the rows run newest-touched first (client or any of their cases)", cl.n > 5 && cl.desc, JSON.stringify(cl));
+  await firm.evaluate(() => window.nav("clients"));
+  await firm.waitForSelector("#cl-sort");
+  ok("D3 · the harness seam keeps A–Z for the older suites", await firm.evaluate(() => document.getElementById("cl-sort").value) === "name");
+
   const errs = [owner, admin, adv, firm].flatMap((p) => p.__errs);
   ok("Z · no page errors", errs.length === 0, errs.join(" | ").slice(0, 300));
   console.log(`\nr102_decisions: ${pass} passed, ${fail} failed`);

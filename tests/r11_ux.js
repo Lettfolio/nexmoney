@@ -647,7 +647,7 @@ const noErr = (page, label) => ok(`no console errors (${label})`, !page.__err, J
       await gotoPage(page, "clients");
 
       const sortOpts = await page.evaluate(() => [...document.querySelectorAll("#cl-sort option")].map((o) => o.value));
-      eq("R11-E · three sort options in order", sortOpts, ["name", "rate_end", "recent"]);
+      eq("R11-E · four sort options in order (R102 · B2 added Recently touched, first)", sortOpts, ["touched", "name", "rate_end", "recent"]);
 
       /* ground truth for the two computed orders, built independently from the raw tables */
       const gtClients = await page.evaluate(async () => {
