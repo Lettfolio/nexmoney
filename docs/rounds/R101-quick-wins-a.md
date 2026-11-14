@@ -20,3 +20,21 @@ moves to round 2, where the type-scale work frees stylesheet lines under the 3,9
 Eight tags `r101`. Local: smoke 150, r87_shell 56, r73_system 73, r73_visible 88, r37 124, r65_pipeline 127,
 r69_today 71, r75_diary 102, r87_pipeline_case 81, r87_today 82, r88_case 69, r88_kit 85, r88_today 67,
 r89_operations 64, r90_queues 40, r90_carve 70, r81_platform 69, r94_csp 93, r95_kit 36; lint 0.
+
+## Batch B (same PR) — additive only
+
+Reading the code for the remaining quick wins showed that several (Today's layout order, the scope sentences,
+the go-live checklist, filter chips, row buttons) are deliberate decisions from earlier rounds, each with its
+own tests. Those are held for Daniel's decision rather than reversed unattended. Batch B is the additive set:
+
+- **N2 — keyboard shortcuts.** Ctrl/Cmd+K opens search (as `/` does); `g` then `t p d c r v s` goes to Today,
+  Pipeline, Diary, Clients, Retention, Vault, Settings; `n` starts a case; `?` opens Help, which now lists them.
+  All inert while a field has focus or a record, overlay or the palette is open (`anyPanelOpen()`).
+- **N8 — refresh on return.** `refreshOnReturn()`: when the tab comes back into view after 60s or more away the
+  open page re-reads (same page and tab). Stands down while a panel is open, a field has focus, rows are ticked
+  for a bulk action, or on Settings.
+- **X7 — reduced motion.** One `prefers-reduced-motion` rule; two age-edge rules merged so admin.css stays at
+  the 3,950 cap.
+
+New suite `tests/r101_keys.js` (21). Also green locally after batch B: r87_shell, r73_system, r12b 157, r41 86,
+r68_admin 114, r65_watchtower 82, r8_touch 152, r94_csp 93, r95_kit 36, r90_queues 40; smoke 150; lint 0.

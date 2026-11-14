@@ -4368,10 +4368,24 @@ function helpGlossaryHtml() {
       ${row("Waiting-on chips", "Who a LIVE case is sitting with right now — client, lender, solicitor or someone else — as distinct from its pipeline stage, which only says which step of the process it has reached, not who is holding it up.")}
       ${row("The money bases (Reports)", "A figure on Reports is either <strong>cash</strong> (money actually paid, counted on the date it was paid) or <strong>earned</strong> (fee value on a case that has completed, whether or not it has been paid yet). The small grey caption under almost every money figure says which — e.g. “" + esc(BASIS_CASH_MONTH) + "” or “" + esc(BASIS_INTRO_REV) + "”. The two answer different questions on purpose and are never meant to add up to one total.")}
     </dl>
+    <h3 id="help-keys-h">Keyboard shortcuts</h3>
+    <dl class="glossary-list" id="help-keys">
+      ${row("/  or  Ctrl + K", "Search clients, cases and leads, or run a command.")}
+      ${row("g then t · p · d · c · r", "Go to Today, Pipeline, Diary, Clients, Retention. Also <strong>g v</strong> for Vault and <strong>g s</strong> for Settings.")}
+      ${row("n", "New case.")}
+      ${row("?", "Open this panel.")}
+      ${row("Esc", "Close the panel in front.")}
+    </dl>
     <div class="modal-actions">
       <div><button type="button" class="btn btn-primary" id="help-retake-tour">Retake the tour</button></div>
       <div class="right"><button type="button" class="btn" id="help-close">Close</button></div>
     </div>`;
+}
+/* R101 — "g" then one of these goes to the page (pages every role can open). */
+const HOTKEY_PAGES = { t: "dashboard", p: "pipeline", d: "diary", c: "clients", r: "retention", v: "vault", s: "settings" };
+/* A record, an overlay (Help, confirm) or the palette is in front: page-level hotkeys and refreshes stand down. */
+function anyPanelOpen() {
+  return !!document.querySelector("#modal-backdrop:not(.hidden), #overlay-backdrop:not(.hidden), #palette-backdrop:not(.hidden)");
 }
 function openHelpPanel() {
   openOverlay(helpGlossaryHtml(), (finish, box) => {
@@ -4767,6 +4781,25 @@ function nav(page, push = true, tab) {
   // loader matches the persisted toggle so navigating back into #diary doesn't silently flip it back to…
   ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => loadDiaryForMode(), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, vault: loadVault }[page])();   // R89 · F — import/reports/money/data/emails load through PAGE_TAB_LOADERS; R89 · C — settings too (PAGE_TAB_LOADERS.settings)
 }
+
+/* R101 — a colleague's changes appear without a reload: when the tab comes back into view after a minute or
+   more away, the open page re-reads. It stands down while a panel is open, a field has focus, rows are
+   ticked for a bulk action, or Settings holds unsaved edits — never under someone's hands. */
+let tabHiddenAt = 0;
+const REFRESH_AWAY_MS = 60000;
+function refreshOnReturn() {
+  if (document.hidden) { tabHiddenAt = Date.now(); return false; }
+  const away = tabHiddenAt ? Date.now() - tabHiddenAt : 0;
+  tabHiddenAt = 0;
+  const app = $("#app-view");
+  if (away < REFRESH_AWAY_MS || !app || app.classList.contains("hidden") || anyPanelOpen() || currentPage === "settings") return false;
+  const a = document.activeElement, tag = a && a.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (a && a.isContentEditable)) return false;
+  if (document.querySelector("#app-view .bulk-bar:not(.is-empty)")) return false;
+  nav(currentPage, false, currentPageTab(currentPage));
+  return true;
+}
+document.addEventListener("visibilitychange", refreshOnReturn);
 
 /* ---------- Settings ---------- */
 async function loadSettings() {
@@ -26326,14 +26359,28 @@ const PALETTE_VERBS = [
     render(clients, cases, leads, q);
   }
 
-  // Global "/" hotkey — opens the palette unless the user is typing in a field.
+  /* Global hotkeys. "/" (and, R101, Ctrl/Cmd+K) opens the palette. R101 adds the rest, all inert while a
+     field has focus or any panel is open: "g" then a letter changes page, "n" starts a case, "?" opens Help. */
+  let goArmedAt = 0;
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (!appVisible()) return;
+    const key = (e.key || "").toLowerCase();
+    if (key === "k" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+      if (!backdrop.classList.contains("hidden") || anyPanelOpen()) return;
+      e.preventDefault(); openPalette(); return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target, tag = t && t.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
-    if (!appVisible() || !backdrop.classList.contains("hidden")) return;
-    e.preventDefault();
-    openPalette();
+    if (!backdrop.classList.contains("hidden") || anyPanelOpen()) return;
+    if (e.key === "/") { e.preventDefault(); openPalette(); return; }
+    if (goArmedAt && Date.now() - goArmedAt < 1500 && HOTKEY_PAGES[key]) {
+      goArmedAt = 0; e.preventDefault(); nav(HOTKEY_PAGES[key]); return;
+    }
+    goArmedAt = 0;
+    if (key === "g") { goArmedAt = Date.now(); return; }
+    if (key === "n") { e.preventDefault(); openCase(null); return; }
+    if (e.key === "?") { e.preventDefault(); openHelpPanel(); }
   });
   if (btn) btn.addEventListener("click", openPalette);
   // T1-29 — the "Esc" chip is a real close button now (was an inert <kbd>); on a phone there is

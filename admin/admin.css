@@ -632,10 +632,9 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* Even a badge cannot widen a 244px column: its text clips at the card's edge rather than being sliced mid-glyph by the column's own overflow (W23). */
 /* Time-in-stage aging (SP2b): subtle muted line + coloured left edge only when amber/red. */
 .card .age-line { margin-top: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.card.age-amber { border-left-width: 3px; border-left-color: #e0a100; }
+.card.age-amber, .card.age-amber:hover { border-left-width: 3px; border-left-color: #e0a100; }
 .card.age-red { border-left-width: 3px; border-left-color: #d64545; }
 /* Keep the coloured edge on hover (the generic .card:hover recolours all borders). */
-.card.age-amber:hover { border-left-color: #e0a100; }
 .card.age-red:hover { border-left-color: #d64545; }
 /* #a97a00 measured 3.84:1 on white, under AA. */
 .card.age-amber .age-line { color: #8a6400; }
@@ -3908,6 +3907,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .seo-rec-a { margin-top: 4px; font-size: 13px; max-width: 80ch; }
 .seo-qtable td.seo-q { white-space: normal; min-width: 180px; }
 /* ===== END R93 · C CSS ===== */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 /* R90 · C utilities — what the fixed inline style="…" values became. !important on purpose: an
    inline style beat every stylesheet rule, so the class that replaces one must too (else a more
