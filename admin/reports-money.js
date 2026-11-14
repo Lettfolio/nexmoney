@@ -63,7 +63,12 @@ const BASIS_TARGET_EARNED = "earned · proc+broker+sols · by completion date (w
 const BASIS_MY_CASH_YTD = "(cash · proc+broker+sols · by paid date · my cases · YTD · excl. future-dated)";
 const BASIS_MY_OUTSTANDING = "(earned · not yet received · my completed cases)";
 const BASIS_MY_PIPELINE = "(unweighted estimate · proc+broker · offer & exchange · my cases)";
-const basisLine = (t) => `<div class="s">${esc(t)}</div>`;
+/* R103 · O2: the fixed basis ("earned · all fee types") is a definition, not a figure — it moves to an
+   "i" tooltip (still read out, still in the DOM); only the part after " — " that carries data stays visible. */
+const basisLine = (t) => {
+  const cut = t.indexOf(" — "), basis = cut < 0 ? t : t.slice(0, cut), extra = cut < 0 ? "" : t.slice(cut + 3);
+  return `<span class="kpi-i" title="${esc(basis)}" aria-hidden="true">i</span><span class="s sr-only">${esc(basis)}</span>${extra ? `<div class="s">${esc(extra)}</div>` : ""}`;
+};
 
 /* B7 — the per-fee-type amount/date pairing is FEE_TYPES, declared with the mark-paid flow above (Batch 2).
    Before M2 a single fee_paid_at stood for all three, so a case whose broker fee landed in June and whose… */
@@ -399,24 +404,22 @@ function renderMonthReport(all, mv) {
      adviser's page would be a control that opens onto nothing. */
   const basisFold = $("#report-basis-fold");
   if (basisFold) basisFold.hidden = !!(basisLegend && basisLegend.classList.contains("hidden"));
-  /* R5-F2 — "Completed £" is the headline: fee value EARNED on the cases that completed this month. It is not
+  /* R103 · O1: "Completed £" is the hero's figure now (with its comparison chips), not a fourth tile. R5-F2 — it was the headline: it is not
      moved and its label is unchanged; the emphasis is carried by kpi-headline… */
   $("#month-kpis").innerHTML = `
     <div class="kpi"><div class="num">${cur.nSub}</div><div class="lbl">Applications submitted</div>${cmpCount("nSub")}</div>
     ${money ? `<div class="kpi kpi-secondary"><div class="num">${fmtM(cur.subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("subTotal")}</div>` : ""}
-    <div class="kpi"><div class="num">${cur.nDone}</div><div class="lbl">Completions</div>${cmpCount("nDone")}</div>
-    ${money ? `<div class="kpi kpi-headline"><div class="num">${fmtM(cur.doneTotal)}</div><div class="lbl">Completed £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("doneTotal")}</div>` : ""}`;
+    <div class="kpi"><div class="num">${cur.nDone}</div><div class="lbl">Completions</div>${cmpCount("nDone")}</div>`;
 
   /* R74 · A4a (panel D#12): THE HERO ROW, AT THE TOP OF THE PAGE. Every figure here is one the code above has
      already computed for the panel below (cur.doneTotal, and the earned/target pair the bar uses), read from the
      same helpers rather than re-derived, so the hero and the Monthly business panel can never disagree. … */
-  const heroEl = $("#report-hero"), heroStrip = $("#report-hero-strip");
+  const heroEl = $("#report-hero");
   if (heroEl) {
     const heroTarget = money ? Number(settings.monthly_fee_target || 0) : 0;
     const heroEarned = money ? earnedOnCompletion(all, mv) : null;
     heroEl.classList.toggle("hidden", !money);
-    if (heroStrip) heroStrip.classList.toggle("hidden", !money);
-    if (!money) { heroEl.innerHTML = ""; if (heroStrip) heroStrip.innerHTML = ""; }
+    if (!money) heroEl.innerHTML = "";
     else {
       const heroPct = heroTarget > 0 ? Math.round((heroEarned.total / heroTarget) * 100) : null;
       const pctColour = heroPct == null ? "" : heroPct >= 100 ? "var(--green)" : heroPct >= 60 ? "var(--amber)" : "var(--red)";
@@ -427,16 +430,8 @@ function renderMonthReport(all, mv) {
              <span class="rep-hero-lbl">${esc(monthLabel(mv))} · target ${fmtM(heroTarget)}</span>`)
         /* R87 · owner-admin (T1) — the pointer sentence ("the bar … are in Monthly business below")
            restated the panel one scroll down; the basis stays (r74 §D1d pins "paid or not" + the chip). */
-        + `<span class="rep-hero-basis">Fee value on the ${heroEarned.n} case${heroEarned.n === 1 ? "" : "s"} that completed in ${esc(monthLabel(mv))}, paid or not. <span class="money-basis">${esc(BASIS_TARGET_EARNED)}</span></span>`;
-      /* The other three month figures, demoted rather than deleted OR duplicated: one quiet line under the
-         hero, deliberately NOT a second row of tiles… */
-      if (heroStrip) {
-        heroStrip.innerHTML = `<span class="rep-hero-sec-i"><strong>${cur.nDone}</strong> completion${cur.nDone === 1 ? "" : "s"}</span>`
-          + `<span class="rep-hero-sec-i"><strong>${cur.nSub}</strong> application${cur.nSub === 1 ? "" : "s"} submitted</span>`
-          /* No basis caption here on purpose: the tile in Monthly business below carries it (and r5_batch6
-             pins "(earned · all fee types)" to exactly the two tiles that are the earned figures). */
-          + `<span class="rep-hero-sec-i"><strong>${fmtM(cur.subTotal)}</strong> submitted £</span>`;
-      }
+        + `<span class="rep-hero-basis">Fee value on the ${heroEarned.n} case${heroEarned.n === 1 ? "" : "s"} that completed in ${esc(monthLabel(mv))}, paid or not. <span class="money-basis">${esc(BASIS_TARGET_EARNED)}</span></span>`
+        + cmpMoney("doneTotal");
     }
   }
 
@@ -452,7 +447,7 @@ function renderMonthReport(all, mv) {
       const pct = Math.round((earned.total / target) * 100);
       const cashPct = Math.round((banked / target) * 100);
       targetEl.innerHTML = `
-        <div class="panel-sub target-headline u-m-12-0-4">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%) <span class="money-basis">${esc(BASIS_TARGET_EARNED)} — ${earned.n} completion${earned.n === 1 ? "" : "s"} this month, paid or not</span></div>
+        <div class="panel-sub target-headline u-m-12-0-4">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%)</div>
         
         
         ${feeBarHtml(pct, target, "monthly fee target")}
@@ -2198,8 +2193,8 @@ function renderBookKpis(c) {
     
     <div class="kpi kpi-secondary kpi-wide"><div class="num" title="${esc(fmtM(feesPaidYr))}">${fmtM(feesPaidYr)}</div><div class="lbl">Fees banked ${yr}</div>${basisLine(BASIS_CASH_YTD + (feesPaidYrFutureN ? ` — includes ${fmtM(feesPaidYrFuture)} dated after today (${feesPaidYrFutureN}); ${fmtM(feesPaidYr - feesPaidYrFuture)} actually received` : ""))}</div>
     
-    <div class="kpi dq-clickable ${feesOutstanding ? "warn" : ""}" ${actAttr("kpiGoto", "fees")} title="Broker fees on cases at ANY stage with no payment recorded — fee_status “not requested” or “requested”. Not proceeding is excluded. View the Protection &amp; Fees drawer — Fees due tab."><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Broker fees outstanding (all stages)</div>${basisLine(`(broker only · not yet received · ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced)`)}</div>
-    <div class="kpi dq-clickable ${owedNow.grand ? "warn" : ""}" id="report-kpi-owed" ${actAttr("gotoMoneyOwed")} title="Procuration, solicitor and broker fees on cases that have COMPLETED and carry no paid date — the money the firm has earned and not been paid. A wider set of fee types than the tile beside it, over a narrower set of cases. Opens Money owed on the Money tab."><div class="num" title="${esc(fmtM(owedNow.grand))}">${fmtM(owedNow.grand)}</div><div class="lbl">Owed on completed cases</div>${basisLine(`(proc + sols + broker · earned, not yet received · ${owedNow.n} completed case${owedNow.n === 1 ? "" : "s"})`)}</div>` : ""}
+    <div class="kpi dq-clickable ${feesOutstanding ? "warn" : ""}" ${actAttr("kpiGoto", "fees")} title="Broker fees on cases at ANY stage with no payment recorded — fee_status “not requested” or “requested”. Not proceeding is excluded. View the Protection &amp; Fees drawer — Fees due tab."><div class="num" title="${esc(fmtM(feesOutstanding))}">${fmtM(feesOutstanding)}</div><div class="lbl">Broker fees outstanding (all stages)</div>${basisLine(`(broker only · not yet received) — ${fmtM(feesInvoiced)} invoiced + ${fmtM(feesNotInvoiced)} not yet invoiced`)}</div>
+    <div class="kpi dq-clickable ${owedNow.grand ? "warn" : ""}" id="report-kpi-owed" ${actAttr("gotoMoneyOwed")} title="Procuration, solicitor and broker fees on cases that have COMPLETED and carry no paid date — the money the firm has earned and not been paid. A wider set of fee types than the tile beside it, over a narrower set of cases. Opens Money owed on the Money tab."><div class="num" title="${esc(fmtM(owedNow.grand))}">${fmtM(owedNow.grand)}</div><div class="lbl">Owed on completed cases</div>${basisLine(`(proc + sols + broker · earned, not yet received) — ${owedNow.n} completed case${owedNow.n === 1 ? "" : "s"}`)}</div>` : ""}
     <div class="kpi"><div class="num">${rWon + rLost ? Math.round((rWon / (rWon + rLost)) * 100) + "%" : "—"}</div><div class="lbl">Retention conversion</div></div>
     <div class="kpi"><div class="num">${completedYr.length ? Math.round((protDone / completedYr.length) * 100) + "%" : "—"}</div><div class="lbl">Protection uptake ${yr}</div></div>
     <div class="kpi ${scored.length ? "dq-clickable" : ""}" ${scored.length ? `id="report-nps-tile" ${actAttr("toggleNpsList")} title="List every case that returned a review score"` : ""}><div class="num">${scored.length ? avgNps.toFixed(1) : "—"}</div><div class="lbl">Avg review score (${scored.length})${promoterPct != null ? ` · ${promoterPct}% promoters` : ""}${scored.length ? " ▾" : ""}</div></div>`;
@@ -5111,4 +5106,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r102";   // R89
+window.__nxTag_reportsmoney = "r103";   // R89

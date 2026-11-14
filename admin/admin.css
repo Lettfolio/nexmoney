@@ -1645,7 +1645,7 @@ th .money-basis {
 /* The client-record property group heading and the case-modal identity line are the two places that carry a FULL address rather than a shortened label. */
 .cprop-hd, .cs-identity { max-width: 100%; }
 .kpi-row { grid-auto-rows: 1fr; }
-.kpi { display: flex; flex-direction: column; }
+.kpi { display: flex; flex-direction: column; position: relative; }
 /* The label sits on the tile's floor, so numbers line up across a row even when one label wraps and its neighbour does not. */
 .kpi .lbl { margin-top: auto; padding-top: 4px; }
 .kpi.kpi-secondary::before { opacity: .45; }   /* was .22 — a fourth tint */
@@ -2812,10 +2812,9 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .rep-hero-pct { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .rep-hero-lbl { font-size: 13px; color: var(--muted); }
 .rep-hero-basis { flex-basis: 100%; font-size: 12px; color: var(--muted); }
-/* The other three month figures, one quiet line under the hero. */
-.rep-hero-sec { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: -4px 0 12px; font-size: 13px; color: var(--muted); }
-.rep-hero-sec[hidden], .rep-hero-sec.hidden { display: none; }
-.rep-hero-sec-i strong { color: var(--ink, var(--navy)); font-variant-numeric: tabular-nums; }
+.rep-hero .kpi-delta { flex-basis: 100%; margin-top: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.kpi-i { position: absolute; top: 8px; right: 10px; width: 18px; height: 18px; border: 1px solid var(--line); border-radius: 50%; font-size: 12px; line-height: 16px; text-align: center; color: var(--muted); cursor: help; }
 .rep-howcounted { margin: 6px 0 0; }
 .rep-howcounted > summary {
   cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--navy);
