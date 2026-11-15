@@ -635,11 +635,11 @@ function kitVerbsHtml(verbs, more, opts) {
   const o = opts || {};
   const all = (verbs || []).filter((v) => v && v.label);
   const extra = (more || []).filter((v) => v && v.label);
-  const one = !!o.one && ROW_ONE();
-  const max = !one ? KIT_MAX_VERBS : all.length + extra.length > 2 ? 1 : 2;
-  const shown = one ? all.concat(extra).slice(0, max) : all.slice(0, max);
-  const rest = one ? all.concat(extra).slice(max) : all.slice(max).concat(extra);
-  const moreHtml = rest.length && one
+  const single = !!o.one && ROW_ONE();
+  const max = !single ? KIT_MAX_VERBS : all.length + extra.length > 2 ? 1 : 2;
+  const shown = single ? all.concat(extra).slice(0, max) : all.slice(0, max);
+  const rest = single ? all.concat(extra).slice(max) : all.slice(max).concat(extra);
+  const moreHtml = rest.length && single
     ? rowMoreOpenHtml(o.moreCls, o.moreTitle) + rest.map((v) => kitVerbHtml(v, o.verbCls)).join("") + `</span></details>`
     : rest.length
     ? `<details class="row-more${o.moreCls ? " " + esc(o.moreCls) : ""}"${kitAttr("id", o.moreId)} data-stop><summary class="btn btn-sm" title="${esc(o.moreTitle || "More actions")}">More ▾</summary><span class="row-more-body">${rest.map((v) => kitVerbHtml(v, o.verbCls)).join("")}</span></details>`
