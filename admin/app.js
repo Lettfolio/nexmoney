@@ -604,13 +604,44 @@ function kitVerbHtml(v, cls) {
   const click = v.act ? ` data-stop ${actAttr(...v.act)}` : ` data-stop`;
   return `<button type="button" ${common}${click}${v.disabled ? " disabled" : ""}>${esc(v.label)}</button>`;
 }
-/* ≤3 visible verbs; the 4th onward join `more` inside one native <details class="row-more">. */
+/* R105 · T2/B6/X8 (owner decision, 14 Nov 2026): ONE MAIN BUTTON PER ROW, THE REST BEHIND ⋯. A row that offered
+   up to six controls made every row a decision; now the verb that completes the row is the button and the others
+   are one press away. Two rules keep it honest: a menu is never built for a single leftover (two buttons beat a
+   button and a one-item menu), and the harness seam keeps the older "every verb on the row" layout that the
+   pre-R105 suites click through. */
+const ROW_ONE = () => window.__NEX_TODAY_SCOPE !== "all";
+const ROW_ONE_PREFER = ["briefDone", "wtDoneAlert", "quickApptOutcome", "markEmailHandled", "briefQueueEmail", "briefMarkQuoted", "fixContactOpen", "retryEmail", "retrySms"];
+const rowMoreOpenHtml = (cls, title) => `<details class="row-more row-one${cls ? " " + esc(cls) : ""}" data-stop><summary class="btn btn-sm" aria-label="More actions" title="${esc(title || "More actions")}">⋯</summary><span class="row-more-body">`;
+/* Takes a row's finished action HTML and re-seats it: badges, selects and other non-verbs stay where they are;
+   of the verbs, the .btn-primary (else the first in ROW_ONE_PREFER, else the first) stays and the rest move
+   inside the menu, attributes untouched — so every handler is the one it always was. */
+function rowOneHtml(html) {
+  if (!ROW_ONE() || !html || !/\S/.test(html)) return html;
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const flat = [];
+  [...t.content.children].forEach((n) => { if (n.matches(".appt-quick, .brief-lead-actions")) flat.push(...n.children); else flat.push(n); });
+  const isVerb = (el) => el.matches("button, a.btn, details");
+  const verbs = flat.filter(isVerb);
+  if (verbs.length < 3) return html;
+  const pri = verbs.find((v) => v.classList.contains("btn-primary"))
+    || ROW_ONE_PREFER.map((a) => verbs.find((v) => v.dataset.act === a)).find(Boolean) || verbs[0];
+  return flat.filter((el) => !isVerb(el)).map((el) => el.outerHTML).join("") + pri.outerHTML
+    + rowMoreOpenHtml("", "More actions on this row") + verbs.filter((v) => v !== pri).map((v) => v.outerHTML).join("") + `</span></details>`;
+}
+/* ≤3 visible verbs; the 4th onward join `more` inside one native <details class="row-more">. With opts.one
+   (R105) the first verb alone is shown and the menu's handle is ⋯. */
 function kitVerbsHtml(verbs, more, opts) {
   const o = opts || {};
   const all = (verbs || []).filter((v) => v && v.label);
-  const shown = all.slice(0, KIT_MAX_VERBS);
-  const rest = all.slice(KIT_MAX_VERBS).concat((more || []).filter((v) => v && v.label));
-  const moreHtml = rest.length
+  const extra = (more || []).filter((v) => v && v.label);
+  const single = !!o.one && ROW_ONE();
+  const max = !single ? KIT_MAX_VERBS : all.length + extra.length > 2 ? 1 : 2;
+  const shown = single ? all.concat(extra).slice(0, max) : all.slice(0, max);
+  const rest = single ? all.concat(extra).slice(max) : all.slice(max).concat(extra);
+  const moreHtml = rest.length && single
+    ? rowMoreOpenHtml(o.moreCls, o.moreTitle) + rest.map((v) => kitVerbHtml(v, o.verbCls)).join("") + `</span></details>`
+    : rest.length
     ? `<details class="row-more${o.moreCls ? " " + esc(o.moreCls) : ""}"${kitAttr("id", o.moreId)} data-stop><summary class="btn btn-sm" title="${esc(o.moreTitle || "More actions")}">More ▾</summary><span class="row-more-body">${rest.map((v) => kitVerbHtml(v, o.verbCls)).join("")}</span></details>`
     : "";
   return shown.map((v) => kitVerbHtml(v, o.verbCls)).join("") + moreHtml;
@@ -653,6 +684,15 @@ document.addEventListener("click", (e) => {
   if (!b) return;
   b.parentElement.querySelectorAll(".seg-btn").forEach((x) => { const on = x === b; x.classList.toggle("active", on); x.setAttribute("aria-pressed", String(on)); });
 });
+/* R105: a ⋯ menu folds back up once a verb inside it is pressed, on Escape, and when another one opens. */
+document.addEventListener("click", (e) => {
+  const t = e.target && e.target.closest ? e.target : null;
+  if (!t) return;
+  const own = t.closest("details.row-one");
+  document.querySelectorAll("details.row-one[open]").forEach((d) => { if (d !== own) d.open = false; });
+  if (own && t.closest(".row-more-body") && t.closest("button, a") && !t.closest(".row-more-body details")) own.open = false;
+}, true);   // capture: the menu is a data-stop barrier, which ends the bubble before any later document listener
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll("details.row-one[open]").forEach((d) => { d.open = false; }); });
 function selectAllHtml(o) {
   o = o || {};
   const n = Number(o.count) || 0;
@@ -710,7 +750,7 @@ function rowItemHtml(o) {
      takes the ellipsis. It used to be appended to the one nowrap line… */
   const fact = (o.fact ? `<span class="row-fact-t">${o.fact}</span>` : "")
     + (contact ? `<span class="row-contact">${o.fact ? "· " : ""}${contact}</span>` : "");
-  const acts = kitVerbsHtml(o.verbs, o.more, { moreCls: o.moreCls, moreTitle: o.moreTitle || "More actions on this row", verbCls: o.verbCls });
+  const acts = kitVerbsHtml(o.verbs, o.more, { moreCls: o.moreCls, moreTitle: o.moreTitle || "More actions on this row", verbCls: o.verbCls, one: o.one });
   return `<div class="row-item kit-row${o.cls ? " " + esc(o.cls) : ""}${o.cb && o.cb.checked ? " is-sel" : ""}"${kitAttr("id", o.id ? `row-${o.id}` : "")}${kitAttr("data-id", o.id)}${kitDataAttrs(o.attrs)}>`
     + cb
     + `<div class="row-main">`
@@ -7420,7 +7460,7 @@ function renderRetPageRow(a, feed, opts) {
       title: `Start the retention case assigned to you. Without this it goes to ${staffName(toMe.id)} — ${toMe.why}.` });
   }
   return rowItemHtml({
-    id: `ret-${a.case_id}`, cls: "ret-row",
+    id: `ret-${a.case_id}`, cls: "ret-row", one: true,
     cb: { name: "ret-cb", value: a.case_id, checked: !!(o.sel && o.sel.has(a.case_id)) },
     name: clientId ? { text: a.client_name, clientId } : { text: a.client_name },
     chips: [retCaseChip(feed, a), status],
@@ -8428,6 +8468,7 @@ function renderRetColdList(data, sorted, scope, seq) {
       fact: bits.join(" · "),
       /* R87 · book · C1 (04 #1) — a Book client row carries sms_opt_out. */
       contact: c.phone ? { phone: c.phone, smsOptOut: !!c.sms_opt_out, first: c.first_name || "", rateEnd: next ? next.date : null } : null,
+      one: true,
       verbs: nextCase ? [{ label: "📞 Log call", cls: "ret-row-chip ret-logcall-chip", act: ["retLogCall", nextCase.id], title: "Log a call against the case whose rate matures next — the same form the case modal uses: outcome chip, note, protection tick and an optional follow-up task." }] : [],
     });
   }).join("");
@@ -9411,7 +9452,7 @@ function briefSubRowHtml(it) {
         ${briefSubLineHtml(it)}
       </div>
       ${briefBadge(it)}
-      ${briefActions(it)}
+      ${rowOneHtml(briefActions(it))}
     </div>`;
 }
 function briefRowHtml(row) {
@@ -9429,7 +9470,7 @@ function briefRowHtml(row) {
         ${briefMoreHtml(row)}
       </div>
       ${briefBadge(it)}
-      ${briefActions(it)}
+      ${rowOneHtml(briefActions(it))}
     </div>`;
 }
 /* Renders from the cached lastBriefItems (no refetch) — used both after a fresh load and when a group's
@@ -21972,11 +22013,11 @@ async function loadEmails() {
       </div>
       ${staleAddr ? `<span class="badge amber" title="Queued to ${esc(e.to_email)}, but this client's email is now ${esc(curEmail)}">address changed since queued</span>` : ""}
       <span class="badge ${badge[e.status]}">${e.status}</span>
-      ${staleAddr ? `<button class="btn btn-sm btn-primary" ${actAttr("useCurrentEmailAddress", e.id, e.client_id)} title="Re-address this queued email to ${esc(curEmail)}">Use current address</button>` : ""}
+      ${rowOneHtml(`${staleAddr ? `<button class="btn btn-sm btn-primary" ${actAttr("useCurrentEmailAddress", e.id, e.client_id)} title="Re-address this queued email to ${esc(curEmail)}">Use current address</button>` : ""}
       ${fixContact ? `<button class="btn btn-sm btn-ghost" ${actAttr("fixContactOpen", "email", e.id, e.client_id, e.to_email)} title="${noContact ? "This client has no email address on file — add one, then retry" : "This looks like a bad contact detail, not a one-off send failure"}">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" ${actAttr("retryEmail", e.id)}>Retry</button>` : ""}
       
-      ${e.status === "queued" || failed ? `<button class="btn btn-sm em-cancel" data-id="${esc(e.id)}" ${actAttr("cancelQueuedEmail", e.id)} title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this email before the 8am run picks it up — it never sends"}">Cancel</button>` : ""}
+      ${e.status === "queued" || failed ? `<button class="btn btn-sm em-cancel" data-id="${esc(e.id)}" ${actAttr("cancelQueuedEmail", e.id)} title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this email before the 8am run picks it up — it never sends"}">Cancel</button>` : ""}`)}
     </div>`;
   }).join("") : `<div class="empty">${emailStatusFilter !== "all" ? `No ${esc(emailStatusFilter)} emails in the newest ${EMAIL_ROW_LIMIT} rows.` : "No emails yet. They'll appear here once automation runs or you trigger one from a case."}</div>`) + `</div>`;
   emQ.wire();
@@ -22019,9 +22060,9 @@ async function loadEmails() {
         <div class="s">${esc(s.to_phone || "")} · ${s.sent_at ? "sent " + fmtDT(s.sent_at) : "created " + fmtDT(s.created_at)}${errLine}</div>
       </div>
       <span class="badge ${smsBadge[s.status] || "grey"}">${esc(s.status)}</span>
-      ${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" ${actAttr("fixContactOpen", "sms", s.id, s.client_id, s.to_phone)} title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
+      ${rowOneHtml(`${!settled && s.client_id && isBadContactError(s.error) ? `<button class="btn btn-sm btn-ghost" ${actAttr("fixContactOpen", "sms", s.id, s.client_id, s.to_phone)} title="This looks like a bad contact detail, not a one-off send failure">Fix contact</button>` : ""}
       ${failed ? `<button class="btn btn-sm" ${actAttr("retrySms", s.id)}>Retry</button>` : ""}
-      ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" ${actAttr("cancelQueuedSms", s.id)} title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before the 8:05am run picks it up — it never sends"}">Cancel</button>` : ""}
+      ${s.status === "queued" || failed ? `<button class="btn btn-sm btn-ghost sms-cancel" data-id="${esc(s.id)}" ${actAttr("cancelQueuedSms", s.id)} title="${failed ? "Stop retrying this one — it is marked cancelled and never sends" : "Stop this SMS before the 8:05am run picks it up — it never sends"}">Cancel</button>` : ""}`)}
     </div>`;
   }).join("") : `<div class="empty">${smsStatusFilter !== "all" ? `No ${esc(smsStatusFilter)} SMS in the newest ${EMAIL_ROW_LIMIT} rows.` : "No SMS yet. They'll appear here once SMS automation runs or you send one."}</div>`);
   smsQ.wire();
@@ -26441,6 +26482,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r104";   // R89
+window.__nxTag_app = "r105";   // R89
 
 init();
