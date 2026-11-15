@@ -281,7 +281,10 @@ const readBlobJson = (page) => page.evaluate(async () => (window.__blob ? JSON.p
       const staleEl = await page.$("#dash-export-notice[data-state='stale']");
       ok("A2 · a 40-day-old export renders the stale state", !!staleEl);
       const staleTxt = staleEl ? await staleEl.textContent() : "";
-      ok("A2 · …naming the day count", /\b40\s+days\b/.test(staleTxt), staleTxt);
+      /* R104: the app counts CALENDAR days in UK time, so "40 × 24h ago" reads 39 for the hour before midnight UTC
+         while the span crosses a clock change. Take the count from the app's own calendar, held to within a day of 40. */
+      const staleDays = await page.evaluate((v) => daysSinceLocal(v), staleAt);
+      ok("A2 · …naming the day count", Math.abs(staleDays - 40) <= 1 && new RegExp(`\\b${staleDays}\\s+days\\b`).test(staleTxt), staleTxt);
 
       const advPage = await newPage(browser, "p2", { skipTour: true });
       await goto(advPage, "dashboard");

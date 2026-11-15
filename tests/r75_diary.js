@@ -204,8 +204,8 @@ const apptRow = (page, id) => page.evaluate(async (i) => {
       { weekActive: true, weekSelected: "true", weekShown: true, gridHidden: true, dayHidden: true });
 
     // A2 — the toggle is a three-way now, in scale order.
-    eq("A2 · the toggle reads Month | Week | Day",
-      await page.$$eval("#diary-view-toggle button", (els) => els.map((b) => b.textContent.trim())), ["Month", "Week", "Day"]);
+    eq("A2 · the toggle reads List | Month | Week | Day (R104 · B10 added List in front)",
+      await page.$$eval("#diary-view-toggle button", (els) => els.map((b) => b.textContent.trim())), ["List", "Month", "Week", "Day"]);
 
     // A3 — seven lanes, seven consecutive dates, starting on Monday.
     const lanes = await page.$$eval("#diary-week-view .dw-lane", (els) => els.map((e) => e.dataset.date));

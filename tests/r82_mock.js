@@ -331,7 +331,11 @@ async function setSetting(page, key, value) {
       eq("B2a · Kim, Wayne and Luke read `never` under Signed in",
         ["p1", "p2", "p3"].map((k) => by[k] && by[k].signin), ["never", "never", "never"]);
       ok("B2b · …each saying how long ago they were invited, not just that they never came",
-        ["p1", "p2", "p3"].every((k) => new RegExp(`invited ${INVITED_DAYS_AGO} days ago`).test(by[k].signinText)),
+        /* R104: the app counts CALENDAR days in UK time, so "61 × 24h ago" reads 60 for the hour before midnight UTC
+           while the span crosses a clock change (the seed lands on the next UK day). Ask the app's own calendar
+           for the count, and hold it to within a day of the seed. */
+        await page.evaluate((d) => { const n = daysSinceLocal(new Date(Date.now() - d * 86400000).toISOString()); return Math.abs(n - d) <= 1 ? n : -1; }, INVITED_DAYS_AGO)
+          .then((n) => ["p1", "p2", "p3"].every((k) => new RegExp(`invited ${n} days ago`).test(by[k].signinText))),
         JSON.stringify(["p1", "p2", "p3"].map((k) => by[k].signinText)));
       ok("B2c · …and the row carries the real invite timestamp for anything that needs it",
         ["p1", "p2", "p3"].every((k) => by[k].invited && !isNaN(Date.parse(by[k].invited))), JSON.stringify(by.p1));
