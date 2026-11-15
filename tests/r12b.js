@@ -656,7 +656,9 @@ async function readRows(page, table, filters) {
          unjudged appointment shows the pair; nothing else does. */
       // Quick ✓/✗ from My Day + Undo — today's appointment (past-started, since apptQuickOutcomeHtml
       // only offers the pair once the slot has started).
-      const todayStart = new Date(Date.now() - 5 * 60000);   // 5 minutes ago — started, unjudged
+      /* R104: never earlier than today's 00:00:01 — in the five minutes after midnight "5 minutes ago" is yesterday,
+         and yesterday's appointment is rightly not on My Day. */
+      const todayStart = new Date(Math.max(Date.now() - 5 * 60000, new Date().setHours(0, 0, 1, 0)));   // ≤5 minutes ago — started, unjudged
       const todayId = await mkAppt(page, { client_id: gt.clientId, case_id: gt.caseId, title: "Today appt", starts_at: todayStart.toISOString(), ends_at: todayStart.toISOString(), staff_id: "p4" });
       await goto(page, "dashboard", 900);
       const quickBtn = `#briefing-list .appt-quick-btn[data-act="quickApptOutcome"][data-args^='["${todayId}","attended"']`;
