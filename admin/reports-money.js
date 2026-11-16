@@ -4500,9 +4500,9 @@ async function r44UploadProcRates(file) {
     return toast(`No usable rates in that file${parsed.skipped ? ` — ${parsed.skipped} row(s) had a blank or out-of-range rate` : ""}. Nothing was changed.`);
   }
   const current = await loadProcRates(true);
-  if (!confirm(`Replace the ${current.length} stored rate${current.length === 1 ? "" : "s"} with ${parsed.rows.length} from this file?`
+  if (!(await askConfirm(`Replace the ${current.length} stored rate${current.length === 1 ? "" : "s"} with ${parsed.rows.length} from this file?`
     + (parsed.skipped ? `\n\n${parsed.skipped} row${parsed.skipped === 1 ? "" : "s"} had a blank or non-numeric rate and will be skipped.` : "")
-    + `\n\nThe stored card is replaced wholesale — anything not in this file stops being used for expected-fee checks.`)) return;
+    + `\n\nThe stored card is replaced wholesale — anything not in this file stops being used for expected-fee checks.`))) return;
   if (status) status.textContent = "Replacing the rate card…";
   const { error: delErr } = await db.from("proc_rates").delete().gt("id", 0);
   if (delErr) { procRatesCache = null; await renderProcRatesPanel(); return dbFail("r44UploadProcRates", delErr, "Could not clear the old rates: " + delErr.message); }   // R81 · A4
@@ -5025,7 +5025,7 @@ async function r44ConfirmTicked() {
   if (!st) return;
   const ids = Object.keys(st.ticks).filter((k) => st.ticks[k] && st.byLine[k] && st.byLine[k].match_status !== "confirmed");
   if (!ids.length) return toast("Nothing is ticked.");
-  if (!confirm(`Confirm ${ids.length} line${ids.length === 1 ? "" : "s"}?\n\nThis writes the payment onto each matched case — proc fees get a paid date, clawbacks raise a task for you, and every case gets a note. It cannot be undone from here.`)) return;
+  if (!(await askConfirm(`Confirm ${ids.length} line${ids.length === 1 ? "" : "s"}?\n\nThis writes the payment onto each matched case — proc fees get a paid date, clawbacks raise a task for you, and every case gets a note. It cannot be undone from here.`))) return;
   const results = [];
   for (const id of ids) results.push(await r44ConfirmLine(id));
   renderReconReview();
@@ -5106,4 +5106,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r106";   // R89
+window.__nxTag_reportsmoney = "r107";   // R89
