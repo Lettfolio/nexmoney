@@ -84,7 +84,7 @@ async function offerNoShowTask(appt, clientName) {
     return " · a call-back task for this is already open on the case";
   }
   const askedOf = staffId ? staffName(staffId) : "nobody in particular (this appointment has no adviser on it)";
-  if (!confirm(`Recorded as a no-show.\n\nAdd a task “${title}” on the case, due today (${fmtD(due)}), for ${askedOf}?\n\nNo email or text is sent to anybody either way.`)) {
+  if (!(await askConfirm(`Recorded as a no-show.\n\nAdd a task “${title}” on the case, due today (${fmtD(due)}), for ${askedOf}?\n\nNo email or text is sent to anybody either way.`))) {
     return " · no call-back task was created";
   }
   const { error } = await db.from("case_tasks").insert({ case_id: appt.case_id, title, due_date: due, assigned_to: staffId });
@@ -1344,7 +1344,7 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
     let savedOverClash = null;
     if (row.staff_id) {
       savedOverClash = await apptClashFor(row.staff_id, startAt, new Date(row.ends_at), id);
-      if (savedOverClash && !confirm(`${staffName(row.staff_id)} already has ${apptClashPhrase(savedOverClash)}.\n\nThis appointment overlaps it. Book anyway?`)) return;
+      if (savedOverClash && !(await askConfirm(`${staffName(row.staff_id)} already has ${apptClashPhrase(savedOverClash)}.\n\nThis appointment overlaps it. Book anyway?`))) return;
     }
     /* R12b · W-17: the outcome rides on the SAME write as everything else on the form, so a Save is one round
        trip and the two can never end up half-applied. */
@@ -1420,4 +1420,4 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_diary = "r106";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_diary = "r107";   // R89 — the CTO bumps all seven together at each gate

@@ -2509,9 +2509,9 @@ async function confirmSuppressedSend(clientId, what) {
   const care = (await loadClientCare([clientId], { fresh: true }))[clientId];   // R85 · B3 — gates a send: fresh, never the book
   if (!care || !care.suppress_automation) return true;
   const note = String(care.vulnerability_note || "").trim();
-  return confirm(`This client's automation is suppressed${note ? ` (${note})` : ""}.\n\n`
+  return (await askConfirm(`This client's automation is suppressed${note ? ` (${note})` : ""}.\n\n`
     + `The database refuses every automated email and SMS to them. This ${what} is being sent by hand, so it WILL go.\n\n`
-    + `Send this one ${what} anyway?`);
+    + `Send this one ${what} anyway?`));
 }
 /* The three constants the backend chases on. Named here so the status line an operator reads and
    the rule the cron applies cannot describe different behaviour. */
@@ -3160,7 +3160,7 @@ async function sendDocsRequestNow(caseId, c, ev, chase) {
   /* R12b · K-10: the quiet window, asked about BEFORE queueEmail's own "here is what the client will read"
      confirm… */
   const cool = docChaseCooldown(chase);
-  if (cool && !confirm(`${cool.sentence}\n\nSending now also restarts that window, so the next automatic chase moves back by ${docChaseDays()} day${docChaseDays() === 1 ? "" : "s"}.\n\nSend anyway?`)) return;
+  if (cool && !(await askConfirm(`${cool.sentence}\n\nSending now also restarts that window, so the next automatic chase moves back by ${docChaseDays()} day${docChaseDays() === 1 ? "" : "s"}.\n\nSend anyway?`))) return;
   if (await queueEmail(caseId, c.client_id, "docs_request", c, ev)) await renderCaseDocs(caseId, c);
 }
 /* R6 BATCH 2 · THE SAME CASE, NAMED THE SAME WAY EVERYWHERE Batch 1 gave the app a property primitive but only the
@@ -4743,6 +4743,25 @@ function setPageTitle(page) {
   if (t && t.label && t.label !== lbl) lbl = `${lbl} › ${t.label}`;
   document.title = lbl ? `${lbl} · ${BASE_TITLE}` : BASE_TITLE;
 }
+/* R107 · N1: THE SIDEBAR SAYS WHERE WORK IS WAITING. Three numbers, each the same number its page shows: Today —
+   My Day rows that are due or overdue; Retention — rates that have already ended (rateBookCounts, the one
+   definition); Operations — emails the sender rejected. Zero shows nothing. Not drawn under the harness seam. */
+function setNavCount(page, n, what) {
+  const b = ROW_ONE() ? document.querySelector(`.sidenav button[data-page="${page}"]`) : null;
+  if (!b) return;
+  let c = b.querySelector(".nav-n");
+  if (!(n > 0)) { if (c) c.remove(); return; }
+  if (!c) { c = document.createElement("span"); c.className = "nav-n"; b.appendChild(c); }
+  c.textContent = n > 99 ? "99+" : String(n);
+  c.title = `${n} ${what}`;
+}
+/* R107 · X4: a page that has not painted yet shows the SHAPE of its list, not a blank panel. Only ever into an
+   empty container, so a repaint of a page already on show never flashes; the loader's own write replaces it. */
+const SKELETON_HOSTS = { dashboard: "#briefing-list", clients: "#client-list", retention: "#ret-rates-list", protection: "#protection-list", operations: "#email-list", vault: "#vault-list" };
+function paintSkeleton(page) {
+  const host = ROW_ONE() && SKELETON_HOSTS[page] ? document.querySelector(SKELETON_HOSTS[page]) : null;
+  if (host && !host.firstElementChild) host.innerHTML = `<div class="skel" aria-hidden="true">${"<i></i>".repeat(6)}</div>`;
+}
 function nav(page, push = true, tab) {
   /* R89 · F — "operations/import" is the page and its tab in one string (the hash form). */
   if (typeof page === "string" && page.includes("/")) { const [p0, t0] = page.split("/"); page = p0; if (tab == null || tab === "") tab = t0; }
@@ -4780,6 +4799,7 @@ function nav(page, push = true, tab) {
   if (tabbed) pageTabActive[page] = resolvePageTab(page, tab);
   document.querySelectorAll(".page").forEach((p) => p.classList.add("hidden"));
   $("#page-" + page).classList.remove("hidden");
+  paintSkeleton(page);
   /* Show the tab's panel NOW (nested .page sections were just hidden with the rest); its loader
      runs at the bottom, where every page's loader always has. */
   if (tabbed) activatePageTab(page, pageTabActive[page], { silent: true, noLoad: true });
@@ -6602,6 +6622,7 @@ async function renderOpsStrip(cases, pre) {
          emailing and put a call task on the adviser. Matched on the title the app itself writes… */
       headCount("case_tasks", (q) => q.is("done_at", null).like("title", "Documents overdue — call %")),
     ]);
+  setNavCount("operations", emailsFailed, "emails failed to send");
   // Free — these rows are already in memory from the dashboard's own read.
   const liveStages = ["enquiry", "fact_find", "decision_in_principle", "application", "offer", "exchange"];
   const noAdviser = (cases || []).filter((c) => !c.assigned_to && liveStages.includes(c.stage)).length;
@@ -6853,6 +6874,7 @@ function rateBookCounts(feed, rows) {
     out[k]++; out.rows[k].push(a);
   });
   out.inWindow = out.ended + out.ending;
+  if (!rows) setNavCount("retention", out.ended, "rates already ended");
   return out;
 }
 /* The three group heads the Retention list is now built from, and the words every surface uses for
@@ -8574,7 +8596,7 @@ window.startRetentionCase = async function (caseId, ev, opts) {
     /* R70 · A3: `assumeConfirmed` is the ONE thing a batch may skip, and only because the batch asked the
        same questions first: the runner pre-flights every eligible case and shows ONE overlay listing the lot. */
     const preConfirmed = !!o.assumeConfirmed;
-    if (!preConfirmed && !confirm([
+    if (!preConfirmed && !(await askConfirm([
       `Start a retention case for ${clientName}${propShort ? " — " + propShort : ""}?`,
       propFull
         ? `Property: ${propFull}`
@@ -8595,7 +8617,7 @@ window.startRetentionCase = async function (caseId, ev, opts) {
         : `• no reminder email — ${clientName} has no email address on file`,
       "",
       "This case will stop showing as \"reminder pending\".",
-    ].join("\n"))) return done("cancelled", "");
+    ].join("\n")))) return done("cancelled", "");
 
     const successor = {
       client_id: c.client_id,
@@ -9693,6 +9715,7 @@ function renderBriefing() {
     sub.setAttribute("data-grouped", String(groupedCases));
   }
   const bands = BRIEF_BANDS.map((b) => ({ ...b, rows: rows.filter((r) => b.test(r.pri != null ? r.pri : r.head.pri)) })).filter((b) => b.rows.length);
+  setNavCount("dashboard", bands.filter((b) => b.key !== "rest").reduce((n, b) => n + b.rows.length, 0), "on My Day, due or overdue");
   let html;
   /* R73 · A1: how many rows the cage's "N more ↓" is counting. NOT rows.length: a band longer than
      BRIEF_BAND_CAP already folds its tail behind "show the other N"… */
@@ -10625,7 +10648,7 @@ async function bulkTriageAlertsRun(verb, ids) {
 window.resolveAlert = async function (id, severity, caseId) {
   let reason = null;
   if (severity === "crit") {
-    reason = prompt(
+    reason = await askText(
       "Dismiss this CRITICAL alert?\n\n" +
       "This only clears the alert — it does NOT fix the underlying case, and the alert will " +
       "reappear if the problem persists.\n\n" +
@@ -14215,7 +14238,7 @@ async function bulkQueueRateRemindersRun(ids) {
     /* G6-10 — the batch has to say WHICH cases, not just how many. On a landlord with five
        properties "2 rate-end reminders" and "1 has already been reminded" name nothing at all. */
     + `\n\nQueueing for:\n${eligible.slice(0, 8).map((c) => "· " + nameOf(c)).join("\n")}${eligible.length > 8 ? `\n· and ${eligible.length - 8} more` : ""}`;
-  if (!confirm(confirmMsg)) return;
+  if (!(await askConfirm(confirmMsg))) return;
   let queued = 0, tasks = 0, raced = 0;
   // G1I-B1/B3/B5 — every part of the promise this button made is now accounted for by name. The old summary
   // counted only the queue insert and the task insert…
@@ -14427,7 +14450,7 @@ async function bulkSendDocsRequestsRun(ids) {
       ? `Nothing to send — all ${skipped.length} selected case${skipped.length === 1 ? " is" : "s are"} skipped (${skipped.slice(0, 3).join("; ")}${skipped.length > 3 ? `; and ${skipped.length - 3} more` : ""})`
       : "Nothing to send");
   }
-  if (!confirm([
+  if (!(await askConfirm([
     `Queue a document request for ${eligible.length} of the ${ids.length} selected case${ids.length === 1 ? "" : "s"}?`,
     "",
     "Each email lists ONLY what is still outstanding on that case's own checklist. Sending also restarts the quiet window before the next automatic chase.",
@@ -14438,7 +14461,7 @@ async function bulkSendDocsRequestsRun(ids) {
     ...(skipped.length ? ["", `Skipped (${skipped.length}) — nothing is sent to these:`,
       ...skipped.slice(0, 6).map((s) => "· " + s),
       ...(skipped.length > 6 ? [`· and ${skipped.length - 6} more`] : [])] : []),
-  ].join("\n"))) return;
+  ].join("\n")))) return;
   const queuedIds = [], failed = [];
   for (const c of eligible) {
     let res = null;
@@ -14691,7 +14714,7 @@ async function bulkAddTaskRun(ids, preset = null) {
         ? `Nothing to add — all ${skipped.length} selected case${skipped.length === 1 ? "" : "s"} already ${skipped.length === 1 ? "has" : "have"} an open “${preset.title}” task`
         : "Nothing to add");
     }
-    if (!confirm([
+    if (!(await askConfirm([
       `Add “${preset.title}” to ${eligible.length} of the ${ids.length} selected case${ids.length === 1 ? "" : "s"}?`,
       "",
       `Due today (${fmtD(preset.due)}), on each case's OWN adviser — not on you. Nothing is emailed to anybody.`,
@@ -14702,7 +14725,7 @@ async function bulkAddTaskRun(ids, preset = null) {
       ...(skipped.length ? ["", `Skipped — already has an open “${preset.title}” task (${skipped.length}):`,
         ...skipped.slice(0, 5).map((c) => `· ${nameOf(c)}`),
         ...(skipped.length > 5 ? [`· and ${skipped.length - 5} more`] : [])] : []),
-    ].join("\n"))) return;
+    ].join("\n")))) return;
     rows = eligible;
     picked = { title: preset.title, due: preset.due };
   } else {
@@ -15289,8 +15312,8 @@ $("#board-adviser").addEventListener("change", syncBoardScope);
     applyPipelineFilterState(v.filters);
     loadPipeline();
   });
-  if (saveBtn) saveBtn.addEventListener("click", () => {
-    const name = prompt("Save current pipeline filters as…");
+  if (saveBtn) saveBtn.addEventListener("click", async () => {
+    const name = await askText("Save current pipeline filters as…", { label: "Name" });
     if (name == null) return;
     const nm = String(name).trim();
     if (!nm) return;
@@ -15875,7 +15898,7 @@ async function bulkSetProtStatus(status) {
     /* R12a·D9: this used to promise "the quote clock starts today on every one of them", and that is exactly
        the sweep that used to reset a cold quote to fresh. It now says what protUpdateWithStamp actually does. */
     + (status === "quoted" ? "\n\nThe quote clock starts today on any that are not already quoted. A quote date already on a case is left alone, so its age keeps counting." : "");
-  if (!confirm(msg)) return;
+  if (!(await askConfirm(msg))) return;
   let ok = 0, err = 0, keptDates = 0;
   for (const id of ids) {
     const patch = { protection_status: status };
@@ -16140,7 +16163,7 @@ window.factFind = async function (caseId, clientId) {
     factFind(caseId, clientId);
   };
   $("#ff-new").onclick = async () => {
-    if (!confirm("Start a fresh blank fact-find? The current link stops being the active one.")) return;
+    if (!(await askConfirm("Start a fresh blank fact-find? The current link stops being the active one."))) return;
     /* R12a·D3: same explicit 'created': a brand-new blank fact-find has not been sent either. R78 · A6 — this
        insert ignored its result entirely: a refused write (RLS… */
     const { error: ffNewErr } = await db.from("fact_finds").insert({ case_id: caseId, client_id: clientId, status: "created", created_by: (ME && ME.id) || null, token: ffToken(), expires_at: linkExpiryIso() });
@@ -17966,10 +17989,10 @@ async function saveCase(k) {
     const ecd = row.expected_completion_date;
     if (ecd && liveStage) {
       const today = localDateStr();
-      if (ecd < today && !confirm(`Expected completion ${fmtD(ecd)} is in the past — save anyway?`)) return;
+      if (ecd < today && !(await askConfirm(`Expected completion ${fmtD(ecd)} is in the past — save anyway?`))) return;
       const oed = row.offer_expiry_date;
       if (oed && (new Date(ecd) - new Date(oed)) > 30 * 86400000
-        && !confirm(`Expected completion ${fmtD(ecd)} is more than 30 days after the offer expires (${fmtD(oed)}) — the offer would need extending or re-issuing. Save anyway?`)) return;
+        && !(await askConfirm(`Expected completion ${fmtD(ecd)} is more than 30 days after the offer expires (${fmtD(oed)}) — the offer would need extending or re-issuing. Save anyway?`))) return;
     }
     /* R5-20 / B3 — the stage select is the other route to Not Proceeding, and it used to take it
        with no questions asked. Same required reason as the board move. */
@@ -18398,7 +18421,7 @@ function wireCaseActions(k, caseLogCallHooks) {
      moveCaseToStage's own lost-reason capture asks WHY… */
   const markNpBtn = $("#case-mark-np");
   if (markNpBtn) markNpBtn.onclick = async () => {
-    if (!confirm("Mark this case as Not proceeding? It leaves the live pipeline — it stops appearing on the board's working stages and in the live figures. You will be asked to record why. It can be moved back later.")) return;
+    if (!(await askConfirm("Mark this case as Not proceeding? It leaves the live pipeline — it stops appearing on the board's working stages and in the live figures. You will be asked to record why. It can be moved back later.", "Mark not proceeding"))) return;
     markNpBtn.disabled = true;
     let res;
     try { res = await moveCaseToStage(id, "not_proceeding"); }
@@ -18547,7 +18570,7 @@ async function markFeePaid(caseId, c) {
   /* Nothing to itemise (no fee amounts on the case at all): keep the old single-click behaviour
      rather than refusing — some cases are marked paid for a fee recorded elsewhere. */
   if (!types.length) {
-    if (!confirm("No fee amounts are set on this case. Mark the fee status paid today anyway?")) return;
+    if (!(await askConfirm("No fee amounts are set on this case. Mark the fee status paid today anyway?"))) return;
     const { error } = await db.from("cases").update({ fee_status: "paid", fee_paid_at: new Date().toISOString() }).eq("id", caseId);
     if (error) return dbFail("markFeePaid", error);
     toast("Fee marked as paid");
@@ -18843,9 +18866,9 @@ async function emailOfferToClient(caseId, c) {
   const who = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "the client";
   /* R79 · A4: hold-aware, same holdLine as every other per-case send. The old sentence hardcoded "Client
      email is not switched on yet", which stops being true the day the hold lifts… */
-  if (!confirm(`Email the mortgage offer PDF to ${who} at ${cl.email}?\n\n` + (emailHoldOn()
+  if (!(await askConfirm(`Email the mortgage offer PDF to ${who} at ${cl.email}?\n\n` + (emailHoldOn()
     ? `Sending is currently ON HOLD (Settings › Email sending) — this will queue and wait; nothing is sent now.`
-    : `This queues the email (with the offer attached) dated far ahead — the R54 hold-back — so nothing is sent now; cancel it from the Emails page if it should not go.`))) return;
+    : `This queues the email (with the offer attached) dated far ahead — the R54 hold-back — so nothing is sent now; cancel it from the Emails page if it should not go.`)))) return;
   let uid = (ME && ME.id) || null;
   try { const { data: { user } } = await db.auth.getUser(); if (user && user.id) uid = user.id; } catch (e) {}
   const HELD_UNTIL = "2027-01-01T00:00:00Z"; // sit with the other parked client emails until sending is enabled
@@ -18947,7 +18970,7 @@ async function queueEmail(caseId, clientId, type, c, ev, opts = {}) {
        database refuses this client every AUTOMATED email… */
     if (!bulk) {
       if (!(await confirmSuppressedSend(clientId, "email"))) return;
-      if (!confirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}${farOutLine}${holdLine}`)) return;
+      if (!(await askConfirm(`Send ${EMAIL_LABEL[type].toLowerCase()} email to ${cl.email}?\n\nSigned off by: ${signedBy}${propLine}${extraLine}${docsLine}${farOutLine}${holdLine}`))) return;
     }
     const { data: qRow, error } = await db.from("email_queue")
       .insert({ case_id: caseId, client_id: clientId, email_type: type, to_email: cl.email })
@@ -21178,11 +21201,11 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
       const { data: updated, error } = await db.from("clients").update(row).eq("id", id).eq("updated_at", openedClientUpdatedAt).select();
       if (error) return dbFail("openClient", error);
       if (!updated || updated.length === 0) {
-        const reload = confirm(
+        const reload = (await askConfirm(
           "This client was changed elsewhere since you opened it.\n\n" +
           "OK = reload the client (DISCARDS the edits you have on screen)\n" +
           "Cancel = keep editing (your values stay; Save again to overwrite the other change)"
-        );
+        ));
         if (reload) { closeModal(); openClient(id); return; }
         // Kept editing: re-baseline on the current row so the next Save is a deliberate overwrite.
         await refreshOpenedClientStamp(id);
@@ -22109,9 +22132,9 @@ async function bulkRetrySuppressionGate(table, ids, noun) {
     if (!hit.length) return ids;
     const { data: people } = await db.from("clients").select("id,first_name,last_name").in("id", [...new Set(hit.map((r) => r.client_id))]);
     const names = (people || []).map((p) => [p.first_name, p.last_name].filter(Boolean).join(" ")).filter(Boolean);
-    return confirm(`${hit.length} of these ${noun} ${hit.length === 1 ? "is" : "are"} addressed to a client whose automation is suppressed`
+    return (await askConfirm(`${hit.length} of these ${noun} ${hit.length === 1 ? "is" : "are"} addressed to a client whose automation is suppressed`
       + `${names.length ? ` (${names.join(", ")})` : ""}.\n\n`
-      + `A retry is a send by hand, so it WILL go. Cancel the individual rows in the list instead if that is not what you want.\n\nRe-queue them anyway?`)
+      + `A retry is a send by hand, so it WILL go. Cancel the individual rows in the list instead if that is not what you want.\n\nRe-queue them anyway?`))
       ? ids : [];
   } catch (_) { return ids; }
 }
@@ -22195,7 +22218,7 @@ async function cancelQueuedRow(kind, id) {
   const ask = wasQueued
     ? `Cancel this queued ${noun} to ${who}?\n\n${label}\n\nIt will never send; this is recorded${row.case_id ? " on the case" : ""}.`
     : `Cancel this failed ${noun} to ${who}?\n\n${label}\n\nIt stops being retried and will never send; this is recorded${row.case_id ? " on the case" : ""}.`;
-  if (!confirm(ask)) return;
+  if (!(await askConfirm(ask, `Cancel this ${noun}`))) return;
   const { data: upd, error } = await db.from(table)
     .update({ status: "cancelled" }).eq("id", id).eq("status", row.status).select("id");
   if (error) return dbFail("cancelQueuedRow", error);
@@ -22477,10 +22500,10 @@ async function smsFlushSuppressionOk() {
     const { data: people } = await db.from("clients").select("id,first_name,last_name").in("id", hitIds);
     const names = (people || []).map((p) => [p.first_name, p.last_name].filter(Boolean).join(" ")).filter(Boolean);
     const n = data.filter((s) => hitIds.includes(s.client_id)).length;
-    return confirm(`${n} SMS in this queue ${n === 1 ? "is" : "are"} addressed to a client whose automation is suppressed`
+    return (await askConfirm(`${n} SMS in this queue ${n === 1 ? "is" : "are"} addressed to a client whose automation is suppressed`
       + `${names.length ? ` (${names.join(", ")})` : ""}.\n\n`
       + `Those rows were queued before the suppression, so sending now WILL deliver them. `
-      + `Cancel the individual rows in the list below instead if that is not what you want.\n\nSend the queue anyway?`);
+      + `Cancel the individual rows in the list below instead if that is not what you want.\n\nSend the queue anyway?`));
   } catch (e) { return true; }
 }
 $("#run-sms-btn").addEventListener("click", async () => { if (await smsFlushSuppressionOk()) runSms(false); });
@@ -22596,12 +22619,12 @@ async function runQueueNow(btn, after) {
         + Number((qc.data && (qc.data.review_requests_queued || 0)) || 0)
         + Number((qc.data && (qc.data.review_reminders_queued || 0)) || 0)
       : 0;
-    if (!confirm(`Send ${sends.length} email${sends.length === 1 ? "" : "s"} now?`
+    if (!(await askConfirm(`Send ${sends.length} email${sends.length === 1 ? "" : "s"} now?`
       + (nCancel ? ` (${nCancel} stale or care-flagged row${nCancel === 1 ? "" : "s"} will be cancelled)` : "")
       + `\n\nRecipients: ${who.join(", ") || "none"}${more}`
       + (newly ? `\n\n${newly} of these were queued just now by the automation (rate-end reminders, review requests that fell due, and reminders for review requests nobody answered).` : "")
       + `\n\nThis sends for the whole firm, not just your cases.`
-      + `\nCancel sends nothing — anything queued stays in the queue for the overnight run.`)) return;
+      + `\nCancel sends nothing — anything queued stays in the queue for the overnight run.`))) return;
     // Unscoped = the cron's own behaviour (the queueing RPCs re-run harmlessly: everything they
     // would create has just been created and stamped). Scoped only where they could not be run.
     await runAutomation(false, queueingRan ? undefined : { queueIds: due.map((e) => e.id) });
@@ -23024,13 +23047,13 @@ window.acceptLead = async function (id, ev) {
     const whoOf = (c) => [c.first_name, c.last_name].filter(Boolean).join(" ") || c.email || c.phone || "this client";
     if (match.exact) {
       const e = match.exact;
-      if (confirm(`A client already exists: ${whoOf(e)}${e.email ? " (" + e.email + ")" : ""} — matched on ${match.reason}.\n\nAttach this new case to the existing client instead of creating a duplicate?`)) {
+      if ((await askConfirm(`A client already exists: ${whoOf(e)}${e.email ? " (" + e.email + ")" : ""} — matched on ${match.reason}.\n\nAttach this new case to the existing client instead of creating a duplicate?`))) {
         client = e;
       }
     } else if (match.near.length) {
       const n = match.near[0];
       const others = match.near.length > 1 ? `\n\n(${match.near.length} possible matches — this is the closest: ${match.near.slice(1).map((x) => whoOf(x.client)).join(", ")} also look similar.)` : "";
-      if (confirm(`Did you mean ${whoOf(n.client)}${n.client.email ? " (" + n.client.email + ")" : ""}?\n\nThis lead has ${n.reason} — but the details aren't identical, so it may be a different person.${others}\n\nOK = attach the case to them · Cancel = create a new client.`)) {
+      if ((await askConfirm(`Did you mean ${whoOf(n.client)}${n.client.email ? " (" + n.client.email + ")" : ""}?\n\nThis lead has ${n.reason} — but the details aren't identical, so it may be a different person.${others}\n\nOK = attach the case to them · Cancel = create a new client.`))) {
         client = n.client;
       }
     }
@@ -24883,7 +24906,7 @@ async function bulkAssignDataHealth(adviserId) {
   if (!ids.length || !adviserId) return;
   const mine = adviserId === authUid;
   const name = mine ? "you" : staffName(adviserId);
-  if (!confirm(`Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${mine ? "yourself" : name}?`)) return;
+  if (!(await askConfirm(`Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${mine ? "yourself" : name}?`))) return;
   let ok = 0, err = 0;
   for (const id of ids) {
     const { error } = await db.from("cases").update({ assigned_to: adviserId }).eq("id", id);
@@ -24904,7 +24927,7 @@ window.toggleDismissedDupsPanel = function () {
   if (el) el.classList.toggle("hidden");
 };
 window.dismissDuplicate = async function (aId, bId, aName, bName) {
-  const reason = prompt(`Mark "${aName}" and "${bName}" as NOT duplicates?\n\nThey will no longer show up as a possible match. Optional reason (kept in the audit log):`);
+  const reason = await askText(`Mark "${aName}" and "${bName}" as NOT duplicates?\n\nThey will no longer show up as a possible match. Optional reason (kept in the audit log):`);
   if (reason == null) return; // cancelled
   const [a, b] = [aId, bId].sort();
   const { error } = await db.from("duplicate_dismissals").insert({ a_id: a, b_id: b, reason: reason.trim() || null });
@@ -25115,7 +25138,7 @@ window.openMergeClients = async function (aId, bId, reason, score) {
     // merge modal itself so a false-positive match spotted here doesn't need a detour back there.
     const notDupBtn = $("#modal").querySelector("#merge-not-dup");
     if (notDupBtn) notDupBtn.onclick = async () => {
-      const reasonText = prompt(`Mark "${fullClientName(aC)}" and "${fullClientName(bC)}" as NOT duplicates?\n\nThey will no longer show up as a possible match. Optional reason (kept in the audit log):`);
+      const reasonText = await askText(`Mark "${fullClientName(aC)}" and "${fullClientName(bC)}" as NOT duplicates?\n\nThey will no longer show up as a possible match. Optional reason (kept in the audit log):`);
       if (reasonText == null) return; // cancelled
       const [ka, kb] = [aId, bId].sort();
       const { error: ddErr } = await db.from("duplicate_dismissals").insert({ a_id: ka, b_id: kb, reason: reasonText.trim() || null });
@@ -25280,7 +25303,7 @@ $("#add-intro-btn").addEventListener("click", async () => {
 window.inviteIntroducer = async function (introducerId) {
   const { data: i } = await db.from("introducers").select("*").eq("id", introducerId).single();
   if (!i?.email) return toast("Add an email address first");
-  if (!confirm(`Create a portal login for ${i.name} (${i.email})? They will only see their own referrals.`)) return;
+  if (!(await askConfirm(`Create a portal login for ${i.name} (${i.email})? They will only see their own referrals.`))) return;
   const res = await inviteUser({ email: i.email, full_name: i.name, role: "introducer", introducer_id: introducerId });
   if (res) {
     /* R78 · B6: honest directions: introducers sign in on the INTRODUCER page, and "Forgot password?" now
@@ -25328,7 +25351,7 @@ $("#invite-staff-btn").addEventListener("click", async () => {
   if (!email) return toast("Email required");
   if (role === "introducer" && !introducerId) return toast("Choose which introducer this login belongs to");
   const roleName = ROLE_LABEL[role] || role;
-  if (!confirm(`Create a ${roleName} login for ${email}?`)) return;
+  if (!(await askConfirm(`Create a ${roleName} login for ${email}?`))) return;
   const btn = $("#invite-staff-btn"); // T1-15 — in-flight guard
   if (btn.disabled) return;
   btn.disabled = true;
@@ -25534,7 +25557,7 @@ async function openDeactivate(id, sel) {
   const close = () => { box.classList.add("hidden"); box.innerHTML = ""; if (sel) sel.value = sel.dataset.prev; };
   $("#deact-cancel").onclick = close;
   $("#deact-leave").onclick = async () => {
-    if (!confirm(`Remove ${who}'s access${nothing ? "" : ` and leave ${holdingsSentence(h)} assigned to them`}?`)) return;
+    if (!(await askConfirm(`Remove ${who}'s access${nothing ? "" : ` and leave ${holdingsSentence(h)} assigned to them`}?`))) return;
     box.classList.add("hidden"); box.innerHTML = "";
     await applyRole(id, "none", sel);
   };
@@ -25542,8 +25565,8 @@ async function openDeactivate(id, sel) {
   if (reBtn) reBtn.onclick = async () => {
     const to = ($("#deact-to") || {}).value || "";
     if (!to) return toast("Choose who this work goes to first.");
-    if (!confirm(`Move ${moveSentence(h)} from ${who} to ${staffName(to)}, then remove ${who}'s access?`
-      + `\n\nCompleted and closed cases stay attributed to ${who} for reporting.`)) return;
+    if (!(await askConfirm(`Move ${moveSentence(h)} from ${who} to ${staffName(to)}, then remove ${who}'s access?`
+      + `\n\nCompleted and closed cases stay attributed to ${who} for reporting.`))) return;
     reBtn.disabled = true;
     try {
       /* R5-M6: the server-side transaction the compensating path below was written to stand in for.
@@ -25618,7 +25641,7 @@ async function changeRole(sel) {
   // "No access" strands whatever they hold — take the deliberate-choice route instead.
   if (next === "none") { sel.value = prev; return openDeactivate(id, sel); }
   const who = (PROFILES.find((p) => p.id === id) || {});
-  if (!confirm(`Change ${who.full_name || who.email || "this login"}'s role from ${ROLE_LABEL[prev] || prev} to ${ROLE_LABEL[next] || next}?`)) {
+  if (!(await askConfirm(`Change ${who.full_name || who.email || "this login"}'s role from ${ROLE_LABEL[prev] || prev} to ${ROLE_LABEL[next] || next}?`))) {
     sel.value = prev;
     return;
   }
@@ -25851,6 +25874,38 @@ function confirmDestructive(opts) {
     box.querySelector("#ovl-confirm-cancel").onclick = () => finish(false);
     box.querySelector("#ovl-confirm-ok").onclick = () => finish(true);
   }).then((v) => v === true);
+}
+/* R107 · X3: THE BROWSER'S OWN "ARE YOU SURE?" AND TYPE-IN BOXES, IN THE HOUSE'S CLOTHES. Thirty-odd native
+   confirm()s and four prompt()s stopped the page with a grey system box that cannot say what its buttons do. Both
+   now open the house overlay: the first paragraph is the heading, the rest the body, and the button is a verb.
+   The harness seam keeps the native boxes, which the older suites answer with page.on("dialog"). */
+function askConfirm(text, okLabel) {
+  if (!ROW_ONE()) return Promise.resolve(confirm(text));
+  const parts = String(text == null ? "" : text).split(/\n{2,}/).map((t) => t.trim()).filter(Boolean);
+  return confirmDestructive({ title: parts[0] || "Are you sure?", body: parts.slice(1).map((t) => `<p class="u-m-0-0-8">${esc(t).replace(/\n/g, "<br>")}</p>`).join(""),
+    cancelLabel: "Go back", okLabel: okLabel || "Continue", danger: false });
+}
+/* Resolves the typed text ("" allowed) or null when cancelled — the same contract as prompt(). */
+function askText(text, opts) {
+  if (!ROW_ONE()) return Promise.resolve(prompt(text));
+  const o = opts || {};
+  const parts = String(text == null ? "" : text).split(/\n{2,}/).map((t) => t.trim()).filter(Boolean);
+  const label = parts.length > 1 ? parts.pop() : (o.label || "");
+  const html = `
+    <h3 id="ovl-ask-title">${esc(parts[0] || "")}</h3>
+    ${parts.length > 1 ? `<div class="panel-sub">${parts.slice(1).map((t) => `<p class="u-m-0-0-8">${esc(t)}</p>`).join("")}</div>` : ""}
+    <label>${esc(label)}<input type="text" id="ovl-ask-input" autocomplete="off"></label>
+    <div class="modal-actions"><div></div><div class="right">
+      <button type="button" class="btn" id="ovl-ask-cancel">Cancel</button>
+      <button type="button" class="btn btn-primary" id="ovl-ask-ok">${esc(o.okLabel || "Save")}</button>
+    </div></div>`;
+  return openOverlay(html, (finish, box) => {
+    const input = box.querySelector("#ovl-ask-input");
+    box.querySelector("#ovl-ask-cancel").onclick = () => finish(null);
+    box.querySelector("#ovl-ask-ok").onclick = () => finish(input.value);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); finish(input.value); } });
+    input.focus();
+  }).then((v) => (typeof v === "string" ? v : null));
 }
 /* The unsaved-changes guard. Its two buttons are the two things the operator can actually do, named as verbs,
    so neither of them is "Cancel". "Keep editing" is the safe answer and is focused first… */
@@ -26482,6 +26537,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r106";   // R89
+window.__nxTag_app = "r107";   // R89
 
 init();

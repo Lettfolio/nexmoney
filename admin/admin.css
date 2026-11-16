@@ -157,6 +157,8 @@ h2 { color: var(--dark); font-size: 20px; font-weight: 700; letter-spacing: -0.0
   transition: opacity .15s ease, filter .15s ease;
 }
 .sidenav button:hover { background: rgba(255,255,255,.06); color: #e8f0fa; }
+.sidenav .nav-n { margin-left: auto; min-width: 22px; padding: 1px 6px; border-radius: 10px; background: rgba(255,255,255,.16); color: #fff; font-size: 12px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+.skel > i { display: block; height: 44px; margin: 0 0 8px; border-radius: var(--radius-sm); background: linear-gradient(90deg, #eef2f7 25%, #f6f8fb 50%, #eef2f7 75%); background-size: 200% 100%; animation: skel 1.2s linear infinite; } @keyframes skel { to { background-position: -200% 0; } }
 .sidenav button.active {
   background: rgba(255,255,255,.09);
   border-left-color: var(--orange);
@@ -2294,8 +2296,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .vault-user { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .vault-card-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 /* The vault card's ⋯ menu (was inline styles, R88 · E): a native <details> whose menu floats under the button. */
-details.vault-more { position: relative; display: inline-block; }
-details.vault-more > summary.vault-more-btn { list-style: none; display: inline-flex; }
+details.vault-more { position: relative; display: inline-block; } details.vault-more > summary.vault-more-btn { list-style: none; display: inline-flex; }
 details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: #fff; border: 1px solid var(--border, #e4e9f0); border-radius: 8px; padding: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.12); min-width: 120px; }
 .vault-owner { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .01em; }
 .vault-owner-daniel { background: var(--blue-bg); color: var(--navy); }
@@ -2307,8 +2308,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .vault-vis { font-size: 12px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
 .vault-vis-restricted { background: var(--amber-bg); color: var(--amber); }
 .vault-fields { margin-top: 10px; display: grid; gap: 4px; }
-.vault-field { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
-.vault-field:last-child { border-bottom: none; }
+.vault-field { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); } .vault-field:last-child { border-bottom: none; }
 .vf-label { flex: 0 0 150px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .vf-value { flex: 1 1 auto; font-size: 13.5px; color: var(--dark); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; overflow-wrap: anywhere; min-width: 0; }
 .vault-field.is-secret .vf-value[data-shown="0"] { letter-spacing: 2px; }
