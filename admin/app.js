@@ -47,7 +47,7 @@ try {
   // Supabase SDK failed to load (CDN outage, ad-blocker, proxy, SRI mismatch).
   // Show a visible message instead of a silent blank page, then stop.
   const showFail = () => {
-    document.body.innerHTML = '<div style="max-width:460px;margin:15vh auto;padding:24px;font-family:system-ui,sans-serif;text-align:center;color:#333"><h1 style="font-size:20px;margin:0 0 12px">Something went wrong loading the app</h1><p style="margin:0 0 16px;color:#666">We couldn\'t load a required component. Check your connection and reload.</p><button style="padding:10px 20px;border:0;border-radius:6px;background:#1a5;color:#fff;font-size:15px;cursor:pointer">Reload</button></div>';
+    document.body.innerHTML = '<div style="max-width:460px;margin:15vh auto;padding:24px;font-family:system-ui,sans-serif;text-align:center;color:#333"><h1 style="font-size:18px;margin:0 0 12px">Something went wrong loading the app</h1><p style="margin:0 0 16px;color:#666">We couldn\'t load a required component. Check your connection and reload.</p><button style="padding:10px 20px;border:0;border-radius:6px;background:#1a5;color:#fff;font-size:14px;cursor:pointer">Reload</button></div>';
     document.body.querySelector("button").onclick = () => location.reload();   // R95 · B3: CSP — no inline handler
   };
   if (document.body) showFail(); else document.addEventListener("DOMContentLoaded", showFail);
@@ -4742,6 +4742,87 @@ function setPageTitle(page) {
   const t = PAGE_TABS[page] && pageTabsAllowed(page).length > 1 ? pageTabsAllowed(page).find((x) => x.key === pageTabActive[page]) : null;
   if (t && t.label && t.label !== lbl) lbl = `${lbl} › ${t.label}`;
   document.title = lbl ? `${lbl} · ${BASE_TITLE}` : BASE_TITLE;
+}
+/* R108 · X9: ONE ICON SET. The app's labels were written with emoji, which draw in full colour and differently on
+   Windows, Mac and phones. The labels stay as written (and stay what the suites and the screen-reader text read);
+   on screen each emoji is swapped for a single-colour line icon that takes the colour of the text beside it.
+   Typographic marks (→ ✓ ✕ ↻) are text already and are left alone. Not applied under the harness seam. */
+const ICON_PATHS = {
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  hourglass: '<path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9s10 4 10 9"/>',
+  shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3z"/>',
+  doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
+  note: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="m13.5 6.5 4 4"/>',
+  pin: '<path d="M12 21s-6-5.5-6-10a6 6 0 0 1 12 0c0 4.500-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
+  check: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+  home: '<path d="m3 11 9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+  pound: '<path d="M17 20H7c2-2 2-5 1-8M6 12h8M16 7a4 4 0 0 0-7.500-1.500c-.8 1.500-.5 4 .5 6.500"/>',
+  users: '<circle cx="9" cy="8" r="3.500"/><path d="M2.500 20a6.500 6.500 0 0 1 13 0M16 4.500a3.500 3.500 0 0 1 0 7M18 14.500a6.500 6.500 0 0 1 3.500 5.500"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.700 0l3-3a4 4 0 0 0-5.700-5.700l-1 1M14 10a4 4 0 0 0-5.700 0l-3 3a4 4 0 0 0 5.700 5.700l1-1"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>',
+  star: '<path d="m12 3 2.700 5.600 6.100.900-4.400 4.300 1 6.100L12 17l-5.400 2.900 1-6.100L3.200 9.500l6.100-.900L12 3z"/>',
+  inbox: '<path d="M12 3v10m0 0-4-4m4 4 4-4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
+  outbox: '<path d="M12 14V4m0 0-4 4m4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3M14 9l2 2"/>',
+  alert: '<path d="M12 4 2.500 20h19L12 4z"/><path d="M12 10v5M12 17.500v.500"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.500-4L4 8M4 4v4h4M4 13a8 8 0 0 0 14.500 4L20 16M20 20v-4h-4"/>',
+  thumb: '<path d="M7 11v9H4v-9h3zm0 0 4-7a2 2 0 0 1 3 2l-1 4h5a2 2 0 0 1 2 2.400l-1.500 6a2 2 0 0 1-2 1.600H7"/>',
+  save: '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M8 3v5h7M8 21v-7h8v7"/>',
+  ban: '<circle cx="12" cy="12" r="9"/><path d="m6 6 12 12"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>',
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  clip: '<path d="M20 11.500 12 19.500a5 5 0 0 1-7-7l8-8a3.500 3.500 0 0 1 5 5l-8 8a2 2 0 0 1-3-3l7-7"/>',
+  bank: '<path d="M3 10 12 4l9 6M5 10v8M9.500 10v8M14.500 10v8M19 10v8M3 20h18"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
+  tag: '<path d="M3 12V4h8l10 10-8 8L3 12z"/><circle cx="7.500" cy="7.500" r="1.500"/>',
+  spark: '<path d="M12 3v6M12 15v6M3 12h6M15 12h6M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+  tools: '<path d="M14 6a4 4 0 0 0 5 5l-9 9a2 2 0 0 1-3-3l9-9a4 4 0 0 1-2-2zM4 4l4 4"/>',
+  pen: '<path d="M4 20c4-1 6-3 8-7l4-9 3 3-9 4c-4 2-5 5-6 9z"/>',
+  magnet: '<path d="M5 4h4v8a3 3 0 0 0 6 0V4h4v8a7 7 0 0 1-14 0V4zM5 8h4M15 8h4"/>',
+};
+const ICON_OF = {
+  "📞": "phone", "✉": "mail", "📧": "mail", "💬": "chat", "📅": "calendar", "⏰": "clock", "⏱": "clock", "⏳": "hourglass",
+  "🛡": "shield", "📄": "doc", "📋": "doc", "📝": "note", "✏": "note", "📌": "pin", "✅": "check", "🏠": "home", "🏡": "home",
+  "🔍": "search", "💷": "pound", "🤝": "users", "👥": "users", "👤": "user", "🔗": "link", "🗂": "folder", "📁": "folder",
+  "⭐": "star", "🎉": "star", "📥": "inbox", "📤": "outbox", "⬆": "outbox", "🗑": "trash", "🔒": "lock", "🔑": "key",
+  "⚠": "alert", "🚨": "alert", "🔁": "refresh", "🔄": "refresh", "👍": "thumb", "💾": "save", "🚫": "ban", "⚙": "gear",
+  "⚑": "flag", "📎": "clip", "🏦": "bank", "📊": "chart", "🌐": "globe", "🏷": "tag", "✨": "spark", "🎯": "target",
+  "🧰": "tools", "🖋": "pen", "🧲": "magnet", "☀": "spark", "🔥": "alert", "🧹": "spark",
+};
+const ICON_RE = new RegExp("(" + Object.keys(ICON_OF).join("|") + ")\\uFE0F?", "u");
+const iconSvg = (name) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" data-ic="${name}">${ICON_PATHS[name].replace(/(\d)\.(\d)00\b/g, "$1.$2")}</svg>`;
+function iconize(root) {
+  if (!root || (root.nodeType !== 1 && root.nodeType !== 3)) return;
+  const nodes = [];
+  if (root.nodeType === 3) nodes.push(root);
+  else { const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT); let n; while ((n = w.nextNode())) nodes.push(n); }
+  nodes.forEach((t) => {
+    const host = t.parentElement;
+    if (!host || !ICON_RE.test(t.nodeValue) || host.closest("option, textarea, title, script, style, [contenteditable], [data-emoji]")) return;
+    const span = document.createElement("span");
+    span.innerHTML = t.nodeValue.split(new RegExp(ICON_RE.source, "gu")).map((part, i) => (i % 2 ? iconSvg(ICON_OF[part]) : esc(part))).join("");
+    t.replaceWith(...span.childNodes);
+  });
+}
+if (ROW_ONE()) {
+  const start = () => {
+    iconize(document.body);
+    new MutationObserver((ms) => ms.forEach((m) => {
+      if (m.type === "characterData") iconize(m.target);
+      else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) iconize(n); });
+    })).observe(document.body, { childList: true, subtree: true, characterData: true });
+  };
+  if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
 }
 /* R107 · N1: THE SIDEBAR SAYS WHERE WORK IS WAITING. Three numbers, each the same number its page shows: Today —
    My Day rows that are due or overdue; Retention — rates that have already ended (rateBookCounts, the one
@@ -23589,7 +23670,7 @@ async function buildEvidencePack(caseId) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Evidence pack — ${esc(name)}${packProp ? " — " + esc(packProp) : ""}</title>
     <style>
       body{font-family:Arial,sans-serif;color:#222;max-width:800px;margin:30px auto;font-size:13px;line-height:1.5;}
-      h1{font-size:20px;color:#00488c;} h2{font-size:15px;color:#00488c;margin-top:26px;border-bottom:1px solid #ddd;padding-bottom:4px;}
+      h1{font-size:18px;color:#00488c;} h2{font-size:14px;color:#00488c;margin-top:26px;border-bottom:1px solid #ddd;padding-bottom:4px;}
       table{border-collapse:collapse;width:100%;} td,th{padding:5px 10px;border-bottom:1px solid #eee;text-align:left;vertical-align:top;}
       .muted{color:#777;} @media print {.noprint{display:none}}
     </style></head><body>
@@ -23597,7 +23678,7 @@ async function buildEvidencePack(caseId) {
     <h1>Case evidence pack — ${esc(name)}${packProp ? ` — ${esc(packProp)}` : ""}</h1>
     
     <h2 style="margin-top:14px;">Security property</h2>
-    <p style="font-size:15px;font-weight:bold;margin:4px 0 0;">${propAddress(c) ? esc(propAddress(c)) : "Not recorded"}</p>
+    <p style="font-size:14px;font-weight:bold;margin:4px 0 0;">${propAddress(c) ? esc(propAddress(c)) : "Not recorded"}</p>
     ${propAddress(c) ? "" : '<p class="muted" style="margin-top:2px;">No property address is held on this case. The address below under Client is the client\'s own home, which is not necessarily the property this mortgage is secured on.</p>'}
     <p class="muted">Generated ${new Date().toLocaleString("en-GB")} by ${esc(generatedBy)} (${esc(generatedRole)}) · NexMoney Back Office · Case ref ${String(c.id).slice(0, 8).toUpperCase()}</p>
     <h2>Client</h2><table>
@@ -26537,6 +26618,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r107";   // R89
+window.__nxTag_app = "r108";   // R89
 
 init();
