@@ -157,6 +157,8 @@ h2 { color: var(--dark); font-size: 18px; font-weight: 700; letter-spacing: -0.0
   transition: opacity .15s ease, filter .15s ease;
 }
 .sidenav button:hover { background: rgba(255,255,255,.06); color: #e8f0fa; }
+.modal-backdrop.record-back { left: 216px; padding: 0; background: var(--bg, #f4f6fa); -webkit-backdrop-filter: none; backdrop-filter: none; } .modal.record { width: 100%; max-width: 1240px; min-height: 100vh; margin: 0 auto; border-radius: 0; box-shadow: none; animation: none; display: grid; grid-template-columns: 384px minmax(0, 1fr); gap: 0 28px; align-content: start; } .modal.record > * { grid-column: 1 / -1; } .modal.record > .rec-side { grid-column: 1; } .modal.record > .rec-main { grid-column: 2; min-width: 0; } .modal.record .cs-sticky-actions { position: static; margin: 0 0 14px; padding: 0 0 12px; }
+.rec-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; } .rec-tabs > button { border: 0; background: none; padding: 9px 14px; font: inherit; font-size: 14px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; } .rec-tabs > button[aria-selected="true"] { color: var(--navy); font-weight: 600; border-bottom-color: var(--navy); } .rec-panel:not([data-tab="work"]) > details > summary { pointer-events: none; list-style: none; font-weight: 600; } .rec-panel:not([data-tab="work"]) > details > summary::-webkit-details-marker { display: none; } .modal.record .form-grid { grid-template-columns: repeat(3, 1fr); } .modal.record .case-summary a { color: var(--navy); text-decoration: none; }
 .ic { width: 1.05em; height: 1.05em; flex: 0 0 auto; display: inline-block; vertical-align: -0.16em; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .sidenav .nav-n { margin-left: auto; min-width: 22px; padding: 1px 6px; border-radius: 10px; background: rgba(255,255,255,.16); color: #fff; font-size: 12px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
 .skel > i { display: block; height: 44px; margin: 0 0 8px; border-radius: var(--radius-sm); background: linear-gradient(90deg, #eef2f7 25%, #f6f8fb 50%, #eef2f7 75%); background-size: 200% 100%; animation: skel 1.2s linear infinite; } @keyframes skel { to { background-position: -200% 0; } }
@@ -2292,20 +2294,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   padding: 12px 14px; margin-bottom: 10px;
 }
 .vault-card-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
-.vault-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.vault-name { font-weight: 700; color: var(--dark); font-size: 14px; overflow-wrap: anywhere; }
+.vault-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; } .vault-name { font-weight: 700; color: var(--dark); font-size: 14px; overflow-wrap: anywhere; }
 .vault-user { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .vault-card-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 /* The vault card's ⋯ menu (was inline styles, R88 · E): a native <details> whose menu floats under the button. */
 details.vault-more { position: relative; display: inline-block; } details.vault-more > summary.vault-more-btn { list-style: none; display: inline-flex; }
 details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: #fff; border: 1px solid var(--border, #e4e9f0); border-radius: 8px; padding: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.12); min-width: 120px; }
 .vault-owner { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .01em; }
-.vault-owner-daniel { background: var(--blue-bg); color: var(--navy); }
-.vault-owner-luke   { background: var(--green-bg); color: var(--green); }
+.vault-owner-daniel { background: var(--blue-bg); color: var(--navy); } .vault-owner-luke   { background: var(--green-bg); color: var(--green); }
 .vault-owner-wayne  { background: #f3ecfc; color: #6b21a8; }
 /* R73 · B5 — likewise: a credential IS shared or it isn't. Solid amber. */
-.vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
-.vault-owner-other  { background: #eef1f5; color: #556275; }
+.vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); } .vault-owner-other  { background: #eef1f5; color: #556275; }
 .vault-vis { font-size: 12px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
 .vault-vis-restricted { background: var(--amber-bg); color: var(--amber); }
 .vault-fields { margin-top: 10px; display: grid; gap: 4px; }
@@ -3129,6 +3128,7 @@ details.case-details.case-fold { border-top: 1px solid var(--border); padding: 0
 
 /* ---- Narrow desktop / tablet ---- */
 @media (max-width: 900px) {
+  .modal-backdrop.record-back { left: 0; } .modal.record { display: block; padding: 16px; } .modal.record .form-grid { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
   #report-kpis .kpi-wide { grid-column: auto; }
   .diary-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
