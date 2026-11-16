@@ -187,8 +187,37 @@ function vaultUserToken(r) {
   const val = String(f.value).trim();
   return `<span class="vault-user" title="${esc(String(f.label || "Login"))} on this entry — the field that tells two entries with the same name apart. Never a password.">${esc(val)}</span>`;
 }
+/* R106 · O9 (owner decision, 16 Nov 2026): AN ENTRY IS ONE LINE — its name, the login it is for, and the two
+   things it is opened for: copy the username, copy the password. Edit and Delete sit behind ⋯ and every field
+   (with its own reveal and copy) is one press away under "Details". The harness seam keeps the open card. */
+function vaultRowHtml(r, fields) {
+  const filled = fields.filter((f) => f && f.value != null && String(f.value).trim() !== "");
+  const user = filled.find((f) => !f.secret && VAULT_USER_LABEL_RE.test(String(f.label || "")));
+  const pass = filled.find((f) => f.secret);
+  const quick = (f, text) => f ? `<button type="button" class="btn btn-sm vault-quick" data-nexcopy="${esc(String(f.value))}" data-copylabel="${esc(f.label || "")}" title="Copy ${esc(f.label || "")}">${text}</button>` : "";
+  const edit = `<button type="button" class="btn btn-sm vault-edit" data-id="${esc(r.id)}">Edit</button>`;
+  const menu = isAdminOrOwner()
+    ? `<details class="vault-more" data-id="${esc(r.id)}"><summary class="btn btn-sm vault-more-btn" role="button" aria-label="More actions for ${esc(r.name || "this entry")}" title="More actions">⋯</summary><div class="vault-more-menu">${edit}<button type="button" class="btn btn-sm btn-danger vault-del" data-id="${esc(r.id)}">Delete</button></div></details>`
+    : edit;
+  return `<div class="vault-card vault-row" data-id="${esc(r.id)}">
+    <div class="vault-card-head">
+      <div class="vault-card-title">
+        <span class="vault-name">${esc(r.name || "(no name)")}</span>
+        ${vaultUserToken(r)}
+        ${vaultOwnerChip(r.owner_label)}
+        ${vaultVisChip(r)}
+      </div>
+      <div class="vault-card-actions">${quick(user, "Copy username")}${quick(pass, "Copy password")}${menu}</div>
+    </div>
+    <details class="vault-fold"><summary>Details · ${fields.length} field${fields.length === 1 ? "" : "s"}${r.note ? " · note" : ""}</summary>
+      <div class="vault-fields">${fields.map(vaultFieldHtml).join("") || '<span class="empty">No fields recorded.</span>'}</div>
+      ${r.note ? `<div class="vault-note">${esc(r.note)}</div>` : ""}
+    </details>
+  </div>`;
+}
 function vaultCardHtml(r) {
   const fields = Array.isArray(r.fields) ? r.fields : [];
+  if (typeof ROW_ONE === "function" && ROW_ONE()) return vaultRowHtml(r, fields);
   /* R87 · owner-admin (05 #13): ONE COPY AFFORDANCE PER SECRET. The head's "🔑 Copy password" duplicated the
      ⧉ on the password row; the row keeps Reveal + Copy, the head keeps Edit. */
   return `<div class="vault-card" data-id="${esc(r.id)}">
@@ -386,7 +415,7 @@ async function deleteVaultEntry(id) {
   const list = $("#vault-list");
   if (list) list.addEventListener("click", (ev) => {
     const edit = ev.target.closest(".vault-edit");
-    if (edit) { const r = VAULT_ROWS.find((x) => String(x.id) === String(edit.dataset.id)); if (r) openVaultEditor(r); return; }
+    if (edit) { const m = edit.closest("details.vault-more"); if (m) m.open = false; const r = VAULT_ROWS.find((x) => String(x.id) === String(edit.dataset.id)); if (r) openVaultEditor(r); return; }
     const del = ev.target.closest(".vault-del");
     if (del) { const m = del.closest("details.vault-more"); if (m) m.open = false; deleteVaultEntry(del.dataset.id); return; }
   });
@@ -399,4 +428,4 @@ async function deleteVaultEntry(id) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_vault = "r105";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_vault = "r106";   // R89 — the CTO bumps all seven together at each gate
