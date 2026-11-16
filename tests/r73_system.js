@@ -474,7 +474,7 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
       const page = await boot(browser, "p4");
 
       /* C1 — the inventory. Every VISIBLE .btn on every page, tallied by type
-         size. The contract is three sizes: 13.5 / 12.5 / 12 (R101 raised the small rung from 11.5: nothing under 12px). `.btn-block`
+         size. R108 · X1 folded the three rungs (13.5 / 12.5 / 12) onto the site-wide five-size scale: buttons are 13 or 12. `.btn-block`
          (the login/full-width variant, 14px) is excluded by name because it is
          a width, not a rung — it never appears beside the other three. */
       const sizes = {};
@@ -487,7 +487,7 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
             if (b.offsetParent === null) return;
             const f = getComputedStyle(b).fontSize;
             out[f] = (out[f] || 0) + 1;
-            if (!["13.5px", "12.5px", "12px"].includes(f)) {
+            if (!["13px", "12px"].includes(f)) {
               const k = f + " " + (b.className || "").slice(0, 60);
               bad[k] = (bad[k] || 0) + 1;
             }
@@ -498,9 +498,9 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
         Object.entries(got.bad).forEach(([k, v]) => (offenders[k] = (offenders[k] || 0) + v));
       }
       console.log("    button size inventory: " + JSON.stringify(sizes));
-      eq("C1 · three button sizes across all thirteen pages, and no more", Object.keys(offenders), []);
-      ok("C2 · all three rungs are actually in use (13.5 / 12.5 / 12)",
-        sizes["13.5px"] > 0 && sizes["12.5px"] > 0 && sizes["12px"] > 0, JSON.stringify(sizes));
+      eq("C1 · two button sizes (13 / 12) across all thirteen pages, and no more", Object.keys(offenders), []);
+      ok("C2 · both rungs are actually in use (13 / 12)",
+        sizes["13px"] > 0 && sizes["12px"] > 0, JSON.stringify(sizes));
 
       /* C3 — navy fill no longer means "selected filter". The class name
          .scope-active is KEPT on purpose (twenty JS call sites and several
@@ -623,7 +623,7 @@ const ALL_PAGES = ["dashboard", "pipeline", "diary", "clients", "protection", "r
           .map((h) => ({ t: (h.textContent || "").trim().slice(0, 30), fs: getComputedStyle(h).fontSize, tt: getComputedStyle(h).textTransform }));
       });
       ok("D2 · a bare h3 nested inside a panel takes the panel-heading look, not the browser default",
-        nested.length === 0 || nested.every((n) => n.fs === "11.5px" && n.tt === "uppercase"), JSON.stringify(nested));
+        nested.length === 0 || nested.every((n) => n.fs === "12px" && n.tt === "uppercase"), JSON.stringify(nested));
 
       /* D3 — .num. The cells declare it; the header is derived from the column,
          so the two can never disagree. Asserted on Reports, whose eleven tables
