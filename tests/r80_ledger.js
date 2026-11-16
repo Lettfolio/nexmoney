@@ -611,7 +611,18 @@ const promoterDom = (page) => page.evaluate(() => ({
       return data.id;
     }, { clientId: gt.clientId, caseId: gt.caseId, s: at(base, 10), e: at(base, 11) });
     await goPage(page, "diary", 2600);
-    const target = new Date(base); target.setDate(target.getDate() + 1);
+    /* R106: the move lands on the first later day p2 has NOTHING booked across 10:00–11:00. A fixed "+1 day" hit a
+       seeded appointment on some weekdays, and a clash opens the house confirm, which this drag never answers. */
+    const hop = await page.evaluate(async (o) => {
+      const { data } = await window.__mockDb.from("appointments").select("id,staff_id,starts_at,ends_at");
+      for (let n = 1; n < 30; n++) {
+        const d = new Date(o.base); d.setDate(d.getDate() + n);
+        const s = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 10, 0).getTime(), e = s + 3600000;
+        if (!(data || []).some((a) => a.id !== o.id && a.staff_id === "p2" && new Date(a.starts_at).getTime() < e && new Date(a.ends_at || a.starts_at).getTime() > s)) return n;
+      }
+      return 1;
+    }, { base: base.toISOString(), id: apptId });
+    const target = new Date(base); target.setDate(target.getDate() + hop);
     const ymd = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}-${String(target.getDate()).padStart(2, "0")}`;
     await page.evaluate(async ({ id, d }) => { await window.diaryMoveAppt(id, { date: d }); }, { id: apptId, d: ymd });
     await wait(page, 1400);

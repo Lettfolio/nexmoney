@@ -750,7 +750,7 @@ function rowItemHtml(o) {
      takes the ellipsis. It used to be appended to the one nowrap line… */
   const fact = (o.fact ? `<span class="row-fact-t">${o.fact}</span>` : "")
     + (contact ? `<span class="row-contact">${o.fact ? "· " : ""}${contact}</span>` : "");
-  const acts = kitVerbsHtml(o.verbs, o.more, { moreCls: o.moreCls, moreTitle: o.moreTitle || "More actions on this row", verbCls: o.verbCls, one: o.one });
+  const acts = kitVerbsHtml(o.verbs, o.more, { moreCls: o.moreCls, moreTitle: o.moreTitle || "More actions on this row", verbCls: o.verbCls, one: o.one !== false });   // R106: every kit row (Clients, Protection, Retention) is one button + ⋯
   return `<div class="row-item kit-row${o.cls ? " " + esc(o.cls) : ""}${o.cb && o.cb.checked ? " is-sel" : ""}"${kitAttr("id", o.id ? `row-${o.id}` : "")}${kitAttr("data-id", o.id)}${kitDataAttrs(o.attrs)}>`
     + cb
     + `<div class="row-main">`
@@ -26482,6 +26482,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r105";   // R89
+window.__nxTag_app = "r106";   // R89
 
 init();
