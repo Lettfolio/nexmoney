@@ -389,6 +389,16 @@ function renderMonthReport(all, mv) {
   const cmpMoney = (k) => notStarted ? futureChip : deltaChips(cur[k],
     { value: prevSet[k], hasData: prevSet.hasData, label: prevLbl },
     { value: yoySet[k], hasData: yoySet.hasData, label: yoyLbl }, fmtM);
+  /* R115 · O5: one month and two comparisons say where the month stands, not which way the year is going. Each
+     headline figure carries the twelve months ending in the one on show, as a line, from the same `all` and the
+     same helpers as the figure itself. The months and their values are on the tooltip and read out in full. */
+  const trendMonths = Array.from({ length: 12 }, (_, i) => monthAdd(mv, i - 11));
+  const trendSets = trendMonths.map((m) => monthKpiSet(all, m));
+  const trend12 = (vals, fmt) => {
+    const said = trendMonths.map((m, i) => `${monthShortLabel(m, true)} ${fmt ? fmt(vals[i]) : vals[i]}`).join(" · ");
+    return `<div class="kpi-trend" title="${esc(said)}">${sparklineSvg(vals)} <span class="u-muted" aria-hidden="true">12 months</span><span class="sr-only">Twelve months to ${esc(monthLabel(mv))}: ${esc(said)}</span></div>`;
+  };
+  const trendOf = (k, fmt) => trend12(trendSets.map((t) => Number(t[k]) || 0), fmt);
   const sub = cur.sub, done = cur.done;
   const sum = (rows, k) => rows.reduce((s, c) => s + Number(c[k] || 0), 0);
   $("#month-report-title").textContent = "Monthly business — " + monthLabel(mv);
@@ -407,9 +417,9 @@ function renderMonthReport(all, mv) {
   /* R103 · O1: "Completed £" is the hero's figure now (with its comparison chips), not a fourth tile. R5-F2 — it was the headline: it is not
      moved and its label is unchanged; the emphasis is carried by kpi-headline… */
   $("#month-kpis").innerHTML = `
-    <div class="kpi"><div class="num">${cur.nSub}</div><div class="lbl">Applications submitted</div>${cmpCount("nSub")}</div>
-    ${money ? `<div class="kpi kpi-secondary"><div class="num">${fmtM(cur.subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("subTotal")}</div>` : ""}
-    <div class="kpi"><div class="num">${cur.nDone}</div><div class="lbl">Completions</div>${cmpCount("nDone")}</div>`;
+    <div class="kpi"><div class="num">${cur.nSub}</div><div class="lbl">Applications submitted</div>${cmpCount("nSub")}${trendOf("nSub")}</div>
+    ${money ? `<div class="kpi kpi-secondary"><div class="num">${fmtM(cur.subTotal)}</div><div class="lbl">Submitted £ (proc+broker+sols)</div>${basisLine(BASIS_EARNED_ALL)}${cmpMoney("subTotal")}${trendOf("subTotal", fmtM)}</div>` : ""}
+    <div class="kpi"><div class="num">${cur.nDone}</div><div class="lbl">Completions</div>${cmpCount("nDone")}${trendOf("nDone")}</div>`;
 
   /* R74 · A4a (panel D#12): THE HERO ROW, AT THE TOP OF THE PAGE. Every figure here is one the code above has
      already computed for the panel below (cur.doneTotal, and the earned/target pair the bar uses), read from the
@@ -440,7 +450,8 @@ function renderMonthReport(all, mv) {
         /* R87 · owner-admin (T1) — the pointer sentence ("the bar … are in Monthly business below")
            restated the panel one scroll down; the basis stays (r74 §D1d pins "paid or not" + the chip). */
         + `<span class="rep-hero-basis">Fee value on the ${heroEarned.n} case${heroEarned.n === 1 ? "" : "s"} that completed in ${esc(monthLabel(mv))}, paid or not. <span class="money-basis">${esc(BASIS_TARGET_EARNED)}</span></span>`
-        + cmpMoney("doneTotal");
+        + cmpMoney("doneTotal")
+        + `<span class="rep-hero-basis rep-hero-trend">${trend12(trendMonths.map((m) => earnedOnCompletion(all, m).total), fmtM)}</span>`;
     }
   }
 
@@ -5115,4 +5126,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r114";   // R89
+window.__nxTag_reportsmoney = "r115";   // R89
