@@ -72,7 +72,7 @@ const state = (p) => p.evaluate(() => { const m = document.getElementById("modal
   await p.click('[data-page="clients"]'); await p.waitForTimeout(1600);
   await p.evaluate(async () => { const { data } = await window.__mockDb.from("clients").select("id"); await window.openClient(data[0].id); }); await p.waitForTimeout(1300);
   const cl = await state(p);
-  ok("C2 · a client record is unchanged in this round", cl.open && !cl.record && cl.tabs.length === 0, JSON.stringify({ open: cl.open, record: cl.record }));
+  ok("C2 · R111: a client record is a record too, with its own three tabs", cl.open && cl.record && cl.tabs.join("|").replace("*", "") === "Cases|Timeline|Details", JSON.stringify({ open: cl.open, record: cl.record, tabs: cl.tabs }));
 
   console.log("D · phone and the seam");
   const ph = await boot(browser, "?as=p4&scope=default", { width: 390, height: 844 });

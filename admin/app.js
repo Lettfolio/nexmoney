@@ -21305,7 +21305,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     </div>${foldTimeline ? "</details>" : ""}` : "";
   /* R66 · H5: the Cases block is a variable now purely so the fold above can put it FIRST. Its markup,
      heading and property-count label are byte-identical to what they were… */
-  const casesBlockHtml = id ? `<div class="u-mt-14"><h3 style="font-size:14px;">Cases${clientPropertyCountLabel(cases)}</h3>
+  const casesBlockHtml = id ? `<div class="u-mt-14" id="client-cases-block"><h3 style="font-size:14px;">Cases${clientPropertyCountLabel(cases)}</h3>
       ${clientPortfolioHtml(cases)}
       ${clientCasesHtml(cases)}
     </div>` : "";
@@ -26256,9 +26256,16 @@ const RECORD_TABS = [
   ["details", "Details", ["#case-fold-facts", "#case-sec-wrap", "details.case-details"]],
   ["history", "History", ["#case-history"]],
 ];
-let recordTab = "work";
+/* R111 · B3 — the client record takes the same shape: who they are and the portfolio down the left, then
+   Cases, Timeline and Details as tabs. A new client (no cases block) keeps the small panel. */
+const CLIENT_TABS = [
+  ["cases", "Cases", ["#client-cases-block"]],
+  ["timeline", "Timeline", ["#client-timeline-fold", ".tl-section"]],
+  ["details", "Details", ["details.client-details"]],
+];
+const recordTabOf = { case: "work", client: "cases" };   // the last tab used, per kind of record
 function recordShowTab(modal, key) {
-  recordTab = key;
+  recordTabOf[modal.dataset.record] = key;
   modal.querySelectorAll(".rec-tabs > button").forEach((b) => { const sel = b.dataset.tab === key; b.setAttribute("aria-selected", sel ? "true" : "false"); b.tabIndex = sel ? 0 : -1; });
   modal.querySelectorAll(".rec-panel").forEach((p) => {
     p.hidden = p.dataset.tab !== key;
@@ -26275,17 +26282,24 @@ function recordHeading(modal) {
 }
 function recordLayout(modal) {
   const sum = modal.querySelector(":scope > .case-summary");
-  const want = ROW_ONE() && !!sum && !sum.classList.contains("hidden") && !!modal.querySelector(":scope > #case-tasks");
-  modal.classList.toggle("record", want);
-  $("#modal-backdrop").classList.toggle("record-back", want);
-  if (!want) return;
+  const kind = !ROW_ONE() ? "" : (sum && !sum.classList.contains("hidden") && modal.querySelector(":scope > #case-tasks")) ? "case"
+    : modal.querySelector(":scope > #client-cases-block") ? "client" : "";
+  modal.classList.toggle("record", !!kind);
+  modal.dataset.record = kind;
+  $("#modal-backdrop").classList.toggle("record-back", !!kind);
+  if (!kind) return;
+  const tabs = kind === "case" ? RECORD_TABS : CLIENT_TABS;
+  const sideSels = kind === "case" ? ["#cs-sticky-actions", ".case-summary"]
+    : [".client-contact-line", "#client-last-contact", "#client-advocacy", ".dup-hint", "#client-portfolio", "#client-portfolio-sub"];
+  // A client opened to fix one field (a failed send, a missing date of birth) opens on the tab that field is in.
+  const forced = kind === "client" && modal.querySelector(":scope > details.client-details[open]") ? "details" : "";
   const mk = (cls) => { const d = document.createElement("div"); d.className = cls; return d; };
   const side = mk("rec-side"), main = mk("rec-main"), strip = mk("rec-tabs");
   strip.setAttribute("role", "tablist");
   const acts = modal.querySelector(":scope > .modal-actions");
-  [modal.querySelector(":scope > #cs-sticky-actions"), sum].forEach((n) => { if (n) side.appendChild(n); });
+  sideSels.forEach((sel) => { const n = modal.querySelector((sel.charAt(0) === "#" && kind === "client" ? "" : ":scope > ") + sel); if (n) side.appendChild(n); });
   main.appendChild(strip);
-  RECORD_TABS.forEach(([key, label, sels]) => {
+  tabs.forEach(([key, label, sels]) => {
     const panel = mk("rec-panel"); panel.dataset.tab = key; panel.setAttribute("role", "tabpanel"); panel.setAttribute("aria-label", label);
     sels.forEach((sel) => { const n = modal.querySelector(":scope > " + sel); if (n) panel.appendChild(n); });
     const b = document.createElement("button"); b.type = "button"; b.dataset.tab = key; b.setAttribute("role", "tab"); b.textContent = label;
@@ -26293,9 +26307,16 @@ function recordLayout(modal) {
     strip.appendChild(b); main.appendChild(panel);
   });
   modal.insertBefore(side, acts); modal.insertBefore(main, acts);
-  recordHeading(modal);
+  if (kind === "case") recordHeading(modal);
+  else {
+    // The timeline is a tab now, so what explained why it was folded goes.
+    modal.querySelectorAll(".tl-fold-sub").forEach((n) => n.remove());
+    const ts = modal.querySelector("#client-timeline-fold > summary"); if (ts) ts.removeAttribute("title");
+  }
   const x = modal.querySelector(".modal-close"); if (x) { x.title = "Back to the list"; x.setAttribute("aria-label", "Back to the list"); }
-  recordShowTab(modal, RECORD_TABS.some((t) => t[0] === recordTab) ? recordTab : "work");
+  const usual = tabs.some((t) => t[0] === recordTabOf[kind]) ? recordTabOf[kind] : tabs[0][0];
+  recordShowTab(modal, forced || usual);
+  if (forced) recordTabOf[kind] = usual;   // a one-field visit is not a preference
 }
 /* ---------- Modal helpers ---------- */
 let modalPrevFocus = null;
@@ -26816,6 +26837,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r110";   // R89
+window.__nxTag_app = "r111";   // R89
 
 init();
