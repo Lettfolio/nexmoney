@@ -430,7 +430,7 @@ async function siteOpenGuideEditor(id, draft) {
    R93 · C: every top-level name here starts with `seo` — eight classic scripts share one global scope. */
 let seoRunning = false;
 /* R100: what the history chart shows and how the queries table is sorted — kept across repaints. */
-const seoView = { type: "site", key: "", range: 90, series: [], pts: [], sort: "impressions", dir: -1, filter: "", all: false, model: null };
+const seoView = { type: "site", key: "", range: 90, series: [], pts: [], sort: "impressions", dir: -1, filter: "", all: false, model: null, tab: "" };
 const SEO_KINDS_DAY = ["summary", "audit", "psi", "gsc", "gsc_query"];
 const SEO_SERIES_KIND = { site: "gsc_day", page: "gsc_page_day", query: "gsc_query_day" };
 const SEO_RANGES = [[28, "28 days"], [90, "90 days"], [480, "16 months"]];
@@ -808,16 +808,33 @@ function seoPaint(root, res) {
   const notesChip = notes.length ? seoBadge("amber seo-notes", `${notes.length} note${notes.length === 1 ? "" : "s"}`, notes.join("\n")) : "";
   root.innerHTML = `<div class="seo-head" id="seo-head"><span class="seo-last" title="${esc(String(when))}">Last audit ${esc(fmtAgo(when) || res.day)}${dur == null ? "" : ` · ${esc((dur / 1000).toFixed(1))}s`}</span>${notesChip}${seoRunBtnHtml()}</div>`
     + seoTilesHtml(m)
-    + (s.gsc_connected ? seoHistoryHtml(m) + seoRecsHtml(m) : "")
-    + seoTableHtml(m)
-    + seoQueriesHtml(m);
+    + seoBodyHtml(m, !!s.gsc_connected);
   syncNumHeaders(root);
+}
+/* R112 · O10: the tab had grown to five panels in one scroll. Two inner tabs: Performance (how search is
+   going — history, what to do, queries) and Page audit (the per-page table). It opens on Performance once
+   Search Console is connected, on the audit until then, and stays where it was left. The harness seam keeps
+   the one long page the R93/R100 suites read. */
+function seoBodyHtml(m, gsc) {
+  const perf = (gsc ? seoHistoryHtml(m) + seoRecsHtml(m) : "") + seoQueriesHtml(m), audit = seoTableHtml(m);
+  if (/** @type {any} */ (window).__NEX_TODAY_SCOPE === "all") return (gsc ? seoHistoryHtml(m) + seoRecsHtml(m) : "") + audit + seoQueriesHtml(m);
+  const on = seoView.tab || (gsc ? "perf" : "audit");
+  const tab = (k, label) => `<button type="button" role="tab" data-seo-tab="${k}" aria-selected="${k === on}">${label}</button>`;
+  const pane = (k, html) => `<div class="seo-pane" data-pane="${k}" role="tabpanel"${k === on ? "" : " hidden"}>${html}</div>`;
+  return `<div class="rec-tabs" role="tablist" id="seo-tabs">${tab("perf", "Performance")}${tab("audit", "Page audit")}</div>${pane("perf", perf)}${pane("audit", audit)}`;
+}
+function seoShowTab(root, key) {
+  seoView.tab = key;
+  root.querySelectorAll("[data-seo-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.getAttribute("data-seo-tab") === key)));
+  root.querySelectorAll(".seo-pane").forEach((p) => { p.hidden = p.getAttribute("data-pane") !== key; });
 }
 function seoWire(root) {
   if (root.__seoWired) return;
   root.__seoWired = true;
   root.addEventListener("click", (e) => {
     if (e.target.closest("#seo-run")) { seoRunAudit(); return; }
+    const tabBtn = e.target.closest("[data-seo-tab]");
+    if (tabBtn) { seoShowTab(root, tabBtn.getAttribute("data-seo-tab")); return; }
     const range = e.target.closest("[data-seo-range]");
     if (range) { seoView.range = Number(range.getAttribute("data-seo-range")) || 90; seoShowSeries(false); return; }
     const sort = e.target.closest("th[data-seo-sort]");
@@ -830,7 +847,13 @@ function seoWire(root) {
     const hist = e.target.closest("[data-seo-hist]");
     if (hist) { seoView.type = hist.getAttribute("data-seo-hist"); seoView.key = hist.getAttribute("data-key") || ""; seoShowSeries(true); return; }
     const jump = e.target.closest("[data-seo-jump]");
-    if (jump) { const t = document.getElementById(jump.getAttribute("data-seo-jump")); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    if (jump) {
+      const t = document.getElementById(jump.getAttribute("data-seo-jump"));
+      const pane = t && t.closest(".seo-pane");
+      if (pane && pane.hasAttribute("hidden")) seoShowTab(root, pane.getAttribute("data-pane"));   // the target may be on the other tab
+      if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
     const tr = e.target.closest("tr.seo-row");
     if (!tr || e.target.closest("summary, a, button, details .seo-iss-body")) return;
     const det = tr.querySelector("details.seo-iss");
@@ -919,4 +942,4 @@ async function seoRunAudit() {
 /* R93 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / site.js / app.js bumps the tag IN ALL EIGHT PLACES. */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_site = "r111";   // bumped to r93 at the gate with the other seven
+window.__nxTag_site = "r112";   // bumped to r93 at the gate with the other seven

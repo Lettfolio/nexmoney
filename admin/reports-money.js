@@ -422,11 +422,20 @@ function renderMonthReport(all, mv) {
     if (!money) heroEl.innerHTML = "";
     else {
       const heroPct = heroTarget > 0 ? Math.round((heroEarned.total / heroTarget) * 100) : null;
-      const pctColour = heroPct == null ? "" : heroPct >= 100 ? "var(--green)" : heroPct >= 60 ? "var(--amber)" : "var(--red)";
+      /* R112 · O4: 34% on the 14th is not a bad month. The colour is read against how much of the month has gone:
+         green on pace (or target met), amber behind, red only for a month that has closed short. The pace is
+         said in words too, so the colour is never the only signal. */
+      const nowD = new Date(), monthNow = nowD.getFullYear() + "-" + String(nowD.getMonth() + 1).padStart(2, "0");
+      const daysIn = new Date(Number(mv.slice(0, 4)), Number(mv.slice(5, 7)), 0).getDate();
+      const gone = mv === monthNow ? Math.round((nowD.getDate() / daysIn) * 100) : mv < monthNow ? 100 : 0;
+      const onPace = heroPct != null && (heroPct >= 100 || (mv === monthNow && heroPct >= gone));
+      const pctColour = heroPct == null ? "" : onPace ? "var(--green)" : mv < monthNow ? "var(--red)" : mv === monthNow ? "var(--amber)" : "var(--muted)";
+      const paceWord = heroPct == null || mv !== monthNow || heroPct >= 100 ? "" : onPace ? " · on pace" : " · behind pace";
+      const paceTitle = paceWord ? `${gone}% of ${monthLabel(mv)} has gone; ${heroPct}% of the target is earned.` : "";
       heroEl.innerHTML = `<span class="rep-hero-num" title="${esc(fmtM(heroEarned.total))}">${fmtM(heroEarned.total)} earned</span>`
         + (heroPct == null
           ? `<span class="rep-hero-lbl">No firm monthly target is set, so there is no percentage to read this against — set one in Settings › Targets.</span>`
-          : `<span class="rep-hero-pct" style="color:${pctColour};">${heroPct}% of target</span>
+          : `<span class="rep-hero-pct" style="color:${pctColour};"${paceTitle ? ` title="${esc(paceTitle)}"` : ""}>${heroPct}% of target${paceWord}</span>
              <span class="rep-hero-lbl">${esc(monthLabel(mv))} · target ${fmtM(heroTarget)}</span>`)
         /* R87 · owner-admin (T1) — the pointer sentence ("the bar … are in Monthly business below")
            restated the panel one scroll down; the basis stays (r74 §D1d pins "paid or not" + the chip). */
@@ -5106,4 +5115,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r111";   // R89
+window.__nxTag_reportsmoney = "r112";   // R89
