@@ -12185,7 +12185,12 @@ async function saveCaseFields(k, form, base) {
     if (form.elements.application_status) form.elements.application_status.value = "submitted";
   }
   if (!Object.keys(row).length) return;
-  const write = () => db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
+  /* openedUpdatedAt belongs to whichever case is on screen. A save still in flight after its record was
+     closed and another opened must neither use that case's stamp nor leave its own behind. */
+  const onScreen = () => k.openSeq === caseOpenSeq;   // no openCase has started since this record's own
+  let stamp = onScreen() ? openedUpdatedAt : null;
+  if (!stamp) { const { data: cur } = await db.from("cases").select("updated_at").eq("id", id).single(); stamp = cur ? cur.updated_at : null; }
+  const write = () => db.from("cases").update(row).eq("id", id).eq("updated_at", stamp).select();
   let { data: updated, error } = await write();
   if (error) return dbFail("caseAutosave", error);
   if (!updated || !updated.length) {
@@ -12196,14 +12201,15 @@ async function saveCaseFields(k, form, base) {
     const clash = Object.keys(row).filter((n) => n in now && !cfSame(theirs[n], c[n]) && !cfSame(theirs[n], row[n]));
     if (clash.length && !(await askConfirm(`A colleague changed ${clash.map(auditFieldLabel).join(", ")} while this was open. Keep what you entered?`, "Keep mine"))) {
       clash.forEach((n) => { base[n] = theirs[n]; c[n] = theirs[n]; back(n); });
-      if (!Object.keys(row).length) { openedUpdatedAt = theirs.updated_at; return; }
+      if (!Object.keys(row).length) { if (onScreen()) openedUpdatedAt = theirs.updated_at; return; }
     }
-    openedUpdatedAt = theirs.updated_at;
+    stamp = theirs.updated_at;
     ({ data: updated, error } = await write());
     if (error) return dbFail("caseAutosave", error);
     if (!updated || !updated.length) return toast("Not saved — the case changed again underneath. Change that field once more.");
   }
-  await refreshOpenedStamp(id);   // R18-D1 — our own write must not trip the next one
+  const { data: after } = await db.from("cases").select("updated_at").eq("id", id).single();
+  if (after && after.updated_at && onScreen()) openedUpdatedAt = after.updated_at;   // R18-D1 — our own write must not trip the next one
   const wasStage = c.stage, cols = Object.keys(row);
   Object.assign(c, row);
   cols.forEach((n) => { if (n in now) base[n] = row[n]; });
