@@ -28,6 +28,6 @@ Daniel's answer on 16 Nov 2026: "full-width record page and save-as-you-go on ca
 - `saveCase()` itself, which the new case and the harness seam still use.
 
 ## Harness
-Off under the R102 seam (`ROW_ONE()`). `tests/r110_autosave.js` (24). `r109_record` A10/B1/B2 re-based:
+Off under the R102 seam (`ROW_ONE()`). `tests/r110_autosave.js` (27). `r109_record` A10/B1/B2 re-based:
 they asserted the Save button and the unsaved-changes warning on the record. No CSS added (the tick reuses
 `.saved-msg`). Tags → r110. admin.css 3,949 lines.

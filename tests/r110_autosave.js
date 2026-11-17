@@ -89,6 +89,20 @@ const pick = (p, where) => p.evaluate(async (w) => { const { data } = await wind
   ok("D2 · and leaving with that note unsaved still warns", /unsaved|discard/i.test(await overlay(p)), (await overlay(p)).slice(0, 60));
   await p.evaluate(() => { const b = [...document.querySelectorAll("#overlay-modal button")].find((x) => /discard/i.test(x.textContent)); if (b) b.click(); }); await p.waitForTimeout(600);
 
+  console.log("D2 · one case's save never borrows another's stamp");
+  const id2 = await pick(p, `c.stage === "fact_find" && c.client_id && c.id !== "${id}"`);
+  await p.evaluate((i) => window.openCase(i), id); await p.waitForTimeout(1500); await details(p);
+  await p.fill('#case-form input[name="product_name"]', "Left in a hurry");
+  // Leave the box and open the next case in the same breath: the first save is still in flight.
+  await p.evaluate((i) => { document.activeElement.blur(); window.openCase(i); }, id2); await p.waitForTimeout(2000);
+  const stampOk = await p.evaluate(async (i) => { /* global openedUpdatedAt */ const { data } = await window.__mockDb.from("cases").select("updated_at").eq("id", i).single(); return typeof openedUpdatedAt !== "undefined" && openedUpdatedAt === data.updated_at; }, id2);
+  ok("D2b · the case now on screen still holds its own stamp", stampOk);
+  await p.fill('#case-form input[name="product_name"]', "Second case"); await p.press('#case-form input[name="product_name"]', "Tab"); await p.waitForTimeout(900);
+  ok("D3 · both saves land on their own case and nobody is asked about a conflict", (await row(p, id)).product_name === "Left in a hurry" && (await row(p, id2)).product_name === "Second case" && (await overlay(p)) === "", JSON.stringify({ a: (await row(p, id)).product_name, b: (await row(p, id2)).product_name, o: (await overlay(p)).slice(0, 50) }));
+  await p.fill('#case-form input[name="lender_reference"]', "REF-2"); await p.press('#case-form input[name="lender_reference"]', "Tab"); await p.waitForTimeout(900);
+  ok("D4 · and the second case goes on saving normally", (await row(p, id2)).lender_reference === "REF-2" && (await overlay(p)) === "");
+  await p.click("#modal .modal-close"); await p.waitForTimeout(600);
+
   console.log("E · where Save stays");
   await p.evaluate(() => window.openCase(null)); await p.waitForTimeout(900);
   ok("E1 · a new case keeps Save, Cancel and + New client…", (await vis(p, "#modal-save")) && (await vis(p, "#modal-cancel")) && (await p.evaluate(() => !!document.querySelector('#case-client-select option[value="__new__"]'))));
