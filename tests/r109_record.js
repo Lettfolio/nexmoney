@@ -47,18 +47,16 @@ const state = (p) => p.evaluate(() => { const m = document.getElementById("modal
   const sd = await state(p);
   const cols = await p.evaluate(() => getComputedStyle(document.querySelector("#modal .form-grid")).gridTemplateColumns.split(" ").length);
   ok("A9 · Details opens its folds without a second press and lays the form out in three columns", sd.formVis && cols === 3 && (await p.evaluate(() => [...document.querySelectorAll('#modal .rec-panel[data-tab="details"] > details')].filter((d) => d.checkVisibility()).every((d) => d.open))), JSON.stringify({ formVis: sd.formVis, cols }));
-  ok("A10 · Save is on show on every tab", s.saveVis && sh.saveVis && sd.saveVis);
+  ok("A10 · R110: the record has no Save button on any tab — fields save themselves", !s.saveVis && !sh.saveVis && !sd.saveVis);
 
   console.log("B · it still works as the panel did");
-  const before = await p.evaluate(() => document.querySelector('#modal input[name="rate_percent"]').value);
+  const cid = await p.evaluate(() => document.querySelector("#case-form").dataset.caseId);
   await p.fill('#modal input[name="rate_percent"]', "5.55");
-  await p.click("#modal .modal-close"); await p.waitForTimeout(600);
+  await p.click("#modal .modal-close"); await p.waitForTimeout(900);
   const guard = await p.evaluate(() => { const o = document.getElementById("overlay-modal"); return !!o && o.checkVisibility() ? o.textContent : ""; });
-  ok("B1 · leaving with an unsaved change still warns", /unsaved|discard/i.test(guard), guard.slice(0, 80));
-  await p.evaluate(() => { const o = document.getElementById("overlay-modal"); const b = [...o.querySelectorAll("button")].find((x) => /keep|stay|back|cancel/i.test(x.textContent)); if (b) b.click(); }); await p.waitForTimeout(400);
-  await p.click("#modal .modal-actions .btn-primary"); await p.waitForTimeout(1500);
-  const saved = await p.evaluate(async (name) => { const { data } = await window.__mockDb.from("cases").select("id,rate_percent"); return (data || []).some((c) => String(c.rate_percent) === "5.55"); }, card.name);
-  ok("B2 · Save writes the change", saved, "was " + before);
+  ok("B1 · R110: leaving a changed field does not warn — there is nothing unsaved", guard === "", guard.slice(0, 80));
+  const saved = await p.evaluate(async (i) => { const { data } = await window.__mockDb.from("cases").select("id,rate_percent").eq("id", i).single(); return String(data.rate_percent) === "5.55"; }, cid);
+  ok("B2 · and the change is on that case", saved);
   if (await p.evaluate(() => !document.getElementById("modal-backdrop").classList.contains("hidden"))) { await p.click("#modal .modal-close"); await p.waitForTimeout(500); }
   ok("B3 · closing returns to the list you came from", await p.evaluate(() => document.getElementById("modal-backdrop").classList.contains("hidden") && document.getElementById("page-pipeline").checkVisibility()));
   await p.click("#board .card:nth-of-type(2)"); await p.waitForTimeout(1400);
