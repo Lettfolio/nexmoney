@@ -26103,6 +26103,55 @@ function markRequiredFields(root) {
   });
 }
 
+/* R109 · C1/C2/C3 (owner decision, 16 Nov 2026: full-width page): A CASE OPENS AS A RECORD, NOT A POP-UP. The 640px
+   panel held three screens of scrolling in one column. The same rendered sections are re-seated: the summary and
+   its actions down the left, and four tabs on the right — Work, Documents, Details, History — so nothing is more
+   than one press and no scroll away. Nothing is re-rendered and no handler moves; a new case (five fields) and
+   every other modal keep the small panel, as does the harness seam. */
+const RECORD_TABS = [
+  ["work", "Work", ["#case-tasks", "#note-compose", "#case-referrals", "#offer-diff", "#case-milestones", "#case-fold-checklist"]],
+  ["docs", "Documents", ["#case-fold-docs", "#case-fold-files"]],
+  ["details", "Details", ["#case-fold-facts", "#case-sec-wrap", "details.case-details"]],
+  ["history", "History", ["#case-history"]],
+];
+let recordTab = "work";
+function recordShowTab(modal, key) {
+  recordTab = key;
+  modal.querySelectorAll(".rec-tabs > button").forEach((b) => { const sel = b.dataset.tab === key; b.setAttribute("aria-selected", sel ? "true" : "false"); b.tabIndex = sel ? 0 : -1; });
+  modal.querySelectorAll(".rec-panel").forEach((p) => {
+    p.hidden = p.dataset.tab !== key;
+    // Outside Work, a fold IS its tab's content: opened as the tab is shown (its own toggle loads it). In Work,
+    // Milestones and the stage checklist stay folds — they sit under the tasks and notes, not in place of them.
+    if (!p.hidden && key !== "work") p.querySelectorAll(":scope > details").forEach((d) => { if (!d.open) d.open = true; });
+  });
+}
+function recordLayout(modal) {
+  const sum = modal.querySelector(":scope > .case-summary");
+  const want = ROW_ONE() && !!sum && !sum.classList.contains("hidden") && !!modal.querySelector(":scope > #case-tasks");
+  modal.classList.toggle("record", want);
+  $("#modal-backdrop").classList.toggle("record-back", want);
+  if (!want) return;
+  const mk = (cls) => { const d = document.createElement("div"); d.className = cls; return d; };
+  const side = mk("rec-side"), main = mk("rec-main"), strip = mk("rec-tabs");
+  strip.setAttribute("role", "tablist");
+  const acts = modal.querySelector(":scope > .modal-actions");
+  [modal.querySelector(":scope > #cs-sticky-actions"), sum].forEach((n) => { if (n) side.appendChild(n); });
+  main.appendChild(strip);
+  RECORD_TABS.forEach(([key, label, sels]) => {
+    const panel = mk("rec-panel"); panel.dataset.tab = key; panel.setAttribute("role", "tabpanel"); panel.setAttribute("aria-label", label);
+    sels.forEach((sel) => { const n = modal.querySelector(":scope > " + sel); if (n) panel.appendChild(n); });
+    const b = document.createElement("button"); b.type = "button"; b.dataset.tab = key; b.setAttribute("role", "tab"); b.textContent = label;
+    b.addEventListener("click", () => recordShowTab(modal, key));
+    strip.appendChild(b); main.appendChild(panel);
+  });
+  modal.insertBefore(side, acts); modal.insertBefore(main, acts);
+  // C3: the heading names the record — client, case type, stage — not the word "Case".
+  const h = modal.querySelector(".cs-h3-row h3"), who = sum.querySelector("a, .cs-name"), stage = modal.querySelector('select[name="stage"]'), type = modal.querySelector('select[name="case_kind"]');
+  const opt = (el) => (el && el.selectedOptions[0] ? el.selectedOptions[0].textContent.trim() : "");
+  if (h && who) h.textContent = [who.textContent.trim(), [opt(type), opt(stage)].filter(Boolean).join(" · ")].filter(Boolean).join(" — ");
+  const x = modal.querySelector(".modal-close"); if (x) { x.title = "Back to the list"; x.setAttribute("aria-label", "Back to the list"); }
+  recordShowTab(modal, RECORD_TABS.some((t) => t[0] === recordTab) ? recordTab : "work");
+}
 /* ---------- Modal helpers ---------- */
 let modalPrevFocus = null;
 function modalFocusable() {
@@ -26130,6 +26179,7 @@ function openModal() {
     bar.appendChild(x);
     modal.insertBefore(bar, modal.firstChild);
   }
+  recordLayout(modal);
   $("#modal-backdrop").classList.remove("hidden");
   snapshotModalState(); // defect 4 — baseline for the dirty guard, taken as rendered
   // Focus the first real control, not the close button, so keyboard flow is unchanged.
@@ -26618,6 +26668,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r108";   // R89
+window.__nxTag_app = "r109";   // R89
 
 init();
