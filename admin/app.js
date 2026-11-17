@@ -26010,20 +26010,51 @@ function addChatBubble(kind, text, actions) {
   log.scrollTop = log.scrollHeight;
   return div;
 }
+/* R116: on a phone the drawer is sized to what is actually visible (--vvh), so the box stays above the keyboard
+   and the browser's own bar; and opening it does not raise the keyboard over the greeting. */
+function chatFit() {
+  const vv = window.visualViewport, open = !$("#assistant-drawer").classList.contains("hidden");
+  if (open && vv && ROW_ONE()) document.documentElement.style.setProperty("--vvh", Math.round(vv.height) + "px");
+  else document.documentElement.style.removeProperty("--vvh");
+}
+if (window.visualViewport) window.visualViewport.addEventListener("resize", chatFit);
+function chatClose() { chatDictateStop(); $("#assistant-drawer").classList.add("hidden"); chatFit(); }
+/* R116: dictation. The browser does the listening (Web Speech), so the button only shows where it exists. Words land
+   in the box for the user to read and send — never sent on their own, because names are often misheard. */
+const ChatSR = /** @type {any} */ (window).SpeechRecognition || /** @type {any} */ (window).webkitSpeechRecognition;
+let chatRec = null;
+function chatDictateStop() { if (chatRec) { try { chatRec.stop(); } catch (e) { /* already stopped */ } } }
+function chatDictate() {
+  if (chatRec) { chatDictateStop(); return; }
+  const input = $("#chat-input"), mic = $("#chat-mic"), base = input.value.trim();
+  const rec = new ChatSR();
+  rec.lang = "en-GB"; rec.interimResults = true; rec.continuous = false;
+  rec.onresult = (e) => { const said = Array.from(e.results).map((r) => r[0].transcript).join(" ").replace(/\s+/g, " ").trim(); input.value = (base && said ? base + " " : base) + said; };
+  rec.onerror = (e) => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") toast("The microphone is blocked for this site — allow it in your browser's settings, then try again.");
+    else if (e.error !== "no-speech" && e.error !== "aborted") toast("Dictation stopped — try again, or type instead.");
+  };
+  rec.onend = () => { if (chatRec === rec) chatRec = null; mic.classList.remove("on"); mic.setAttribute("aria-pressed", "false"); mic.setAttribute("aria-label", "Dictate"); };
+  try { rec.start(); } catch (e) { toast("Dictation could not start — type instead."); return; }
+  chatRec = rec; mic.classList.add("on"); mic.setAttribute("aria-pressed", "true"); mic.setAttribute("aria-label", "Stop dictating");
+}
 window.askAI = function (prefill) {
   $("#assistant-drawer").classList.remove("hidden");
+  $("#chat-mic").classList.toggle("hidden", !(ChatSR && ROW_ONE()));
+  chatFit();
   if (!chatSeeded) {
     chatSeeded = true;
     const first = (((ME && ME.full_name) || (ME && ME.email)) || "there").split(/[\s@]/)[0];
     addChatBubble("ai", `Hi ${first}! I can look up clients, set up new clients and cases, update case details and stages, log calls, set reminders, add notes, queue template emails and draft replies. What do you need?`);
   }
   $("#chat-input").value = prefill || "";
-  $("#chat-input").focus();
+  if (!(ROW_ONE() && window.matchMedia("(pointer: coarse)").matches)) $("#chat-input").focus();
 };
 async function sendChat() {
   const input = $("#chat-input");
   const text = input.value.trim();
   if (!text) return;
+  chatDictateStop();
   input.value = "";
   chatHistory.push({ role: "user", content: text });
   if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
@@ -26058,7 +26089,8 @@ async function sendChat() {
   }
 }
 $("#assistant-fab").addEventListener("click", () => askAI());
-$("#assistant-close").addEventListener("click", () => $("#assistant-drawer").classList.add("hidden"));
+$("#assistant-close").addEventListener("click", chatClose);
+$("#chat-mic").addEventListener("click", chatDictate);
 $("#chat-form").addEventListener("submit", (e) => { e.preventDefault(); sendChat(); });
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
 
@@ -26999,6 +27031,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r115";   // R89
+window.__nxTag_app = "r116";   // R89
 
 init();
