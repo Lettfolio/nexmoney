@@ -11,7 +11,9 @@ async function boot(browser, qs, vp) {
   await p.addInitScript(() => { window.__NEX_SKIP_TOUR = true; });
   await p.goto(BASE + qs);
   await p.waitForFunction(() => document.querySelector("#briefing-list .brief-row, #briefing-list .empty"), null, { timeout: 20000 });
-  await p.click('[data-page="diary"]');
+  // R114: on a phone the strip is gone — Diary is reached the way a phone user reaches it, through More.
+  if (await p.evaluate(() => document.querySelector('#topnav [data-page="diary"]').checkVisibility())) await p.click('#topnav [data-page="diary"]');
+  else { await p.click('#phone-bar [data-bar="more"]'); await p.click('#overlay-modal [data-more="diary"]'); }
   await p.waitForTimeout(1200);
   return p;
 }
