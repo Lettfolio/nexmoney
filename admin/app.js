@@ -4197,6 +4197,7 @@ function pushModalHistory(type, id, label) {
   const hash = modalHash(type, id);
   const ok = currentModal ? histReplace(state, hash) : histPush(state, hash);
   currentModal = ok ? { type, id: id ?? null } : null;
+  if (id && (type === "case" || type === "client")) paletteNoteRecent(type, id);
   if (id) setModalTitle(type, label);
 }
 /* R87 · B4 — the link the "⧉ Copy link" control copies: the deep link routeFromHash reopens. */
@@ -26456,6 +26457,22 @@ function paletteClick(sel) {
   el.click();
   return true;
 }
+/* R113 · N3 — the last few records you opened lead the search box before anything is typed. Only the kind and
+   the id are kept in this browser (per signed-in user); names are read fresh each time, so nothing about a
+   client is stored on the machine and a record you can no longer see simply does not appear. */
+const RECENT_MAX = 6;
+const recentKey = () => "nx_recent_v1:" + ((ME && ME.id) || "");
+function recentIds() {
+  try {
+    const list = JSON.parse(localStorage.getItem(recentKey()) || "[]");
+    return Array.isArray(list) ? list.filter((r) => r && (r.t === "case" || r.t === "client") && r.id).slice(0, RECENT_MAX) : [];
+  } catch (e) { return []; }
+}
+function paletteNoteRecent(type, id) {
+  if (!ROW_ONE()) return;
+  const list = [{ t: type, id }].concat(recentIds().filter((r) => !(r.t === type && r.id === id))).slice(0, RECENT_MAX);
+  try { localStorage.setItem(recentKey(), JSON.stringify(list)); } catch (e) { /* private mode: no recents, nothing else lost */ }
+}
 const PALETTE_VERBS = [
   { id: "new-case", icon: "🗂️", title: "New case", sub: "Open a blank case — the same + New case as Pipeline", run: () => window.openCase(null) },
   { id: "new-client", icon: "👤", title: "New client", sub: "Open a blank client record — the same + New client as Clients", run: () => window.openClient(null) },
@@ -26502,6 +26519,7 @@ const PALETTE_VERBS = [
   let sel = -1;         // index into flat of the highlighted row
   let seq = 0;          // request-sequence guard: only the latest keystroke may render
   let debounceH = null;
+  let recent = [];      // R113 — resolved recent records, in most-recent-first order
 
   const appVisible = () => { const a = $("#app-view"); return a && !a.classList.contains("hidden"); };
   // Strip characters that would break a PostgREST .or() filter string (commas / parens).
@@ -26511,8 +26529,69 @@ const PALETTE_VERBS = [
     if (!appVisible() || !backdrop.classList.contains("hidden")) return;
     backdrop.classList.remove("hidden");
     input.value = "";
+    /* What was resolved last time is shown at once, but only what the stored list still names, in its order:
+       a list that has since emptied or changed hands (another user signed in on this tab) must not leave the
+       last one's records on screen while the fresh read is in flight — or at all, when there is nothing to read. */
+    const ids = recentIds();
+    recent = ids.map((r) => recent.find((x) => x.type === r.t && x.row.id === r.id)).filter(Boolean);
     renderIdle();
     setTimeout(() => input.focus(), 0);
+    loadRecent();
+  }
+  async function loadRecent() {
+    const ids = recentIds();
+    if (!ids.length) { recent = []; return; }
+    const mySeq = seq;
+    const of = (t) => ids.filter((r) => r.t === t).map((r) => r.id);
+    try {
+      const [cl, cs] = await Promise.all([
+        of("client").length ? db.from("clients").select("id,first_name,last_name,email,phone").in("id", of("client")) : { data: [] },
+        of("case").length ? db.from("cases").select("id,stage,case_kind,lender,client_id,property_address,clients!client_id(first_name,last_name)").in("id", of("case")) : { data: [] },
+      ]);
+      const byId = { client: Object.fromEntries((cl.data || []).map((r) => [r.id, r])), case: Object.fromEntries((cs.data || []).map((r) => [r.id, r])) };
+      recent = ids.map((r) => ({ type: r.t, row: byId[r.t][r.id] })).filter((r) => r.row);
+    } catch (e) { recent = []; }
+    // Still open, still nothing typed, nothing searched since: paint them in.
+    if (mySeq === seq && !backdrop.classList.contains("hidden") && !input.value) renderIdle();
+  }
+  /* R113 · N4 — a result is more than "open": the next step most often taken from it is on the row. They show
+     on the highlighted row only (a phone has no room for three buttons on every line), and each one opens the
+     record and presses the button that is already there. */
+  function quickHtml(type, row) {
+    if (!ROW_ONE()) return "";
+    const b = (what, label) => `<button type="button" class="btn btn-sm" data-quick="${what}">${label}</button>`;
+    const tel = type === "client" && row.phone ? `<a class="btn btn-sm" data-quick="call" href="tel:${esc(String(row.phone).replace(/[^\d+]/g, ""))}">Call</a>` : "";
+    return `<span class="pr-quick" hidden>${type === "case" ? b("logcall", "Log call") + b("task", "Add task") + b("appt", "Book") : tel + b("appt", "Book")}</span>`;
+  }
+  async function runQuick(item, what) {
+    closePalette(false);
+    if (what === "call") return;   // the link dials; nothing to open
+    if (item.type === "client") { window.openAppt(null, { client_id: item.id }); return; }
+    await window.openCase(item.id);
+    const modal = $("#modal");
+    if (what === "logcall") { if (!paletteClick("#cs-logcall-btn")) toast("The Log call button isn't on this case."); }
+    else if (what === "appt") { if (!paletteClick("#act-appt")) toast("Booking isn't offered on this case."); }
+    else {
+      if (modal && modal.dataset.record === "case") recordShowTab(modal, "work");
+      const box = $("#new-task"); if (box) box.focus();
+    }
+  }
+  function clientRowHtml(cl) {
+    const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "(no name)";
+    const sub = [cl.phone, cl.email].filter(Boolean).join("  ·  ") || "No contact details";
+    const idx = flat.length; flat.push({ type: "client", id: cl.id });
+    return rowHtml(idx, "👤", name, sub, "", quickHtml("client", cl));
+  }
+  function caseRowHtml(cs) {
+    const cl = cs.clients || {};
+    const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "Case";
+    const bits = [STAGE_LABEL[cs.stage] || cs.stage];
+    if (cs.lender) bits.push(cs.lender);
+    else if (KIND_LABEL[cs.case_kind]) bits.push(KIND_LABEL[cs.case_kind]);
+    const idx = flat.length; flat.push({ type: "case", id: cs.id });
+    // R6 — the result reads as a place, not just a person: six rows for a portfolio client
+    // used to be six identical "Gareth Pollard" lines.
+    return { idx, html: rowHtml(idx, "🗂️", name, bits.filter(Boolean).join("  ·  "), propChip(cs, { cls: "row-prop" }), quickHtml("case", cs)) };
   }
   function closePalette(returnFocus) {
     if (backdrop.classList.contains("hidden")) return;
@@ -26547,7 +26626,10 @@ const PALETTE_VERBS = [
   }
   function renderIdle() {
     flat = []; sel = -1;
-    const html = verbRowsHtml(verbsFor(""))
+    const recentHtml = recent.length
+      ? '<div class="palette-group-label">Recent</div>' + recent.map((r) => (r.type === "client" ? clientRowHtml(r.row) : caseRowHtml(r.row).html)).join("")
+      : "";
+    const html = recentHtml + verbRowsHtml(verbsFor(""))
       + '<div class="palette-empty">Search clients by name, email or phone — and cases by property address, client, lender or stage. Or pick one of the actions above; type &gt; first to see only actions.</div>';
     resultsEl.innerHTML = html;
     if (flat.length) { sel = 0; updateSel(false); }
@@ -26605,11 +26687,11 @@ const PALETTE_VERBS = [
   }
   /* `subHtml` is trusted markup (only ever the property chip, built by propChip) and leads the
      sub-line; everything else stays escaped text. */
-  function rowHtml(idx, icon, title, sub, subHtml) {
+  function rowHtml(idx, icon, title, sub, subHtml, quick) {
     return `<div class="palette-row" role="option" data-idx="${idx}">` +
       `<span class="pr-ic" aria-hidden="true">${icon}</span>` +
       `<span class="pr-main"><span class="pr-title">${esc(title)}</span>` +
-      `<span class="pr-sub">${subHtml || ""}${subHtml && sub ? " " : ""}${esc(sub)}</span></span></div>`;
+      `<span class="pr-sub">${subHtml || ""}${subHtml && sub ? " " : ""}${esc(sub)}</span></span>${quick || ""}</div>`;
   }
   function render(clients, cases, leads, q) {
     flat = [];
@@ -26620,27 +26702,11 @@ const PALETTE_VERBS = [
     const caseIdxById = {};
     if (clients.length) {
       html += '<div class="palette-group-label">Clients</div>';
-      clients.forEach((cl) => {
-        const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "(no name)";
-        const sub = [cl.phone, cl.email].filter(Boolean).join("  ·  ") || "No contact details";
-        const idx = flat.length; flat.push({ type: "client", id: cl.id });
-        html += rowHtml(idx, "👤", name, sub);
-      });
+      clients.forEach((cl) => { html += clientRowHtml(cl); });
     }
     if (cases.length) {
       html += '<div class="palette-group-label">Cases</div>';
-      cases.forEach((cs) => {
-        const cl = cs.clients || {};
-        const name = [cl.first_name, cl.last_name].filter(Boolean).join(" ") || "Case";
-        const bits = [STAGE_LABEL[cs.stage] || cs.stage];
-        if (cs.lender) bits.push(cs.lender);
-        else if (KIND_LABEL[cs.case_kind]) bits.push(KIND_LABEL[cs.case_kind]);
-        const idx = flat.length; flat.push({ type: "case", id: cs.id });
-        caseIdxById[cs.id] = idx;
-        // R6 — the result reads as a place, not just a person: six rows for a portfolio client
-        // used to be six identical "Gareth Pollard" lines.
-        html += rowHtml(idx, "🗂️", name, bits.filter(Boolean).join("  ·  "), propChip(cs, { cls: "row-prop" }));
-      });
+      cases.forEach((cs) => { const r = caseRowHtml(cs); caseIdxById[cs.id] = r.idx; html += r.html; });
     }
     if (leads && leads.length) {
       html += '<div class="palette-group-label">Leads</div>';
@@ -26664,7 +26730,17 @@ const PALETTE_VERBS = [
   }
   function updateSel(scroll) {
     const rows = resultsEl.querySelectorAll(".palette-row");
-    rows.forEach((r) => r.classList.toggle("sel", Number(r.dataset.idx) === sel));
+    rows.forEach((r) => {
+      const on = Number(r.dataset.idx) === sel;
+      r.classList.toggle("sel", on);
+      const quick = r.querySelector(".pr-quick");
+      if (!quick) return;
+      quick.hidden = !on;
+      // On a phone three buttons beside the name leave it eleven letters: they take the line under it instead.
+      const narrow = window.innerWidth < 520;
+      r.style.flexWrap = on && narrow ? "wrap" : "";
+      quick.style.flexBasis = narrow ? "100%" : ""; quick.style.paddingLeft = narrow ? "34px" : "";
+    });
     if (scroll && rows[sel]) rows[sel].scrollIntoView({ block: "nearest" });
   }
   function move(delta) {
@@ -26835,15 +26911,32 @@ const PALETTE_VERBS = [
     if (e.key === "Escape") { e.preventDefault(); closePalette(true); }
     else if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
-    else if (e.key === "Enter") { e.preventDefault(); openSel(); }
-    else if (e.key === "Tab") { e.preventDefault(); input.focus(); }  // keep focus inside the palette
+    else if (e.key === "Enter") {
+      if (e.target && e.target.closest && e.target.closest("[data-quick]")) return;   // R113: Enter on a row action presses it
+      e.preventDefault(); openSel();
+    } else if (e.key === "Tab") {
+      // keep focus inside the palette — R113: the box, then the highlighted row's actions, then the box again
+      e.preventDefault();
+      const stops = [input].concat([...resultsEl.querySelectorAll(".palette-row.sel .pr-quick:not([hidden]) [data-quick]")]);
+      const at = stops.indexOf(document.activeElement);
+      stops[(at + (e.shiftKey ? -1 : 1) + stops.length) % stops.length].focus();
+    }
   });
   backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closePalette(true); });
   resultsEl.addEventListener("click", (e) => {
     const row = e.target.closest(".palette-row");
     if (!row) return;
     sel = Number(row.dataset.idx);
+    const quick = e.target.closest("[data-quick]");
+    if (quick) { runQuick(flat[sel], quick.getAttribute("data-quick")); return; }
     openSel();
+  });
+  /* R113 — the pointer highlights the row it is over, so that row's actions are the ones on show. On a real
+     move only: results that repaint under a resting pointer must not steal Enter from the top hit. */
+  resultsEl.addEventListener("mousemove", (e) => {
+    const row = ROW_ONE() ? e.target.closest(".palette-row") : null;
+    if (!row || Number(row.dataset.idx) === sel) return;
+    sel = Number(row.dataset.idx); updateSel(false);
   });
 })();
 
@@ -26855,6 +26948,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r112";   // R89
+window.__nxTag_app = "r113";   // R89
 
 init();
