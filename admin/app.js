@@ -26529,6 +26529,11 @@ const PALETTE_VERBS = [
     if (!appVisible() || !backdrop.classList.contains("hidden")) return;
     backdrop.classList.remove("hidden");
     input.value = "";
+    /* What was resolved last time is shown at once, but only what the stored list still names, in its order:
+       a list that has since emptied or changed hands (another user signed in on this tab) must not leave the
+       last one's records on screen while the fresh read is in flight — or at all, when there is nothing to read. */
+    const ids = recentIds();
+    recent = ids.map((r) => recent.find((x) => x.type === r.t && x.row.id === r.id)).filter(Boolean);
     renderIdle();
     setTimeout(() => input.focus(), 0);
     loadRecent();

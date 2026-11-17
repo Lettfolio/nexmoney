@@ -48,6 +48,18 @@ const closeRec = async (p) => { await p.click("#modal .modal-close"); await p.wa
   const again = (await pal(p)).rows.filter((r) => !r.verb);
   ok("A6 · opening one again moves it to the top without listing it twice", again.length === 3 && again[0].title === ids.nameA && again[1].title === ids.nameB, again.map((r) => r.title).join("|"));
 
+  await p.keyboard.press("Escape"); await p.waitForTimeout(300);
+  // The stored list goes (a different user signs in on this tab; storage is cleared): what was on screen last time must not come back.
+  const kept = await p.evaluate(() => { const k = Object.keys(localStorage).find((x) => x.startsWith("nx_recent_v1:")); const v = localStorage.getItem(k); localStorage.removeItem(k); return [k, v]; });
+  await p.keyboard.press("/");
+  const atOnce = await pal(p);
+  await p.waitForTimeout(700);
+  const settled = await pal(p);
+  ok("A7 · when the stored list is gone, last time's records are not shown — not even for a moment", !atOnce.groups.includes("Recent") && !settled.groups.includes("Recent") && settled.rows.every((r) => r.verb), JSON.stringify({ atOnce: atOnce.groups, settled: settled.groups }));
+  await p.keyboard.press("Escape"); await p.waitForTimeout(300);
+  await p.evaluate(([k, v]) => localStorage.setItem(k, v), kept);
+  await openPal(p);
+
   console.log("B · N4 — next steps on a result");
   ok("B1 · the highlighted case offers Log call, Add task and Book; the other rows show none", again[0].quick.join("|") === "Log call|Add task|Book" && again.slice(1).every((r) => r.quick.length === 0), JSON.stringify(again.map((r) => r.quick)));
   await p.keyboard.press("ArrowDown"); await p.keyboard.press("ArrowDown"); await p.waitForTimeout(200);

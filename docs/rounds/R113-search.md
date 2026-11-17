@@ -30,5 +30,5 @@ there is a number) and **Book**. Shown on the highlighted row only — recent or
   ("Search cases…", "Search the vault…"); renaming them is wording for Daniel, not a build.
 
 ## Harness
-Off under the R102 seam (no Recent group, no row actions, no hover highlight). `tests/r113_search.js` (17).
+Off under the R102 seam (no Recent group, no row actions, no hover highlight). `tests/r113_search.js` (18).
 No CSS added; admin.css 3,949. Tags → r113.
