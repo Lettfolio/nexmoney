@@ -12096,6 +12096,142 @@ window.addEventListener("resize", () => {
 });
 /* Protection gate — block forward moves into Application+ while protection is unrecorded */
 const stageIdx = (s) => STAGES.findIndex(([k]) => k === s);
+/* R110 · C4 — SAVE AS YOU GO. On the full-width record an existing case has no Save button: a field is
+   written as it is left. What goes to the database is the difference between the form now and the form as
+   last saved, so a box nobody touched is never sent. The gates are saveCase's, each answered on its own
+   field; a refused field goes back to what it was. New cases and the harness seam keep the Save button. */
+const caseAutosaves = (id) => !!id && ROW_ONE();
+const CASE_NUM_COLS = ["loan_amount", "property_value", "rate_percent", "term_years", "broker_fee", "proc_fee", "sols_fee", "protection_commission"].concat(CALLPACK_COLS, BTL_COLS);
+function caseFormRow(form) {
+  const row = {};
+  for (const [n, v] of new FormData(form).entries()) if (!/^nc_/.test(n)) row[n] = v === "" ? null : v;
+  if (form.elements.rate_end_estimated) row.rate_end_estimated = form.elements.rate_end_estimated.checked;
+  CASE_NUM_COLS.forEach((n) => { if (row[n] != null) row[n] = Number(row[n]); });
+  ["solicitor_firm", "mortgage_account_number", "lender_reference"].forEach((n) => { if (row[n]) row[n] = String(row[n]).trim() || null; });
+  return row;
+}
+let caseAutosaveTimer = 0;
+function wireCaseAutosave(k) {
+  const { id } = k;
+  const form = $("#case-form");
+  if (!form || !caseAutosaves(id)) return;
+  ["#modal-save", "#modal-cancel"].forEach((sel) => { const b = $("#modal > .modal-actions " + sel); if (b) b.classList.add("hidden"); });
+  const base = caseFormRow(form);
+  const live = () => $("#case-form") === form && !$("#modal-backdrop").classList.contains("hidden");
+  let chain = Promise.resolve(), waiting = 0;
+  // A stage or type change redraws the record (its actions and checklist follow the stage); anything else
+  // redraws on the next change of tab. Never over a note or task somebody is half-way through typing.
+  const redraw = () => { if (!waiting && k.caseRedraw && live() && !hasUnsavedModalEdits()) openCase(id); };
+  form.addEventListener("change", () => {
+    waiting++;
+    chain = chain.then(() => saveCaseFields(k, form, base)).catch((e) => { console.error(e); toast("Not saved — " + (e && e.message ? e.message : "something went wrong")); })
+      .then(() => { waiting--; if (k.caseRedraw === "now") redraw(); });
+  });
+  const tabs = $("#modal .rec-tabs");
+  if (tabs) tabs.addEventListener("click", () => { if (k.caseRedraw) chain.then(redraw); });
+}
+async function saveCaseFields(k, form, base) {
+  const { id, c } = k;
+  await Promise.resolve();   // the field's own listeners (property picker, type-ahead) have set what they set
+  const strip = $("#signedout-strip");
+  if (strip && !strip.classList.contains("hidden")) return;   // signed out: the edit stays in the form and goes with the next one
+  const now = caseFormRow(form), row = {};
+  Object.keys(now).forEach((n) => { if (!cfSame(now[n], base[n])) row[n] = now[n]; });
+  if (!Object.keys(row).length) return;
+  const back = (n) => {
+    const f = form.elements[n];
+    delete row[n];
+    if (!f) return;
+    if (f.type === "checkbox") f.checked = !!base[n]; else f.value = base[n] == null ? "" : String(base[n]);
+    f.dispatchEvent(new Event("change", { bubbles: true }));   // the fields that follow this one re-sync; nothing differs, so nothing is written
+  };
+  if ("client_id" in row && !row.client_id) {
+    setFormErrors("#modal", [[$("#case-client-select"), "A case has to belong to a client — pick one."]]);
+    delete row.client_id;
+  }
+  if ("stage" in row && protectionGateBlocks({ stage: c.stage, protection_status: now.protection_status }, row.stage)) {
+    toast("🛡️ Record the protection conversation first — set a protection status");
+    back("stage");
+  }
+  const protWas = c.protection_status || "not_discussed";
+  if (row.protection_status === "policy_taken" && protWas !== "policy_taken" && !(Number(now.protection_commission) > 0)) {
+    toast("A policy needs a commission figure — fill in \"Protection commission (£)\" first.");
+    back("protection_status");
+    const commEl = form.elements.protection_commission; if (commEl) commEl.focus();
+  }
+  if (row.protection_status === "quoted" && protWas !== "quoted") Object.assign(row, protQuotedStamp());
+  // R5-15 — asked about the date that was just changed, not on every later edit.
+  const dateCol = "expected_completion_date" in row ? "expected_completion_date" : "offer_expiry_date" in row ? "offer_expiry_date" : null;
+  const ecd = now.expected_completion_date, oed = now.offer_expiry_date;
+  if (dateCol && ecd && now.stage !== "completed" && now.stage !== "not_proceeding") {
+    if (dateCol === "expected_completion_date" && ecd < localDateStr() && !(await askConfirm(`Expected completion ${fmtD(ecd)} is in the past — keep it?`, "Keep it"))) back(dateCol);
+    else if (oed && (new Date(ecd) - new Date(oed)) > 30 * 86400000
+      && !(await askConfirm(`Expected completion ${fmtD(ecd)} is more than 30 days after the offer expires (${fmtD(oed)}) — the offer would need extending or re-issuing. Keep it?`, "Keep it"))) back(dateCol);
+  }
+  let lost = null;
+  if (row.stage === "not_proceeding" && c.stage !== "not_proceeding") {
+    lost = await promptLostReason("Moving this case to Not Proceeding");
+    if (!lost) back("stage");
+    else { row.lost_reason = lost.reason; row.lost_detail = lost.note || null; }
+  }
+  if ("stage" in row) {
+    if (row.stage === "completed") { if (!c.completed_at) row.completed_at = new Date().toISOString(); }
+    else if (c.stage === "completed") row.completed_at = null;
+  }
+  if (row.referrer_client_id && row.referrer_client_id === now.client_id) row.referrer_client_id = null;
+  if ("application_status" in row) row.application_status_at = new Date().toISOString();
+  if (row.submitted_at && !c.submitted_at && !now.application_status) {
+    row.application_status = "submitted"; row.application_status_at = new Date().toISOString();
+    if (form.elements.application_status) form.elements.application_status.value = "submitted";
+  }
+  if (!Object.keys(row).length) return;
+  const write = () => db.from("cases").update(row).eq("id", id).eq("updated_at", openedUpdatedAt).select();
+  let { data: updated, error } = await write();
+  if (error) return dbFail("caseAutosave", error);
+  if (!updated || !updated.length) {
+    /* R82 · A5, one field at a time: somebody else wrote this case. If they left these fields alone the
+       write simply goes again on the fresh stamp; if they changed one of them, the operator chooses. */
+    const { data: theirs } = await db.from("cases").select("*").eq("id", id).single();
+    if (!theirs) return toast("Not saved — this case could not be re-read. Close it and open it again.");
+    const clash = Object.keys(row).filter((n) => n in now && !cfSame(theirs[n], c[n]) && !cfSame(theirs[n], row[n]));
+    if (clash.length && !(await askConfirm(`A colleague changed ${clash.map(auditFieldLabel).join(", ")} while this was open. Keep what you entered?`, "Keep mine"))) {
+      clash.forEach((n) => { base[n] = theirs[n]; c[n] = theirs[n]; back(n); });
+      if (!Object.keys(row).length) { openedUpdatedAt = theirs.updated_at; return; }
+    }
+    openedUpdatedAt = theirs.updated_at;
+    ({ data: updated, error } = await write());
+    if (error) return dbFail("caseAutosave", error);
+    if (!updated || !updated.length) return toast("Not saved — the case changed again underneath. Change that field once more.");
+  }
+  await refreshOpenedStamp(id);   // R18-D1 — our own write must not trip the next one
+  const wasStage = c.stage, cols = Object.keys(row);
+  Object.assign(c, row);
+  cols.forEach((n) => { if (n in now) base[n] = row[n]; });
+  if (lost) {
+    const { error: nErr } = await db.from("case_notes").insert({ case_id: id, body: lostReasonNoteBody(lost), created_by: (ME && ME.id) || null });
+    if (nErr) dbFail("caseSaveLostNote", nErr, "Saved, but the reason note could not be written: " + nErr.message);
+  }
+  if (row.stage === "completed" && wasStage !== "completed") await maybeQueueReferralThankYou(id, { ...c, id });
+  // The tick sits beside the field's own label and goes after a moment.
+  cols.forEach((n) => {
+    const f = form.elements[n], lab = f && f.closest ? f.closest("label") : null;
+    if (!lab) return;
+    let tick = lab.querySelector(":scope > .saved-msg");
+    if (!tick) { tick = document.createElement("span"); tick.className = "saved-msg"; tick.setAttribute("role", "status"); tick.textContent = "✓ Saved"; lab.insertBefore(tick, lab.firstElementChild); }
+    clearTimeout(tick.nxT); tick.nxT = setTimeout(() => tick.remove(), 2500);
+  });
+  if ($("#case-form") === form) {
+    Object.assign(k, caseHeaderModel(k));
+    const stats = $("#modal #cs-stats-key"); if (stats) stats.innerHTML = caseKeyStatsHtml(k);
+    recordHeading($("#modal"));
+  }
+  k.caseRedraw = ("stage" in row || "case_kind" in row) ? "now" : (k.caseRedraw || "tab");
+  clearTimeout(caseAutosaveTimer);
+  caseAutosaveTimer = setTimeout(() => {
+    wtMarkStale(); loadPipeline(); loadDashboard(); // R55 · F3 — a case write must re-run the checker
+    if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
+  }, 600);
+}
 function protectionGateBlocks(caseRow, newStage) {
   if ((settings.protection_gate ?? "on") !== "on") return false;
   if (newStage === "not_proceeding") return false;
@@ -17374,6 +17510,21 @@ function renderCaseMoreFacts(k) {
       <div class="cs-stat cs-callpack" id="cs-callpack-erc"><span class="cs-lbl">ERC amount</span><span class="cs-val">${callPackVal(c.erc_amount)}</span></div>` : ""}
   ` : "";
 }
+/* R110 · C4 — the key stat cells on their own, so a saved field can repaint them in place. */
+function caseKeyStatsHtml(k) {
+  const { c, rateOverdue, rateSoon } = k;
+  return `
+        
+        
+        <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
+        
+        <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(Number(c.loan_amount) ? c.loan_amount : null)}</span></div>
+        
+        ${caseLtvPct(c) != null ? `<div class="cs-stat" id="cs-ltv" title="Loan ÷ property value, worked out from the two figures on this case. Shown only when both are recorded."><span class="cs-lbl">LTV</span><span class="cs-val">${caseLtvPct(c)}%</span></div>` : ""}
+        ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
+        ${c.rate_percent != null || c.rate_end_date ? `<div class="cs-stat ${rateOverdue ? "cs-danger" : rateSoon ? "cs-warn" : ""}"><span class="cs-lbl">Rate${rateOverdue ? " — ended" : rateSoon ? " — <6mo" : ""}</span><span class="cs-val">${c.rate_percent != null ? c.rate_percent + "%" : "—"}${c.rate_end_date ? ` · ends ${fmtD(c.rate_end_date)}` : ""}</span></div>` : ""}
+`;
+}
 /* R90 · B — the summary header: identity line, contact, objective, key stats, next task/appt/note. */
 function renderCaseSummary(k) {
   const { id, c, caseDocs, caseFileN, caseFactFindN, caseFilesReadOk, caseFactFindReadOk, caseClient, filesOn, caseCare, sharedHtml, referrerName, clientName, identityChip, identityChipIsFallback, nextTask, nextTaskStale, taskOverdue, nextAppt, nextApptIsAhead, lastNote, noteSnip, rateOverdue, rateSoon } = k;
@@ -17411,17 +17562,7 @@ function renderCaseSummary(k) {
         </div>
         
       </div>
-      <div class="cs-stats cs-stats-key" id="cs-stats-key">
-        
-        
-        <div class="cs-stat"><span class="cs-lbl">Adviser</span><span class="cs-val" id="cs-adviser-val">${c.assigned_to ? esc(staffName(c.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</span></div>
-        
-        <div class="cs-stat"><span class="cs-lbl">Loan</span><span class="cs-val">${fmtM(Number(c.loan_amount) ? c.loan_amount : null)}</span></div>
-        
-        ${caseLtvPct(c) != null ? `<div class="cs-stat" id="cs-ltv" title="Loan ÷ property value, worked out from the two figures on this case. Shown only when both are recorded."><span class="cs-lbl">LTV</span><span class="cs-val">${caseLtvPct(c)}%</span></div>` : ""}
-        ${c.lender ? `<div class="cs-stat"><span class="cs-lbl">Lender</span><span class="cs-val">${esc(c.lender)}</span></div>` : ""}
-        ${c.rate_percent != null || c.rate_end_date ? `<div class="cs-stat ${rateOverdue ? "cs-danger" : rateSoon ? "cs-warn" : ""}"><span class="cs-lbl">Rate${rateOverdue ? " — ended" : rateSoon ? " — <6mo" : ""}</span><span class="cs-val">${c.rate_percent != null ? c.rate_percent + "%" : "—"}${c.rate_end_date ? ` · ends ${fmtD(c.rate_end_date)}` : ""}</span></div>` : ""}
-      </div>
+      <div class="cs-stats cs-stats-key" id="cs-stats-key">${caseKeyStatsHtml(k)}      </div>
       
       ${lenderTrackVisible(c.stage) && lenderChaseDays(c) ? (() => { const ch = lenderChaseDays(c); return `<div class="cs-chase" id="cs-lender-chase" title="No status change for ${ch.days} days — ring the lender${c.lender_reference ? " (ref " + esc(c.lender_reference) + ")" : ""} for an update.">⏰ In ${esc(APP_STATUS_LABEL[ch.status])} ${ch.days} days — chase the lender</div>`; })() : ""}
       
@@ -17440,7 +17581,7 @@ function renderCaseCoreFields(k) {
      to ask for before it would accept the one fact anybody has at that moment: who it is for. */
   return `
       <label class="full">Client
-        <select name="client_id" id="case-client-select" required><option value="">— select client —</option>${clientOpts}<option value="__new__">+ New client…</option></select>
+        <select name="client_id" id="case-client-select" required><option value="">— select client —</option>${clientOpts}${caseAutosaves(k.id) ? "" : '<option value="__new__">+ New client…</option>'}</select>
       </label>
       <div class="full hidden" id="nc-new-client-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;padding:10px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;margin:-4px 0 4px;">
         <label>First name<input name="nc_first_name" placeholder="First name"></label>
@@ -17613,7 +17754,7 @@ function renderCaseForm(k) {
   return id ? `
     <details class="case-details case-fold" data-fold="details">
       <summary>Case details</summary>
-      <form id="case-form" class="form-grid" data-case-id="${id}">${caseCoreFieldsHtml}${caseRestFieldsHtml}${caseAssignedFieldHtml}
+      <form id="case-form" class="form-grid" data-case-id="${id}"${caseAutosaves(id) ? ' data-autosave="1"' : ""}>${caseCoreFieldsHtml}${caseRestFieldsHtml}${caseAssignedFieldHtml}
     </form>
     </details>` : `
     <form id="case-form" data-case-id="">
@@ -17866,7 +18007,7 @@ function wireCaseModalChrome(k) {
   /* R88 · D (panel 02 #8): on DESKTOP the footer stays (R87 H4) but Cancel follows the fold: with Case
      details closed there is nothing to cancel, and ✕ closes the modal. Save and Open client are untouched. */
   const caseCancel = $("#modal > .modal-actions #modal-cancel");
-  if (id && caseCancel && caseDetails && !csPhone) {
+  if (id && caseCancel && caseDetails && !csPhone && !caseAutosaves(id)) {
     const syncCancel = () => { caseCancel.classList.toggle("hidden", !caseDetails.open); };
     syncCancel();
     caseDetails.addEventListener("toggle", syncCancel);
@@ -18598,6 +18739,7 @@ window.openCase = async function (id, opts = {}) {
   wireCaseFormLive(k);
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
   $("#modal-save").onclick = () => saveCase(k);
+  wireCaseAutosave(k);
   if (id) {
     const prependCaseTlNote = wireCaseHistory(k);
     wireCaseNotes(k, prependCaseTlNote);
@@ -26125,6 +26267,12 @@ function recordShowTab(modal, key) {
     if (!p.hidden && key !== "work") p.querySelectorAll(":scope > details").forEach((d) => { if (!d.open) d.open = true; });
   });
 }
+// C3: the heading names the record — client, case type, stage — not the word "Case".
+function recordHeading(modal) {
+  const h = modal.querySelector(".cs-h3-row h3"), who = modal.querySelector(".case-summary a, .case-summary .cs-name"), stage = modal.querySelector('select[name="stage"]'), type = modal.querySelector('select[name="case_kind"]');
+  const opt = (el) => (el && el.selectedOptions[0] ? el.selectedOptions[0].textContent.trim() : "");
+  if (h && who) h.textContent = [who.textContent.trim(), [opt(type), opt(stage)].filter(Boolean).join(" · ")].filter(Boolean).join(" — ");
+}
 function recordLayout(modal) {
   const sum = modal.querySelector(":scope > .case-summary");
   const want = ROW_ONE() && !!sum && !sum.classList.contains("hidden") && !!modal.querySelector(":scope > #case-tasks");
@@ -26145,10 +26293,7 @@ function recordLayout(modal) {
     strip.appendChild(b); main.appendChild(panel);
   });
   modal.insertBefore(side, acts); modal.insertBefore(main, acts);
-  // C3: the heading names the record — client, case type, stage — not the word "Case".
-  const h = modal.querySelector(".cs-h3-row h3"), who = sum.querySelector("a, .cs-name"), stage = modal.querySelector('select[name="stage"]'), type = modal.querySelector('select[name="case_kind"]');
-  const opt = (el) => (el && el.selectedOptions[0] ? el.selectedOptions[0].textContent.trim() : "");
-  if (h && who) h.textContent = [who.textContent.trim(), [opt(type), opt(stage)].filter(Boolean).join(" · ")].filter(Boolean).join(" — ");
+  recordHeading(modal);
   const x = modal.querySelector(".modal-close"); if (x) { x.title = "Back to the list"; x.setAttribute("aria-label", "Back to the list"); }
   recordShowTab(modal, RECORD_TABS.some((t) => t[0] === recordTab) ? recordTab : "work");
 }
@@ -26223,7 +26368,7 @@ function modalFormState() {
   const parts = [];
   DIRTY_FORMS.forEach((sel) => {
     const form = $(sel);
-    if (!form) return;
+    if (!form || form.dataset.autosave) return;   // R110 · C4 — nothing in it is ever unsaved
     parts.push(sel);
     [...form.elements].forEach((el) => {
       if (!el.name) return;
@@ -26238,6 +26383,9 @@ function hasUnsavedModalEdits() { return hasUnsavedLogCall() || modalFormState()
 // User-initiated "abandon the modal" paths — as opposed to closeModal() itself, which is also called after
 // successful saves/deletes elsewhere and shouldn't be gated behind a confirm() there.
 async function closeModalGuarded() {
+  // R110 · C4 — Escape does not blur: leave the box first so what was typed in it is saved, not dropped.
+  const typing = document.activeElement;
+  if (typing && typing.form && typing.form.dataset.autosave) typing.blur();
   // BUILD 7a — for a history-tracked modal, close via Back so the pushed entry is popped and history
   // stays in sync; the popstate handler runs the dirty guard (and re-pushes if the user cancels).
   if (currentModal) { history.back(); return; }
@@ -26668,6 +26816,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r109";   // R89
+window.__nxTag_app = "r110";   // R89
 
 init();
