@@ -17527,7 +17527,7 @@ function caseKeyStatsHtml(k) {
 }
 /* R90 · B — the summary header: identity line, contact, objective, key stats, next task/appt/note. */
 function renderCaseSummary(k) {
-  const { id, c, caseDocs, caseFileN, caseFactFindN, caseFilesReadOk, caseFactFindReadOk, caseClient, filesOn, caseCare, sharedHtml, referrerName, clientName, identityChip, identityChipIsFallback, nextTask, nextTaskStale, taskOverdue, nextAppt, nextApptIsAhead, lastNote, noteSnip, rateOverdue, rateSoon } = k;
+  const { id, c, caseDocs, caseFileN, caseFactFindN, caseFilesReadOk, caseFactFindReadOk, caseClient, filesOn, caseCare, sharedHtml, referrerName, clientName, identityChip, identityChipIsFallback, nextTask, nextTaskStale, taskOverdue, nextAppt, nextApptIsAhead, lastNote, noteSnip } = k;
   return id ? `
     <div class="case-summary">
       <div class="cs-top">
