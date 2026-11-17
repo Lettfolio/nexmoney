@@ -1145,7 +1145,7 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 #assistant-fab .fab-label { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
 #assistant-fab:hover { filter: brightness(1.14); box-shadow: 0 4px 14px rgba(4,12,24,.45); }
 #assistant-drawer {
-  position: fixed; top: 0; right: 0; height: 100vh;
+  position: fixed; top: 0; right: 0; height: 100vh; height: var(--vvh, 100dvh);
   width: 384px; max-width: 100vw;
   background: #fff;
   border-left: 1px solid var(--border);
@@ -1189,7 +1189,7 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
   border: 1px solid var(--border-strong); border-radius: 8px;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-#chat-form textarea:focus { outline: none; border-color: var(--navy); box-shadow: var(--focus-ring); }
+#chat-form textarea:focus { outline: none; border-color: var(--navy); box-shadow: var(--focus-ring); } #chat-mic { padding: 0 10px; } #chat-mic svg { width: 18px; height: 18px; display: block; } #chat-mic.on { color: var(--red); border-color: var(--red); background: var(--red-bg); }
 
 /* ---------- Scrollbars ---------- */
 .dash-scroll::-webkit-scrollbar,
@@ -3128,7 +3128,7 @@ details.case-details.case-fold { border-top: 1px solid var(--border); padding: 0
 
 /* ---- Narrow desktop / tablet ---- */
 @media (max-width: 900px) {
-  .modal-backdrop.record-back { left: 0; } .modal.record { display: block; padding: 16px; } .modal.record .form-grid { grid-template-columns: 1fr; }
+  .modal-backdrop.record-back { left: 0; overflow-x: hidden; overscroll-behavior: contain; } .modal.record { display: block; padding: 16px; } #modal.record .modal-topbar { margin: -16px -16px 6px; } #modal.record > .modal-actions { margin: 18px -16px -16px; }   /* R116: the bars' pull-out matches the record's 16px, so nothing is wider than the screen */ .modal.record .form-grid { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
   #report-kpis .kpi-wide { grid-column: auto; }
   .diary-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -3271,7 +3271,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .action-bar .btn { flex: 1 1 45%; }
   .stage-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
   .stage-tab { white-space: nowrap; }
-  #assistant-drawer { width: 100vw; }
+  #assistant-drawer { width: 100vw; } #assistant-close { min-width: 44px; min-height: 44px; } #chat-form { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); } #chat-log { overscroll-behavior: contain; }
   /* Docked, so nothing to raise clear of any more (T1-12's whole purpose). */
   .sidebar-ask { margin-top: 0; padding: 0; flex: 0 0 auto; }
   #assistant-fab {
