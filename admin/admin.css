@@ -1108,7 +1108,7 @@ select.task-reassign { width: auto; padding: 3px 6px; font-size: 12px; }
 
 /* ---------- Toast ---------- */
 .toast {
-  position: fixed; bottom: 24px; right: 24px; left: auto; transform: none;
+  position: fixed; bottom: calc(24px + var(--bar-h, 0px)); right: 24px; left: auto; transform: none;
   background: var(--side-top); color: #fff;
   padding: 11px 22px; border-radius: 999px;
   font-size: 13px; font-weight: 500;
@@ -2748,7 +2748,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
   font-weight: 700;
 }
 /* Pipeline: the bar is docked BELOW the table and rises over it. */
-.pipe-bulk-dock { position: sticky; bottom: 0; z-index: 20; }
+.pipe-bulk-dock { position: sticky; bottom: var(--bar-h, 0px); z-index: 20; }
 .pipe-bulk-dock .bulk-bar {
   margin-bottom: 0;
   box-shadow: 0 -2px 12px rgba(16,24,40,.14);
@@ -2895,7 +2895,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 }
 .field-err::before { content: "⚠ "; }
 .settings-dirty-bar {
-  position: sticky; bottom: 0; z-index: 9;
+  position: sticky; bottom: var(--bar-h, 0px); z-index: 9;
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin: 18px 0 0; padding: 12px 16px;
   background: var(--white);
@@ -3198,18 +3198,15 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
     scroll-snap-type: x proximity;
     background: linear-gradient(90deg, var(--side-top), var(--side-bottom));
   }
-  .sidebar::after {
-    content: "›";
-    position: sticky; right: -10px;
-    align-self: stretch;
-    display: flex; align-items: center; justify-content: flex-end;
-    flex: 0 0 52px; width: 52px; margin-left: -52px;
-    padding-right: 12px;
-    pointer-events: none; z-index: 1;
-    color: rgba(224,235,248,.98); font-size: 18px; font-weight: 700; line-height: 1;
-    background: linear-gradient(90deg, rgba(14,42,71,0), var(--side-bottom) 46%, var(--side-bottom));
-  }
+  .sidebar::after { content: "›"; position: sticky; right: -10px; align-self: stretch; display: flex; align-items: center; justify-content: flex-end; flex: 0 0 52px; width: 52px; margin-left: -52px; padding-right: 12px; pointer-events: none; z-index: 1; color: rgba(224,235,248,.98); font-size: 18px; font-weight: 700; line-height: 1; background: linear-gradient(90deg, rgba(14,42,71,0), var(--side-bottom) 46%, var(--side-bottom)); }
   .sidebar.nav-scroll-end::after { opacity: 0; }
+  /* R114 · N7 — the phone bottom bar (app.js phoneBarInit; off under the harness seam). The strip goes; what was sticky at the foot of the page sits above the bar (--bar-h). */
+  body.has-phone-bar { --bar-h: calc(58px + env(safe-area-inset-bottom, 0px)); }
+  body.has-phone-bar .sidenav, body.has-phone-bar .sidebar::after { display: none; }
+  body.has-phone-bar #main { padding-bottom: calc(var(--bar-h) + 12px); }
+  body.has-phone-bar .phone-bar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; box-sizing: border-box; height: var(--bar-h); padding-bottom: env(safe-area-inset-bottom, 0px); background: var(--side-bottom); box-shadow: 0 -2px 12px rgba(16,24,40,.18); }
+  .phone-bar button { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font: inherit; font-size: 12px; color: rgba(224,235,248,.86); background: none; border: 0; border-top: 3px solid transparent; cursor: pointer; }
+  .phone-bar button.active { color: #fff; border-top-color: var(--orange); }
   .sidebar-logo { border-bottom: none; margin-bottom: 0; padding: 0 10px 0 2px; font-size: 18px; }
   .sidenav { flex-direction: row; padding: 0; gap: 2px; }
   .sidenav button {
@@ -3294,7 +3291,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .bulk-cb, .email-cb, .dh-cb, #pipe-bulk-all, #prot-bulk-all { width: 24px; height: 24px; }
   .imp-table th.bulk-col, .imp-table td.bulk-col { padding-left: 6px; }
   .bulk-bar {
-    position: sticky; bottom: 0; z-index: 30;
+    position: sticky; bottom: var(--bar-h, 0px); z-index: 30;
     margin: 0 0 12px; border-radius: 10px;
     box-shadow: 0 -2px 12px rgba(16,24,40,.12);
   }
@@ -3602,7 +3599,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 .bulk-bar > .row-more { margin-left: 0; }
 .bulk-bar > .row-more > .row-more-body > .btn { margin-left: 0; }
 /* The dock: last child of the list's scroller, sticky at its bottom; the bar rises over the rows. Zero height while the bar is empty (R87 Watchtower pattern). */
-.bulk-dock { position: sticky; bottom: 0; z-index: 20; }
+.bulk-dock { position: sticky; bottom: var(--bar-h, 0px); z-index: 20; }
 .bulk-dock > .bulk-bar { margin-bottom: 0; box-shadow: 0 -2px 12px rgba(16,24,40,.14); }
 .bulk-dock.is-empty, .bulk-dock:has(> .bulk-bar.is-empty) { height: 0; min-height: 0; overflow: hidden; margin: 0; padding: 0; border: 0; }
 /* "More ▾" on a row or a bar: a native <details> whose summary is an ordinary .btn-sm; ≤3 verbs shown, the rest inline once opened. (Was R87 · book · C3.) */
@@ -3946,4 +3943,4 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
    toggle and Ask AI keyboard-invisible. Controls on the navy sidebar wear the light ring.
    ========================================================================== */
 :is(button, a[href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.sidebar :is(button, a[href], [tabindex]):focus-visible, #assistant-fab:focus-visible { box-shadow: var(--focus-ring-dark); }   /* the id, because #assistant-fab sets its own resting shadow */
+.phone-bar { display: none; } .sidebar :is(button, a[href], [tabindex]):focus-visible, #assistant-fab:focus-visible, .phone-bar button:focus-visible { box-shadow: var(--focus-ring-dark); }   /* the id, because #assistant-fab sets its own resting shadow */

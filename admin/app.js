@@ -3973,6 +3973,7 @@ async function showApp(session) {
   /* R89 · fixer: the R7-4 #nav-money toggle that stood here went with the button. R33 — and, for the same
      reason and in the same place, the Firm group's default state… */
   applyNavRole();
+  phoneBarInit();
   /* R73 · A4: the nav strip has just been given a real width for the first time and applyNavRole has just
      changed how many items are in it. Both are reasons the scroll-hint chevron's answer from module-eval… */
   updateSidenavScrollHint();
@@ -4312,6 +4313,50 @@ function navFirmLone() {
     return !gate || gate();
   }).length <= 1;
 }
+/* R114 · N7 — on a phone the menu was a sideways-scrolling strip: four entries fitted and "Clients" was cut to
+   "Cli…". A fixed bar along the bottom carries Today, Pipeline, Clients and Search; More lists every other
+   destination the signed-in role can reach, read from the sidebar itself so the role gates are the sidebar's.
+   The bar exists on every width and is shown by the phone stylesheet alone. The tour points at the strip, so
+   while it runs the strip is back and the bar is away. Off under the harness seam. */
+const PHONE_BAR = [["dashboard", "🏠", "Today"], ["pipeline", "🗂️", "Pipeline"], ["clients", "👥", "Clients"], ["search", "🔍", "Search"], ["more", "☰", "More"]];
+function phoneBarInit() {
+  if (!ROW_ONE() || $("#phone-bar")) return;
+  const bar = document.createElement("nav");
+  bar.id = "phone-bar"; bar.className = "phone-bar"; bar.setAttribute("aria-label", "Quick navigation");
+  bar.innerHTML = PHONE_BAR.map(([k, ic, label]) => `<button type="button" data-bar="${k}"><span class="si" aria-hidden="true">${ic}</span><span class="pb-l" data-label="${label}">${label}</span></button>`).join("");
+  bar.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-bar]");
+    if (!b) return;
+    const k = b.dataset.bar;
+    if (k === "search") { const s = $("#global-search-btn"); if (s) s.click(); }
+    else if (k === "more") phoneBarMore();
+    else nav(k);
+  });
+  $("#app-view").appendChild(bar);
+  document.body.classList.add("has-phone-bar");
+  bar.querySelectorAll(".pb-l").forEach((l) => { const c = document.querySelector(`.sidenav button[data-page="${l.parentElement.dataset.bar}"] .nav-n`); if (c) l.textContent = l.dataset.label + " · " + c.textContent; });
+  phoneBarSync(currentPage);
+}
+function phoneBarSync(page) {
+  const bar = $("#phone-bar");
+  if (!bar) return;
+  const base = String(page || "").split("/")[0], own = PHONE_BAR.some(([k]) => k === base);
+  bar.querySelectorAll("[data-bar]").forEach((b) => {
+    const on = b.dataset.bar === base || (b.dataset.bar === "more" && !own);
+    b.classList.toggle("active", on);
+    if (on && b.dataset.bar !== "more") b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+}
+function phoneBarMore() {
+  const here = String(currentPage || "").split("/")[0];
+  const rest = [...document.querySelectorAll("#topnav button[data-page]")]
+    .filter((b) => !b.classList.contains("hidden") && !PHONE_BAR.some(([k]) => k === b.dataset.page));
+  const rows = rest.map((b) => `<button type="button" class="btn btn-block u-mt-8${b.dataset.page === here ? " btn-primary" : ""}" data-more="${esc(b.dataset.page)}">${b.innerHTML}</button>`).join("");
+  openOverlay(`<h3>More</h3><div class="phone-more">${rows}</div><div class="modal-actions"><button type="button" class="btn" id="phone-more-close">Close</button></div>`, (finish, box) => {
+    box.querySelector("#phone-more-close").onclick = () => finish(null);
+    box.querySelectorAll("[data-more]").forEach((b) => { b.onclick = () => { finish(null); nav(b.dataset.more); }; });
+  });
+}
 function applyNavRole() {
   const lone = navFirmLone();
   $("#nav-firm-toggle")?.classList.toggle("hidden", lone);
@@ -4580,6 +4625,7 @@ function tourReposition() {
 function tourEnd(markSeen) {
   if (!tourState) return;
   tourState = null;
+  if ($("#phone-bar")) document.body.classList.add("has-phone-bar");   // R114: the bar comes back when the tour lets go of the strip
   document.querySelectorAll(".tour-spotlight").forEach((el) => el.classList.remove("tour-spotlight"));
   const overlay = $("#tour-overlay");
   if (overlay) overlay.remove();
@@ -4618,6 +4664,7 @@ function runFirstRunTour(opts) {
   overlay.innerHTML = '<div id="tour-bubble" role="dialog" aria-label="Guided tour"></div>';
   document.body.appendChild(overlay);
   tourState = { steps, idx: startIdx };
+  document.body.classList.remove("has-phone-bar");   // R114: the steps point at the strip, so the strip is back for the tour
   document.addEventListener("keydown", tourKeyHandler, true);
   // R12b: capture phase, see matching comment on the removeEventListener call in tourEnd().
   document.addEventListener("click", tourClickHandler, true);
@@ -4831,6 +4878,9 @@ if (ROW_ONE()) {
 function setNavCount(page, n, what) {
   const b = ROW_ONE() ? document.querySelector(`.sidenav button[data-page="${page}"]`) : null;
   if (!b) return;
+  // R114: the phone bar says the same number in its label (Today · 13); the pages under More carry the badge itself.
+  const pb = document.querySelector(`#phone-bar [data-bar="${page}"] .pb-l`);
+  if (pb) { pb.textContent = pb.dataset.label + (n > 0 ? " · " + (n > 99 ? "99+" : n) : ""); pb.parentElement.title = n > 0 ? `${n} ${what}` : ""; }
   let c = b.querySelector(".nav-n");
   if (!(n > 0)) { if (c) c.remove(); return; }
   if (!c) { c = document.createElement("span"); c.className = "nav-n"; b.appendChild(c); }
@@ -4891,6 +4941,7 @@ function nav(page, push = true, tab) {
     // R31-A · a11y — expose the current page to assistive tech, not just visually.
     if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   });
+  phoneBarSync(page);
   /* R33: the active tab must never be invisible. The command palette, a deep link and gotoDataHealth() can
      all land an adviser on a page inside the folded Firm group… */
   const firmGroup = $("#nav-firm-group");
@@ -26948,6 +26999,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r113";   // R89
+window.__nxTag_app = "r114";   // R89
 
 init();
