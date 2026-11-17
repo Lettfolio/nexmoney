@@ -26318,6 +26318,17 @@ function recordLayout(modal) {
     // The timeline is a tab now, so what explained why it was folded goes.
     modal.querySelectorAll(".tl-fold-sub").forEach((n) => n.remove());
     const ts = modal.querySelector("#client-timeline-fold > summary"); if (ts) ts.removeAttribute("title");
+    // B3: how the portfolio is added up sits behind an "i" (R103's pattern), still read out by a screen reader.
+    const strip = side.querySelector("#client-portfolio"), how = side.querySelector("#client-portfolio-sub");
+    if (strip && how) {
+      const i = document.createElement("span"); i.className = "kpi-i"; i.title = how.textContent.trim(); i.setAttribute("aria-hidden", "true"); i.textContent = "i";
+      strip.style.position = "relative"; strip.style.paddingRight = "34px"; strip.appendChild(i); how.classList.add("sr-only");
+    }
+    // B4: Delete leaves the footer, where it sat beside Save, for the foot of Details.
+    const del = modal.querySelector("#del-client-btn"), det = main.querySelector('.rec-panel[data-tab="details"]');
+    if (del && det) { const row = mk("rec-danger u-mt-14"); row.appendChild(del); det.appendChild(row); }
+    // B5: focus starts on the name, not on the phone number.
+    const name = modal.querySelector(":scope > h3"); if (name) name.tabIndex = -1;
   }
   const x = modal.querySelector(".modal-close"); if (x) { x.title = "Back to the list"; x.setAttribute("aria-label", "Back to the list"); }
   const usual = tabs.some((t) => t[0] === recordTabOf[kind]) ? recordTabOf[kind] : tabs[0][0];
@@ -26356,7 +26367,8 @@ function openModal() {
   snapshotModalState(); // defect 4 — baseline for the dirty guard, taken as rendered
   // Focus the first real control, not the close button, so keyboard flow is unchanged.
   const f = modalFocusable().filter((el) => !el.classList.contains("modal-close"));
-  if (f.length) f[0].focus();
+  const name = modal.dataset.record === "client" ? modal.querySelector(":scope > h3") : null;
+  if (name) name.focus(); else if (f.length) f[0].focus();
 }
 /* R95 · B6: two former inline multi-statement handlers, as globals the delegation kit can name. */
 window.closeModalOpenCase = function (caseId) { closeModal(); openCase(caseId); };

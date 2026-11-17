@@ -32,6 +32,11 @@ const open = async (p, id, ...rest) => { await p.evaluate(([i, r]) => window.ope
   ok("A1 · a client opens as a record that fills the page beside the sidebar", s.open && s.kind === "client" && s.w >= 1000 && s.left === 216, JSON.stringify({ kind: s.kind, w: s.w, left: s.left }));
   ok("A2 · three tabs, opening on Cases", s.tabs.join("|") === "Cases*|Timeline|Details" && s.cases && !s.tl && !s.form, JSON.stringify(s.tabs));
   ok("A3 · contact, last contact and the portfolio sit down the left", s.side.join("|") === "client-contact-line|client-last-contact|client-portfolio|client-portfolio-sub", s.side.join("|"));
+  const tidy = await p.evaluate(() => { const m = document.getElementById("modal"); const i = m.querySelector("#client-portfolio .kpi-i"), sub = m.querySelector("#client-portfolio-sub"), del = m.querySelector("#del-client-btn");
+    return { tip: i ? i.title : "", subShown: sub.getBoundingClientRect().height > 2, focus: document.activeElement === m.querySelector(":scope > h3"), delInFooter: !!m.querySelector(".modal-actions #del-client-btn"), delVisible: del.checkVisibility(), delTab: del.closest(".rec-panel").dataset.tab }; });
+  ok("A3b · how the portfolio is added up is behind an i, not four lines of text", /current case on each property/.test(tidy.tip) && !tidy.subShown, JSON.stringify(tidy).slice(0, 120));
+  ok("A3c · focus starts on the client's name, not the phone number", tidy.focus);
+  ok("A3d · Delete client is not beside Save — it is at the foot of Details", !tidy.delInFooter && !tidy.delVisible && tidy.delTab === "details");
   await p.click('.rec-tabs button[data-tab="timeline"]'); await p.waitForTimeout(600);
   const st = await state(p);
   ok("A4 · Timeline opens without a second press and no longer explains why it was folded", st.tl && !st.cases && !st.sub);

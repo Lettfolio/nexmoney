@@ -12,6 +12,10 @@ Daniel, 16 Nov 2026: full-width record pages; "proceed with this and the remaini
 - Each kind of record remembers its own last tab (`recordTabOf`). A client opened to fix one field (failed
   send, missing date of birth) lands on Details with the cursor in the field, and that visit does not
   change the remembered tab.
+- **B3 remainder:** the four-line explanation under the portfolio totals is an "i" tooltip on the strip
+  (R103's `.kpi-i`), kept as screen-reader text.
+- **B4:** "Delete client" is no longer in the footer beside Save; it sits at the foot of the Details tab.
+- **B5:** focus starts on the client's name, not on the phone number.
 - The cases block gained an id, `#client-cases-block`. Nothing is re-rendered and no handler moves.
 
 ## Unchanged
@@ -19,5 +23,5 @@ Daniel, 16 Nov 2026: full-width record pages; "proceed with this and the remaini
 - A new client keeps the small panel. So does everything under the harness seam.
 
 ## Harness
-`tests/r111_client_record.js` (17). `r109_record` C2 re-based (it asserted the client record was still
+`tests/r111_client_record.js` (20). `r109_record` C2 re-based (it asserted the client record was still
 the pop-up). No CSS added; admin.css 3,949 lines. Tags → r111.
