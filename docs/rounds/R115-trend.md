@@ -19,4 +19,4 @@ show, captioned "12 months".
   Daniel's say.
 
 ## Harness
-`tests/r115_trend.js` (8). Tags → r115. admin.css unchanged from R114 (3,946).
+`tests/r115_trend.js` (9). Tags → r115. admin.css unchanged from R114 (3,946).

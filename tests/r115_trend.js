@@ -15,7 +15,7 @@ async function boot(browser, qs) {
   return p;
 }
 const read = (p) => p.evaluate(() => { const t = (sel) => { const e = document.querySelector(sel); if (!e) return null; const pts = e.querySelector("svg polyline").getAttribute("points").trim().split(" "); const k = e.closest(".kpi");
-    return { months: e.title.split(" · ").map((x) => x.replace(/ [£\d,.-]+$/, "")), vals: e.title.split(" · ").map((x) => Number(x.split(" ").pop().replace(/[£,]/g, ""))), points: pts.length, said: e.querySelector(".sr-only").textContent, shown: k ? k.querySelector(".num").textContent.trim() : document.querySelector("#report-hero .rep-hero-num").textContent.trim(), caption: e.textContent.includes("12 months") }; };
+    return { months: e.title.split(" · ").map((x) => x.replace(/ [£\d,.-]+$/, "")), vals: e.title.split(" · ").map((x) => Number(x.split(" ").pop().replace(/[£,]/g, ""))), points: pts.length, said: e.getAttribute("aria-label") || "", words: e.textContent.trim().split(/\s+/).length, shown: k ? k.querySelector(".num").textContent.trim() : document.querySelector("#report-hero .rep-hero-num").textContent.trim(), caption: e.textContent.includes("12 months") }; };
   return { n: document.querySelectorAll("#page-reports .kpi-trend").length, hero: t("#report-hero .kpi-trend"), sub: t("#month-kpis .kpi:nth-child(1) .kpi-trend"), subMoney: t("#month-kpis .kpi-secondary .kpi-trend"), done: t("#month-kpis .kpi:last-child .kpi-trend"), month: (document.querySelector("#report-month") || {}).value }; });
 const num = (s) => Number(String(s).replace(/[^\d.]/g, ""));
 (async () => {
@@ -30,6 +30,7 @@ const num = (s) => Number(String(s).replace(/[^\d.]/g, ""));
   const truth = await p.evaluate(async () => { const { data } = await window.__mockDb.from("cases").select("completed_at,stage"); const d = new Date(), m = new Date(d.getFullYear(), d.getMonth() - 1, 1), key = m.getFullYear() + "-" + String(m.getMonth() + 1).padStart(2, "0"); return data.filter((c) => c.completed_at && String(c.completed_at).slice(0, 7) === key).length; });
   ok("A4 · last month's completions on the line match the cases completed last month", Math.abs(r.done.vals[10] - truth) <= 1, `line ${r.done.vals[10]}, cases ${truth}`);
   ok("A5 · a screen reader is given the months and values in words", /^Twelve months to .+: .+ · /.test(r.hero.said) && r.hero.said.includes("£"));
+  ok("A5b · on the page itself each line adds two words, not a paragraph", [r.hero, r.sub, r.subMoney, r.done].every((t) => t.words === 2), JSON.stringify([r.hero.words, r.sub.words]));
   await p.evaluate(() => { const pk = document.querySelector("#report-month"); const d = new Date(); const m = new Date(d.getFullYear(), d.getMonth() - 3, 1); pk.value = m.getFullYear() + "-" + String(m.getMonth() + 1).padStart(2, "0"); pk.dispatchEvent(new Event("change", { bubbles: true })); }); await p.waitForTimeout(1800);
   const back = await read(p);
   ok("A6 · choosing an earlier month moves the twelve months with it", back.hero.months[11] === want[8] && num(back.done.shown) === back.done.vals[11], back.hero.months[11] + " vs " + want[8]);

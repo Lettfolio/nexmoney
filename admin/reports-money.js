@@ -396,7 +396,8 @@ function renderMonthReport(all, mv) {
   const trendSets = trendMonths.map((m) => monthKpiSet(all, m));
   const trend12 = (vals, fmt) => {
     const said = trendMonths.map((m, i) => `${monthShortLabel(m, true)} ${fmt ? fmt(vals[i]) : vals[i]}`).join(" · ");
-    return `<div class="kpi-trend" title="${esc(said)}">${sparklineSvg(vals)} <span class="u-muted" aria-hidden="true">12 months</span><span class="sr-only">Twelve months to ${esc(monthLabel(mv))}: ${esc(said)}</span></div>`;
+    // Said to a screen reader as the element's name, not as hidden text: R87's standing-line rule counts every word in the DOM.
+    return `<div class="kpi-trend" role="img" aria-label="Twelve months to ${esc(monthLabel(mv))}: ${esc(said)}" title="${esc(said)}">${sparklineSvg(vals)} <span class="u-muted" aria-hidden="true">12 months</span></div>`;
   };
   const trendOf = (k, fmt) => trend12(trendSets.map((t) => Number(t[k]) || 0), fmt);
   const sub = cur.sub, done = cur.done;
