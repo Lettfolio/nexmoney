@@ -61,19 +61,28 @@ const hero = async (p, target) => {
   await s.click(`#seo-tabs [data-seo-tab="${other}"]`); await s.waitForTimeout(300);
   const b = await st();
   ok("B3 · the other tab shows the other half and hides the first", other === "audit" ? b.table && !b.queries : b.queries && !b.table, JSON.stringify(b));
-  ok("B4 · each tab is shorter than the single page was", true, `now ${a.h}px / ${b.h}px`);
   await s.evaluate(() => window.nav("dashboard")); await s.waitForTimeout(300);
   await s.evaluate(() => window.nav("site/seo")); await s.waitForTimeout(1200);
   const c = await st();
   ok("B5 · it comes back on the tab it was left on", c.tabs.find((t) => t.endsWith("*")) === b.tabs.find((t) => t.endsWith("*")), JSON.stringify(c.tabs));
-  const jumped = await s.evaluate(async () => { const j = [...document.querySelectorAll("#page-site-seo [data-seo-jump]")].find((x) => { const t = document.getElementById(x.getAttribute("data-seo-jump")); const pane = t && t.closest(".seo-pane"); return pane && pane.hidden; }); if (!j) return "none"; j.click(); await new Promise((r) => setTimeout(r, 400)); const t = document.getElementById(j.getAttribute("data-seo-jump")); return t.checkVisibility() ? "shown" : "hidden"; });
-  ok("B6 · a tile that points at the other tab switches to it", jumped !== "hidden", jumped);
+  // Not connected: the tab opens on the audit, and the Connect tile's target is on Performance.
+  const nc = await boot(browser, "?as=p4&scope=default");
+  await nc.evaluate(() => { const r = window.__mock.db.seo_snapshots.filter((x) => x.kind === "summary").sort((x, y) => String(y.day).localeCompare(String(x.day)))[0]; r.data = Object.assign({}, r.data, { gsc_connected: false, gsc: null }); });
+  await nc.evaluate(() => window.nav("site/seo"));
+  await nc.waitForFunction(() => document.querySelector("#seo-head, #seo-empty"), null, { timeout: 10000 }); await nc.waitForTimeout(500);
+  const n0 = await nc.evaluate(() => ({ on: (document.querySelector('#seo-tabs [aria-selected="true"]') || {}).textContent, connectShown: document.getElementById("seo-connect").checkVisibility() }));
+  ok("B6a · without Search Console it opens on Page audit, the Connect panel out of sight on the other tab", n0.on === "Page audit" && !n0.connectShown, JSON.stringify(n0));
+  await nc.click('#page-site-seo [data-seo-jump="seo-connect"]'); await nc.waitForTimeout(500);
+  const n1 = await nc.evaluate(() => ({ on: (document.querySelector('#seo-tabs [aria-selected="true"]') || {}).textContent, connectShown: document.getElementById("seo-connect").checkVisibility() }));
+  ok("B6 · the Connect tile switches to Performance and shows the panel it points at", n1.on === "Performance" && n1.connectShown, JSON.stringify(n1));
   const legacy = await boot(browser, "?as=p4");
   await legacy.evaluate(() => window.nav("site/seo"));
   await legacy.waitForFunction(() => document.querySelector("#seo-head, #seo-empty"), null, { timeout: 10000 }); await legacy.waitForTimeout(500);
   ok("B7 · the harness seam keeps the single page", await legacy.evaluate(() => !document.querySelector("#seo-tabs") && !document.querySelector(".seo-pane")));
+  const one = await legacy.evaluate(() => document.documentElement.scrollHeight);
+  ok("B4 · each tab is shorter than the single page was", a.h < one && b.h < one, `tabs ${a.h}px / ${b.h}px, single page ${one}px`);
 
-  const errs = [p, s, legacy].flatMap((x) => x.__errs);
+  const errs = [p, s, nc, legacy].flatMap((x) => x.__errs);
   ok("Z · no page errors", errs.length === 0, errs.join(" | ").slice(0, 300));
   console.log(`\nr112_pace_seo_tabs: ${pass} passed, ${fail} failed`);
   await browser.close(); process.exit(fail ? 1 : 0);

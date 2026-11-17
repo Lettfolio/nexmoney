@@ -31,4 +31,4 @@ controls in the left column and 4–8 on the Work tab. Met by R109; nothing buil
 - **O7** (Operations run buttons into one menu) — sits beside the email hold; wording there is deliberate.
 
 ## Harness
-`tests/r112_pace_seo_tabs.js` (14). Tags → r112. admin.css unchanged (3,949).
+`tests/r112_pace_seo_tabs.js` (15). Tags → r112. admin.css unchanged (3,949).
