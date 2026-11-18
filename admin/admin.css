@@ -643,7 +643,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .card.age-red:hover { border-left-color: #d64545; }
 /* #a97a00 measured 3.84:1 on white, under AA. */
 .card.age-amber .age-line { color: #8a6400; }
-.card.age-red .age-line { color: #b8352a; }
+.card.age-red .age-line { color: #b8352a; } .age-mark { margin-right: 4px; } .age-mark .ic { width: 13px; height: 13px; vertical-align: -2px; }
 /* Table "In stage" cell colouring — matches the board thresholds. */
 .age-cell { font-variant-numeric: tabular-nums; }
 .age-cell.age-amber { color: #a97a00; font-weight: 600; }
