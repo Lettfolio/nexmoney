@@ -2814,7 +2814,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .rep-hero .kpi-delta { flex-basis: 100%; margin-top: 0; }
 .diary-agenda h3 { margin: 18px 0 4px; font-size: 13px; } .diary-agenda .row-item { cursor: pointer; justify-content: flex-start; } .da-time { flex: 0 0 104px; font-variant-numeric: tabular-nums; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.kpi-i { position: absolute; top: 8px; right: 10px; width: 18px; height: 18px; border: 1px solid var(--border); border-radius: 50%; font-size: 12px; line-height: 16px; text-align: center; color: var(--muted); cursor: help; }
+.kpi-i { position: absolute; top: 8px; right: 10px; width: 18px; height: 18px; border: 1px solid var(--border); border-radius: 50%; font-size: 12px; line-height: 16px; text-align: center; color: var(--muted); cursor: help; } .info-i { width: 20px; height: 20px; padding: 0; margin-left: 8px; border: 1px solid var(--border); border-radius: 50%; background: none; font: italic 600 12px/18px Georgia, serif; color: var(--muted); cursor: pointer; vertical-align: 2px; } .info-i:hover, .info-i[aria-expanded="true"] { color: var(--navy); border-color: var(--navy); }
 .rep-howcounted { margin: 6px 0 0; }
 .rep-howcounted > summary {
   cursor: pointer; font-size: 13px; font-weight: 600; color: var(--navy);

@@ -4870,12 +4870,38 @@ function iconize(root) {
     t.replaceWith(...span.childNodes);
   });
 }
+/* R119 · X6: on Operations and Settings a sentence that only explains a panel goes behind an "i" on the panel's
+   heading. Pressing it shows the sentence where it always was; hovering names it. Lines that report a state or carry a
+   warning stay on show (TUCK_KEEP, data-keep, anything under ten words), as does anything with a control inside it.
+   #emails-intro stays too: R42 · F4 chose it as one of the two facts an operator needs on arriving at Emails. */
+const TUCK_KEEP = new Set(["emails-intro", "em-morning-sub", "sms-summary", "email-sending-sub", "set-doc-chase-pointer", "firm-export-sub", "second-owner-notice"]);
+let tuckSeq = 0;
+function tuckProse(root) {
+  if (!root || root.nodeType !== 1) return;
+  const ps = root.matches("p.panel-sub") ? [root] : [...root.querySelectorAll("p.panel-sub")];
+  ps.forEach((p) => {
+    if (p.dataset.tucked || !p.closest("#page-operations, #page-settings")) return;
+    if (TUCK_KEEP.has(p.id) || p.hasAttribute("data-keep") || p.querySelector("a, button, details, input, select")) return;
+    if (p.textContent.trim().split(/\s+/).length < 10) return;
+    const prev = p.previousElementSibling;
+    const head = prev && (prev.matches("h2, h3, h4") ? prev : prev.querySelector("h2, h3, h4"));
+    if (!head || head.querySelector(".info-i")) return;
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "info-i"; b.textContent = "i";
+    b.setAttribute("aria-label", `About ${head.textContent.replace(/\s+/g, " ").trim()}`); b.setAttribute("aria-expanded", "false");
+    if (!p.id) p.id = "tuck-" + ++tuckSeq;
+    b.setAttribute("aria-controls", p.id);
+    b.addEventListener("click", () => { const open = p.hidden; p.hidden = !open; b.setAttribute("aria-expanded", String(open)); });
+    b.addEventListener("mouseenter", () => { b.title = p.textContent.replace(/\s+/g, " ").trim(); });
+    head.appendChild(b); p.hidden = true; p.dataset.tucked = "1";
+  });
+}
 if (ROW_ONE()) {
   const start = () => {
-    iconize(document.body);
+    iconize(document.body); tuckProse(document.body);
     new MutationObserver((ms) => ms.forEach((m) => {
       if (m.type === "characterData") iconize(m.target);
-      else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) iconize(n); });
+      else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) { iconize(n); tuckProse(n); } });
     })).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
@@ -5438,7 +5464,7 @@ async function renderSettings() {
         <option value="on" ${settings.auto_gi_email === "on" ? "selected" : ""}>On</option>
       </select>
     </label>
-    <p class="panel-sub" style="grid-column:1/-1;margin:4px 0 0;">⚠️ The automated protection and GI emails are financial promotions — get principal approval for the templates before switching them on.</p>
+    <p class="panel-sub" data-keep style="grid-column:1/-1;margin:4px 0 0;">⚠️ The automated protection and GI emails are financial promotions — get principal approval for the templates before switching them on.</p>
     
     ${setFieldHtml(`<label title="Pre-fills the “Referred to” box when an adviser records a protection referral on a case. Blank = no pre-fill; the adviser types it each time.">Protection referral partner
       <input name="protection_referral_partner" type="text" value="${esc(settings.protection_referral_partner ?? "")}" placeholder="e.g. Stonebridge Protect">
@@ -27081,6 +27107,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r118";   // R89
+window.__nxTag_app = "r119";   // R89
 
 init();
