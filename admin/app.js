@@ -117,7 +117,15 @@ function cardAge(c, stageEntryIso) {
     : `Days in stage is measured from the last recorded stage change (${fmtD(stageEntryIso)})`
       + (stale ? ", and the case has been edited since" : "")
       + ". Stage moves are written to the event log automatically, with who made them, so this is when the case entered its current stage — not simply when it was last edited.";
-  return { level, text: parts.join(" · "), inStage, touched, stale, basis };
+  return { level, text: parts.join(" · "), inStage, touched, stale, basis, th };
+}
+/* R118 · X5: the coloured edge is not the only signal. An amber card carries a clock and a red one a warning sign,
+   each saying in words what it means and the stage's own threshold. iconSvg lives further down, so this is a function. */
+function ageMarkHtml(age) {
+  if (!ROW_ONE() || !age.level) return "";
+  const days = `${age.th} day${age.th === 1 ? "" : "s"}`;
+  const say = age.level === "red" ? `Stuck — ${age.inStage} days in this stage, more than twice the usual ${days}` : `Slow — ${age.inStage} days in this stage, past the usual ${days}`;
+  return `<span class="age-mark" role="img" aria-label="${say}" title="${say}">${iconSvg(age.level === "red" ? "alert" : "clock")}</span>`;
 }
 /* Batched, best-effort lookup of when each case entered its current stage, derived from the most recent
    stage_change case_event. ONE query for the whole board — never a per-card query. */
@@ -11577,7 +11585,7 @@ function boardCardHtml(c, ctx) {
             `${lenderStatusBadgeHtml(c)}`,
             `${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}`,
           ])}</div>
-          ${age.text ? `<div class="age-line" title="${esc(age.basis)}">${age.text}</div>` : ""}
+          ${age.text ? `<div class="age-line" title="${esc(age.basis)}">${ageMarkHtml(age)}${age.text}</div>` : ""}
           
           <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" data-stop data-on="change" ${actAttr("cardStageMove", c.id, "$this", c.stage)}>
             ${STAGES.map(([k, l]) => `<option value="${k}" ${k === c.stage ? "selected" : ""}${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${l}</option>`).join("")}
@@ -15290,7 +15298,7 @@ function feeStatusCellHtml(c) {
       case "completed_at": return `<td>${c.completed_at ? fmtD(c.completed_at) : "—"}</td>`;
       case "days_in_stage": {
         const a = cardAge(c, stageEntry[c.id]);
-        return `<td>${a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}" title="${esc(a.basis)}">${a.inStage}d</span>`}</td>`;
+        return `<td>${a.inStage == null ? "" : `<span class="age-cell${a.level ? " age-" + a.level : ""}" title="${esc(a.basis)}">${ageMarkHtml(a)}${a.inStage}d</span>`}</td>`;
       }
       /* R9-5 / R65 · H7b — the waiting-on chip has its own column. */
       case "waiting_on": return `<td class="pipe-col-waiting">${waitingChipHtml(c) || '<span class="cs-muted" title="Nobody has recorded who this case is sitting with. You are asked when a case moves to Application, Offer or Exchange; it is also on the case form.">—</span>'}</td>`;
@@ -27073,6 +27081,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r117";   // R89
+window.__nxTag_app = "r118";   // R89
 
 init();
