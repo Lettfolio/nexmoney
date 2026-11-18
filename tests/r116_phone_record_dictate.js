@@ -39,8 +39,8 @@ const still = (s) => s.open && s.moved === 0 && s.out.length === 0 && s.doc <= 0
   await p.evaluate(async (i) => { await window.__mockDb.from("clients").update({ email: "a-very-long-unbroken-address-that-used-to-push-things-wide@an-equally-long-domain-name-example.co.uk" }).eq("id", i); }, ids.many);
   await p.evaluate((i) => window.openClient(i), ids.many); await p.waitForTimeout(1600);
   for (const tab of ["cases", "timeline", "details"]) { await p.click(`.rec-tabs button[data-tab="${tab}"]`); await p.waitForTimeout(500); const s = await sideways(p); ok(`A1 · client record, ${tab}: nothing wider than the screen and no sideways travel`, still(s), JSON.stringify(s)); }
-  const bars = await p.evaluate(() => ["#modal .modal-topbar", "#modal > .modal-actions"].map((s) => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.left), Math.round(r.right)]; }));
-  ok("A2 · the top bar and the Save bar end exactly at the screen edges", bars.every((b) => b[0] === 0 && b[1] === 390), JSON.stringify(bars));
+  const bars = await p.evaluate(() => ["#modal .modal-topbar", "#modal > .modal-actions"].map((s) => document.querySelector(s)).filter((e) => e.checkVisibility()).map((e) => { const r = e.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.right)]; }));
+  ok("A2 · the top bar (and the bottom bar, where a record has one — R121 removed the client's) ends exactly at the screen edges", bars.length >= 1 && bars.every((b) => b[0] === 0 && b[1] === 390), JSON.stringify(bars));
   ok("A3 · the record stops the page behind it being dragged along", await p.evaluate(() => { const cs = getComputedStyle(document.getElementById("modal-backdrop")); return cs.overflowX === "hidden" && cs.overscrollBehaviorY === "contain" && cs.overflowY === "auto"; }));
   await p.click("#modal .modal-close"); await p.waitForTimeout(500);
   await p.evaluate((i) => window.openCase(i), ids.kase); await p.waitForTimeout(1800);

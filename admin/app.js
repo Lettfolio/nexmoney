@@ -12377,6 +12377,118 @@ async function saveCaseFields(k, form, base) {
     if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
   }, 600);
 }
+/* R121 — SAVE AS YOU GO, ON A CLIENT TOO. The same shape as the case: an existing client on the full-width record has
+   no Save button; a field is written as it is left, only what changed is sent, and each refusal is answered on its own
+   field. A blank name goes back to what it was; a malformed email or phone stays in the box, marked, and is not
+   written. New clients and the harness seam keep the Save button. */
+const clientAutosaves = (id) => !!id && ROW_ONE();
+function clientFormRow(form) {
+  const f = new FormData(form), row = {};
+  for (const [k, v] of f.entries()) row[k] = v.trim() || null;
+  // Real booleans / typed date for the comms fields (the loop above stringifies everything)
+  row.sms_opt_out = f.get("sms_opt_out") === "1";
+  row.marketing_opt_out = f.get("marketing_opt_out") === "1";
+  row.date_of_birth = (f.get("date_of_birth") || "").trim() || null;
+  /* R13 · M-4/M-30: an unchecked checkbox is simply absent from FormData, so each care flag is read as a real
+     boolean rather than left undefined. */
+  row.is_vulnerable = f.get("is_vulnerable") != null;
+  row.suppress_automation = f.get("suppress_automation") != null;
+  row.vulnerability_note = (f.get("vulnerability_note") || "").trim() || null;
+  return row;
+}
+let clientAutosaveTimer = 0;
+function wireClientAutosave(k) {
+  const { id } = k;
+  const form = $("#client-form");
+  if (!form || !clientAutosaves(id)) return;
+  ["#modal-save", "#modal-cancel"].forEach((sel) => { const b = $("#modal > .modal-actions " + sel); if (b) b.classList.add("hidden"); });
+  const bar = $("#modal > .modal-actions");   // Delete moved to Details (R111), so the bar is now empty: no blank strip
+  if (bar && !bar.querySelector("button:not(.hidden), a")) bar.classList.add("hidden");
+  const base = clientFormRow(form);
+  const live = () => $("#client-form") === form && !$("#modal-backdrop").classList.contains("hidden");
+  let chain = Promise.resolve();
+  form.addEventListener("change", () => {
+    chain = chain.then(() => saveClientFields(k, form, base)).catch((e) => { console.error(e); toast("Not saved — " + (e && e.message ? e.message : "something went wrong")); });
+  });
+  // The side column (contact line, last contact) is drawn once; it catches up on the next change of tab.
+  const tabs = $("#modal .rec-tabs");
+  if (tabs) tabs.addEventListener("click", () => { if (k.clientRedraw) chain.then(() => { if (live() && !hasUnsavedModalEdits()) openClient(id); }); });
+}
+async function saveClientFields(k, form, base) {
+  const { id, c } = k;
+  await Promise.resolve();
+  const strip = $("#signedout-strip");
+  if (strip && !strip.classList.contains("hidden")) return;   // signed out: the edit stays in the form and goes with the next one
+  const now = clientFormRow(form), row = {};
+  Object.keys(now).forEach((n) => { if (!cfSame(now[n], base[n])) row[n] = now[n]; });
+  if (!Object.keys(row).length) return;
+  const field = (n) => form.elements[n];
+  const back = (n) => {
+    const f = field(n);
+    delete row[n];
+    if (!f) return;
+    if (f.type === "checkbox") f.checked = !!base[n];
+    else if (f.tagName === "SELECT" && typeof base[n] === "boolean") f.value = base[n] ? "1" : "0";
+    else f.value = base[n] == null ? "" : String(base[n]);
+  };
+  const errs = [];
+  ["first_name", "last_name"].forEach((n) => { if (n in row && !row[n]) { back(n); toast(`A ${n === "first_name" ? "first" : "last"} name is required — it has been put back.`); } });
+  if (row.email && !isValidEmailLike(row.email)) { errs.push([field("email"), `"${row.email}" isn't a valid email address — not saved.`]); delete row.email; }
+  if (row.phone && !isValidPhoneLike(row.phone)) { errs.push([field("phone"), `"${row.phone}" isn't a valid phone number — UK numbers need 11 digits (e.g. 07700 900123). Not saved.`]); delete row.phone; }
+  if (errs.length) setFormErrors("#client-form", errs);
+  if (!Object.keys(row).length) return;
+  const onScreen = () => $("#client-form") === form;
+  let stamp = onScreen() ? openedClientUpdatedAt : null;
+  if (!stamp) { const { data: cur } = await db.from("clients").select("updated_at").eq("id", id).single(); stamp = cur ? cur.updated_at : null; }
+  const write = () => db.from("clients").update(row).eq("id", id).eq("updated_at", stamp).select();
+  let { data: updated, error } = await write();
+  if (error) return dbFail("clientAutosave", error);
+  if (!updated || !updated.length) {
+    // Somebody else wrote this client. If they left these fields alone the write goes again on the fresh stamp.
+    const { data: theirs } = await db.from("clients").select("*").eq("id", id).single();
+    if (!theirs) return toast("Not saved — this client could not be re-read. Close it and open it again.");
+    const clash = Object.keys(row).filter((n) => !cfSame(theirs[n], c[n]) && !cfSame(theirs[n], row[n]));
+    if (clash.length && !(await askConfirm(`A colleague changed ${clash.map(auditFieldLabel).join(", ")} while this was open. Keep what you entered?`, "Keep mine"))) {
+      clash.forEach((n) => { base[n] = theirs[n]; c[n] = theirs[n]; back(n); });
+      if (!Object.keys(row).length) { if (onScreen()) openedClientUpdatedAt = theirs.updated_at; return; }
+    }
+    stamp = theirs.updated_at;
+    ({ data: updated, error } = await write());
+    if (error) return dbFail("clientAutosave", error);
+    if (!updated || !updated.length) return toast("Not saved — the client changed again underneath. Change that field once more.");
+  }
+  if (onScreen()) await refreshOpenedClientStamp(id);   // R18-D1 — our own write must not trip the next one
+  const was = { email: c.email, phone: c.phone }, cols = Object.keys(row);
+  Object.assign(c, row);
+  cols.forEach((n) => { base[n] = row[n]; });
+  cols.forEach((n) => {
+    const f = field(n), lab = f && f.closest ? f.closest("label") : null;
+    if (!lab) return;
+    clearOneFieldError(f);
+    let tick = lab.querySelector(":scope > .saved-msg");
+    if (!tick) { tick = document.createElement("span"); tick.className = "saved-msg"; tick.setAttribute("role", "status"); tick.textContent = "✓ Saved"; lab.insertBefore(tick, lab.firstElementChild); }
+    clearTimeout(tick.nxT); tick.nxT = setTimeout(() => tick.remove(), 2500);
+  });
+  if (onScreen() && ("first_name" in row || "last_name" in row)) {
+    const h = $("#modal > h3"), name = [c.first_name, c.last_name].filter(Boolean).join(" ");
+    if (h && !h.children.length && name) h.textContent = name;
+  }
+  k.clientRedraw = true;
+  /* R76 · B5: reached from a failed message's "Fix contact" link and the field that failed has changed — offer the
+     retry on the spot, as the Save button did. */
+  const fx = k.fixRetryCtx, fixedField = fx ? (fx.kind === "sms" ? "phone" : "email") : null;
+  if (fixedField && fixedField in row && row[fixedField] && String(row[fixedField]).trim() !== String(was[fixedField] || "").trim()) {
+    toast(`Saved — retry the failed ${fx.kind === "sms" ? "SMS" : "email"} to ${row[fixedField]} now?`, { label: "Retry now", onClick: () => (fx.kind === "sms" ? retrySms(fx.rowId) : retryEmail(fx.rowId)) });
+  }
+  clearTimeout(clientAutosaveTimer);
+  clientAutosaveTimer = setTimeout(async () => {
+    // T1-11: a client write can resolve (or create) a watchtower alert.
+    try { await db.rpc("run_watchtower"); wtStampRun(); } catch (e) { /* alerts just stay as they were */ }
+    loadClients($("#client-search").value, { force: true });
+    if ($("#page-data") && !$("#page-data").classList.contains("hidden")) loadDataHealth();
+    if ($("#page-emails") && !$("#page-emails").classList.contains("hidden")) loadEmails();
+  }, 800);
+}
 function protectionGateBlocks(caseRow, newStage) {
   if ((settings.protection_gate ?? "on") !== "on") return false;
   if (newStage === "not_proceeding") return false;
@@ -21470,7 +21582,7 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
     <details class="case-details client-details" ${id && !focus ? "" : "open"}>
       <summary>Client details</summary>
       ${attempted ? `<p class="dq-notice bad" id="client-attempted">Last send attempted: <strong>${esc(attempted)}</strong> — that ${focus === "phone" ? "number" : "address"} failed. Correct the ${focus === "phone" ? "phone" : "email"} below, then retry the message.</p>` : ""}
-      <form id="client-form" class="form-grid">
+      <form id="client-form" class="form-grid"${clientAutosaves(id) ? ' data-autosave="1"' : ""}>
       <label>First name<input name="first_name" required value="${esc(c.first_name)}"></label>
       <label>Last name<input name="last_name" required value="${esc(c.last_name)}"></label>
       
@@ -21537,19 +21649,9 @@ window.openClient = async function (id, focus, attempted, presetCaseId) {
   pushModalHistory("client", id, [c.first_name, c.last_name].filter(Boolean).join(" ")); // BUILD 7a — Back closes this modal · R87 fixer (09 4e) — "<Name> · NexMoney" in the tab
   if (id) wireAuditPanel("client-audit", auditRows);
   $("#modal-cancel").onclick = closeModalGuarded; // defect 2 — Cancel is a "leave" path: it must warn about unsaved edits too
+  wireClientAutosave({ id, c, fixRetryCtx });
   $("#modal-save").onclick = async () => {
-    const f = new FormData($("#client-form"));
-    const row = {};
-    for (const [k, v] of f.entries()) row[k] = v.trim() || null;
-    // Real booleans / typed date for the comms fields (the loop above stringifies everything)
-    row.sms_opt_out = f.get("sms_opt_out") === "1";
-    row.marketing_opt_out = f.get("marketing_opt_out") === "1";
-    row.date_of_birth = (f.get("date_of_birth") || "").trim() || null;
-    /* R13 · M-4/M-30: the care columns ride the EXISTING client save. An unchecked checkbox is simply absent
-       from FormData, so each is read as a real boolean rather than left undefined. */
-    row.is_vulnerable = f.get("is_vulnerable") != null;
-    row.suppress_automation = f.get("suppress_automation") != null;
-    row.vulnerability_note = (f.get("vulnerability_note") || "").trim() || null;
+    const row = clientFormRow($("#client-form"));
     /* R74 · B2: ONE pass over everything this form refuses, marked AT the fields and summarised once in the
        toast, instead of four separate returns each firing a toast about a field the operator cannot see. */
     const clientErrs = [];
@@ -27119,6 +27221,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r120";   // R89
+window.__nxTag_app = "r121";   // R89
 
 init();
