@@ -11555,6 +11555,17 @@ window.boardFoldCol = function (stage) {
   try { localStorage.setItem(boardFoldKey(), JSON.stringify([...s])); } catch (_) { /* private mode: folds for this visit only */ }
   boardApplyFold(); updateBoardScrollHint();
 };
+/* R120: a drop-down menu is kept on the screen. The CSS hangs it from its button's right edge, which on a phone record
+   (button near the left) pushed most of it off the left of the screen. After it opens, slide it sideways until both
+   edges are inside the viewport, and stop it short of the bottom so its own scroll takes over. */
+function menuFit(menu) {
+  menu.style.left = ""; menu.style.right = ""; menu.style.maxHeight = "";
+  const pad = 8, vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  const r = menu.getBoundingClientRect(), host = (menu.offsetParent || document.body).getBoundingClientRect();
+  const left = Math.max(pad, Math.min(r.left, vw - pad - r.width));
+  if (Math.abs(left - r.left) > 0.5) { menu.style.right = "auto"; menu.style.left = `${Math.round(left - host.left)}px`; }
+  if (r.top >= 0 && r.bottom > vh - pad) menu.style.maxHeight = `${Math.max(160, Math.round(vh - pad - r.top))}px`;
+}
 function boardCardHtml(c, ctx) {
   const stageEntry = (ctx && ctx.stageEntry) || {};
   const clientCaseCount = (ctx && ctx.clientCaseCount) || {};
@@ -18767,6 +18778,7 @@ function wireCaseActions(k, caseLogCallHooks) {
       e.stopPropagation();
       const open = !moreMenu.classList.toggle("hidden");
       moreToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open) menuFit(moreMenu);
     };
     moreMenu.addEventListener("click", (e) => e.stopPropagation());
   }
@@ -27107,6 +27119,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r119";   // R89
+window.__nxTag_app = "r120";   // R89
 
 init();
