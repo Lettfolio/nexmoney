@@ -11477,6 +11477,50 @@ function refreshPipelineViews() {
 /* R65 · L9: ONE CARD BUILDER, TWO SURFACES. The board card was ~60 lines of template literal living inside
    loadPipeline's column map, which meant the mobile card list this round adds to the TABLE would have had to be a
    second, drifting copy of it. … */
+/* R117 · P2: a card shows the two chips that matter most and a "+N" for the rest. Who the case is waiting on leads,
+   then red, then amber, then the informational ones; "+N" names the others on hover and opens them on a press.
+   Under the harness seam every chip prints, in the order it always did. */
+function cardFlagsHtml(parts) {
+  const chips = parts.map((p) => String(p || "").trim()).filter(Boolean);
+  if (!ROW_ONE() || chips.length <= 2) return chips.join("");
+  const rank = (h) => (/wait-chip/.test(h) ? 0 : /badge red/.test(h) ? 1 : /badge amber/.test(h) ? 2 : 3);
+  const sorted = chips.map((h, i) => ({ h, i, r: rank(h) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.h);
+  const rest = sorted.slice(2);
+  const names = rest.map((h) => h.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim()).join(" · ");
+  return sorted.slice(0, 2).join("")
+    + `<button type="button" class="badge grey flags-more" data-stop aria-expanded="false" aria-label="${rest.length} more: ${names}" title="${names}" ${actAttr("cardMoreFlags", "$this")}>+${rest.length}</button>`
+    + `<span class="flags-rest" hidden>${rest.join("")}</span>`;
+}
+window.cardMoreFlags = function (btn) {
+  const rest = btn.nextElementSibling, open = rest.hasAttribute("hidden");
+  rest.toggleAttribute("hidden", !open);
+  btn.setAttribute("aria-expanded", String(open));
+  btn.textContent = open ? "Less" : "+" + rest.children.length;
+};
+/* R117 · P5: a column folds to a strip (its name and count) from a button in its heading, remembered per person in this
+   browser. A folded column still takes a dropped card. Not offered under the harness seam. */
+const boardFoldKey = () => "nx_board_fold_v1:" + ((ME && ME.id) || "");
+function boardFolded() { try { return new Set(JSON.parse(localStorage.getItem(boardFoldKey()) || "[]")); } catch (_) { return new Set(); } }
+function boardApplyFold() {
+  const board = $("#board"), folded = boardFolded(), cols = [...board.querySelectorAll(".col")];
+  cols.forEach((col) => {
+    const on = folded.has(col.dataset.stage), b = col.querySelector(".col-fold");
+    col.classList.toggle("is-folded", on);
+    if (!b) return;
+    const name = STAGE_LABEL[col.dataset.stage] || col.dataset.stage;
+    b.setAttribute("aria-expanded", String(!on)); b.textContent = on ? "›" : "‹";
+    b.title = on ? `Open ${name}` : `Fold ${name} away`; b.setAttribute("aria-label", b.title);
+  });
+  const any = cols.some((c) => c.classList.contains("is-folded")), wide = board.classList.contains("is-focused") ? "minmax(0, 1fr)" : "244px";
+  if (any) board.style.gridTemplateColumns = cols.map((c) => (c.classList.contains("is-folded") ? "44px" : wide)).join(" ");
+  else board.style.removeProperty("grid-template-columns");
+}
+window.boardFoldCol = function (stage) {
+  const s = boardFolded();
+  if (s.has(stage)) s.delete(stage); else s.add(stage);
+  try { localStorage.setItem(boardFoldKey(), JSON.stringify([...s])); } catch (_) { /* private mode: folds for this visit only */ }
+  boardApplyFold(); updateBoardScrollHint();
+};
 function boardCardHtml(c, ctx) {
   const stageEntry = (ctx && ctx.stageEntry) || {};
   const clientCaseCount = (ctx && ctx.clientCaseCount) || {};
@@ -11523,19 +11567,16 @@ function boardCardHtml(c, ctx) {
           
           ${cardChip}
           <div class="cd">${lenderIcon(c.lender)}${esc(cdText)}${c.loan_amount ? " · " + fmtM(c.loan_amount) : ""}${twinTail}</div>
-          <div class="flags">
-            
-            ${waitingChipHtml(c)}
-            ${c.rate_end_date ? `<span class="badge blue${c.rate_end_estimated ? " is-est" : ""}"${c.rate_end_estimated ? ` title="${TIP_APPROX}"` : ""}>Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</span>` : ""}
-            ${erc ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}
-            ${c.retention_source_case_id ? '<span class="badge grey">🔁 retention</span>' : ""}
-            ${["application","offer"].includes(c.stage) && (c.protection_status || "not_discussed") === "not_discussed" ? '<span class="badge amber">🛡 protection?</span>' : ""}
-            ${["offer","exchange"].includes(c.stage) && !c.expected_completion_date ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>` : ""}
-            
-            
-            ${lenderStatusBadgeHtml(c)}
-            ${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}
-          </div>
+          <div class="flags">${cardFlagsHtml([
+            `${waitingChipHtml(c)}`,
+            `${c.rate_end_date ? `<span class="badge blue${c.rate_end_estimated ? " is-est" : ""}"${c.rate_end_estimated ? ` title="${TIP_APPROX}"` : ""}>Rate ends ${fmtD(c.rate_end_date)}${c.rate_end_estimated ? " " + APPROX : ""}</span>` : ""}`,
+            `${erc ? `<span class="badge red" title="${TIP_ERC}">ERC conflict</span>` : ""}`,
+            `${c.retention_source_case_id ? '<span class="badge grey">🔁 retention</span>' : ""}`,
+            `${["application","offer"].includes(c.stage) && (c.protection_status || "not_discussed") === "not_discussed" ? '<span class="badge amber">🛡 protection?</span>' : ""}`,
+            `${["offer","exchange"].includes(c.stage) && !c.expected_completion_date ? `<span class="badge amber" title="No expected completion date set — chase the adviser">📅 no date</span>` : ""}`,
+            `${lenderStatusBadgeHtml(c)}`,
+            `${c.fee_status === "paid" ? '<span class="badge green">Fee paid</span>' : c.fee_status === "requested" ? '<span class="badge amber">Fee requested</span>' : ""}`,
+          ])}</div>
           ${age.text ? `<div class="age-line" title="${esc(age.basis)}">${age.text}</div>` : ""}
           
           <select class="card-stage-move" aria-label="Move to stage" title="Move to stage" data-stop data-on="change" ${actAttr("cardStageMove", c.id, "$this", c.stage)}>
@@ -12045,7 +12086,7 @@ async function loadPipeline() {
     return `
     <div class="col" data-stage="${k}">
       
-      <h3 class="col-h"${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span></h3>
+      <h3 class="col-h"${k === "decision_in_principle" ? ` title="${TIP_DIP}"` : ""}>${label} <span>${byStage[k].length}</span>${ROW_ONE() ? `<button type="button" class="col-fold" ${actAttr("boardFoldCol", k)}>‹</button>` : ""}</h3>
       ${byStage[k].length === 0 ? '<div class="col-empty">No cases here</div>' : ""}
       ${colCards.map((c) => {
         try { return boardCardHtml(c, cardCtx); }
@@ -12065,6 +12106,7 @@ async function loadPipeline() {
   /* R73 · B1 — call site 1 of 4. A board card is an onclick div; without this the
      pipeline is mouse-only, and the board is the page advisers live on. */
   activateAll("#board .card");
+  if (ROW_ONE()) boardApplyFold();
   updateBoardScrollHint();
 }
 /* Horizontal-scroll affordance for the 8-stage board (QW16): edge fade + arrow appear
@@ -27031,6 +27073,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r116";   // R89
+window.__nxTag_app = "r117";   // R89
 
 init();
