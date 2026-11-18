@@ -783,7 +783,7 @@ main input:focus, main select:focus, main textarea:focus,
   background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px rgba(9,20,38,.16); }
 .more-actions-menu .btn { width: 100%; justify-content: flex-start; text-align: left; }
 /* The case footer's overflow menu scrolls inside the viewport (was an inline style, R88 · E). */
-#case-more-actions.more-actions-menu { max-height: calc(100vh - 230px); overflow-y: auto; }
+#case-more-actions.more-actions-menu { max-height: calc(100vh - 230px); overflow-y: auto; max-width: calc(100vw - 16px); overscroll-behavior: contain; }
 .more-actions-empty { color: var(--muted); font-size: 13px; padding: 4px 6px; }
 .overlay-backdrop { z-index: 70; background: rgba(9,20,38,.35); }
 .overlay-modal { width: 460px; padding: 22px 24px; }
