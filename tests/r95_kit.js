@@ -220,7 +220,10 @@ async function ensureServer() {
     await cp.fill("#email", "nojs.visitor@example.com"); await cp.fill("#phone", "07700900123");
     await cp.selectOption("#enquiryType", "remortgage");
     for (const sel of await cp.$$eval("#enquiryForm [required]", (els) => els.filter((e) => !e.value && e.type !== "checkbox").map((e) => "#" + e.id))) await cp.fill(sel, "x");
-    await cp.check("#consent", { force: true });   // force: the page's CSS reveal animation never settles with JS off
+    /* Ticked directly, not with a pointer: with JS off the page's reveal animation never settles, and a forced click
+       sometimes landed without changing the box (PR #36, shard 1). What I2 tests is the submit, not the click. */
+    await cp.$eval("#consent", (e) => { e.checked = true; });
+    if (!(await cp.isChecked("#consent"))) throw new Error("consent box did not take the tick");
     const [nav] = await Promise.all([cp.waitForNavigation({ waitUntil: "domcontentloaded" }).catch(() => null), cp.click("#enquiryForm button[type=submit]", { force: true })]);
     ok("I2a · the no-JS submit really left the page (so I2 is not vacuous)", !!nav, String(nav && nav.status()));
     ok("I2 · a no-JS submit leaves no email= (or any field) in the URL", !/[?&](email|fname|phone)=/.test(cp.url()), cp.url());

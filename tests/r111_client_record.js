@@ -44,15 +44,13 @@ const open = async (p, id, ...rest) => { await p.evaluate(([i, r]) => window.ope
   const sd = await state(p);
   const cols = await p.evaluate(() => getComputedStyle(document.querySelector("#client-form")).gridTemplateColumns.split(" ").length);
   ok("A5 · Details shows the form in three columns", sd.form && !sd.tl && cols === 3, String(cols));
-  ok("A6 · Save stays on a client — only case fields save themselves", s.save && sd.save);
+  ok("A6 · an existing client has no Save button either (R121: its fields save themselves)", !s.save && !sd.save);
 
   console.log("B · behaviour kept");
-  await p.fill('#client-form [name="address"]', "1 Test Street"); await p.click("#modal .modal-close"); await p.waitForTimeout(600);
+  await p.fill('#client-form [name="address"]', "1 Test Street"); await p.click("#modal .modal-close"); await p.waitForTimeout(1200);
   const guard = await p.evaluate(() => { const o = document.getElementById("overlay-modal"); return o && o.checkVisibility() ? o.textContent : ""; });
-  ok("B1 · leaving with an unsaved change still warns", /unsaved|discard/i.test(guard), guard.slice(0, 60));
-  await p.evaluate(() => { const b = [...document.querySelectorAll("#overlay-modal button")].find((x) => /keep|stay|back|cancel/i.test(x.textContent)); if (b) b.click(); }); await p.waitForTimeout(400);
-  await p.click("#modal-save"); await p.waitForTimeout(1500);
-  ok("B2 · Save writes the change", await p.evaluate(async (i) => (await window.__mockDb.from("clients").select("address").eq("id", i).single()).data.address === "1 Test Street", ids.many));
+  ok("B1 · leaving after a change does not warn — there is nothing unsaved (R121)", guard === "" && !(await state(p)).open, guard.slice(0, 60));
+  ok("B2 · and the change was written on the way out", await p.evaluate(async (i) => (await window.__mockDb.from("clients").select("address").eq("id", i).single()).data.address === "1 Test Street", ids.many));
   if ((await state(p)).open) { await p.click("#modal .modal-close"); await p.waitForTimeout(500); }
   await open(p, ids.one);
   const so = await state(p);
