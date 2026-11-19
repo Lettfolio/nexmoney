@@ -71,7 +71,7 @@ h2 { color: var(--dark); font-size: 18px; font-weight: 700; letter-spacing: -0.0
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .07em;
-  color: #5b6b7e;
+  color: var(--muted);
   margin-bottom: 8px;
 }
 .panel > h3 .btn, .panel h3:not([class]) .btn { text-transform: none; letter-spacing: 0; }
@@ -82,7 +82,7 @@ h2 { color: var(--dark); font-size: 18px; font-weight: 700; letter-spacing: -0.0
 .panel h3:not([class]) {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   font-size: 12px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .07em; color: #5b6b7e; margin-bottom: 8px;
+  letter-spacing: .07em; color: var(--muted); margin-bottom: 8px;
 }
 
 /* ---------- Login ---------- */
@@ -189,7 +189,7 @@ h2 { color: var(--dark); font-size: 18px; font-weight: 700; letter-spacing: -0.0
 .sidebar-foot {
   padding: 14px 20px 0;
   border-top: 1px solid rgba(255,255,255,.08);
-  font-size: 12px; color: #a8c0dc;
+  font-size: 12px; color: #a9bfda;
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .sidebar-foot span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -383,7 +383,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .dash-tab {
   background: none; border: none; padding: 0 0 8px; margin-bottom: -9px;
   font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
-  color: #5b6b7e; cursor: pointer;
+  color: var(--muted); cursor: pointer;
   border-bottom: 2px solid transparent;
   transition: color .15s ease, border-color .15s ease;
 }
@@ -496,7 +496,7 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 .badge.red    { background: var(--red-bg); color: var(--red); }
 .badge.amber  { background: var(--amber-bg); color: var(--amber); }
 .badge.blue   { background: var(--blue-bg); color: var(--navy); }
-.badge.grey   { background: #eef1f5; color: #556275; }
+.badge.grey   { background: #eef1f5; color: var(--muted-on-tint); }
 /* A dashed edge means ESTIMATE and nothing else (see .badge.is-est below). */
 .badge.purple { background: #f3ecfc; color: #6b21a8; border: 1px solid #ddc9f2; }
 /* "Not confirmed" — same colour, dashed edge. Works on any of the five. */
@@ -642,8 +642,8 @@ main { flex: 1; min-width: 0; max-width: 1400px; margin: 0 auto; padding: 28px 3
 /* Keep the coloured edge on hover (the generic .card:hover recolours all borders). */
 .card.age-red:hover { border-left-color: #d64545; }
 /* #a97a00 measured 3.84:1 on white, under AA. */
-.card.age-amber .age-line { color: #8a6400; }
-.card.age-red .age-line { color: #b8352a; } .age-mark { margin-right: 4px; } .age-mark .ic { width: 13px; height: 13px; vertical-align: -2px; }
+.card.age-amber .age-line { color: var(--amber); }
+.card.age-red .age-line { color: var(--red); } .age-mark { margin-right: 4px; } .age-mark .ic { width: 13px; height: 13px; vertical-align: -2px; }
 /* Table "In stage" cell colouring — matches the board thresholds. */
 .age-cell { font-variant-numeric: tabular-nums; }
 .age-cell.age-amber { color: #a97a00; font-weight: 600; }
@@ -917,7 +917,7 @@ main input:focus, main select:focus, main textarea:focus,
 .imp-table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
 .imp-table th, .imp-table td { text-align: left; padding: 6px 9px; border-bottom: 1px solid #eef2f6; white-space: nowrap; }
 .imp-table th {
-  color: #5b6b7e; font-size: 11px; font-weight: 700;
+  color: var(--muted); font-size: 11px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .06em;
   border-bottom: 1px solid var(--border);
 }
@@ -1430,16 +1430,16 @@ select.combo-native { display: none !important; }
   background: rgba(255,255,255,.06);
   border: 1px solid rgba(255,255,255,.10);
   border-radius: 8px; cursor: text;
-  color: #9fb6d3; font-family: var(--font); font-size: 13px; font-weight: 500;
+  color: #a9bfda; font-family: var(--font); font-size: 13px; font-weight: 500;
   transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
-.global-search:hover { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.18); color: #cddcef; }
+.global-search:hover { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.18); color: #d5e2f2; }
 /* R73 · B1 — the global search sits ON the navy sidebar: dark ring variant. */
 .global-search .gs-ic { font-size: 13px; opacity: .85; line-height: 1; }
 .global-search .gs-txt { flex: 1; text-align: left; }
 .global-search .gs-kbd {
   font-family: var(--font); font-size: 12px; font-weight: 700;
-  background: rgba(255,255,255,.12); color: #cddcef;
+  background: rgba(255,255,255,.12); color: #d5e2f2;
   border-radius: 5px; padding: 1px 6px; line-height: 1.5;
 }
 .palette-backdrop {
@@ -2055,7 +2055,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .rate-scope-row .seg-btn { flex: 0 0 auto; }
 /* W-15b — the call pack on a Rate & ERC row: one quiet line of client figures under the lender. */
 .rate-callpack { font-variant-numeric: tabular-nums; }
-.rate-uplift { color: #b35309; font-variant-numeric: tabular-nums; }
+.rate-uplift { color: var(--amber); font-variant-numeric: tabular-nums; }
 .cs-uplift { margin: 6px 0 0; font-size: 13px; }
 /* W-14a — "assign to me instead", beside the Start-retention button it modifies. */
 .ret-tome {
@@ -2180,7 +2180,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   border: 1px solid transparent; cursor: help;
 }
 .care-chip-vuln { background: #f3ecfb; color: #6d3fa8; border-color: #e0d0f2; }
-.care-chip-supp { background: #eef1f5; color: #556275; border-color: #dbe3ec; }
+.care-chip-supp { background: #eef1f5; color: var(--muted-on-tint); border-color: #dbe3ec; }
 .care-block { grid-column: 1/-1; border: 1px solid #dbe3ec; border-radius: 10px; padding: 12px 14px; margin-top: 4px; background: var(--light); }
 .care-block h4 { margin: 0 0 4px; font-size: 13px; font-weight: 700; color: var(--dark); }
 .care-block .care-sub { margin: 0 0 10px; font-size: 13px; color: var(--muted); line-height: 1.5; }
@@ -2304,7 +2304,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .vault-owner-daniel { background: var(--blue-bg); color: var(--navy); } .vault-owner-luke   { background: var(--green-bg); color: var(--green); }
 .vault-owner-wayne  { background: #f3ecfc; color: #6b21a8; }
 /* R73 · B5 — likewise: a credential IS shared or it isn't. Solid amber. */
-.vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); } .vault-owner-other  { background: #eef1f5; color: #556275; }
+.vault-owner-shared { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); } .vault-owner-other  { background: #eef1f5; color: var(--muted-on-tint); }
 .vault-vis { font-size: 12px; font-weight: 600; padding: 2px 7px; border-radius: 999px; }
 .vault-vis-restricted { background: var(--amber-bg); color: var(--amber); }
 .vault-fields { margin-top: 10px; display: grid; gap: 4px; }
@@ -2432,19 +2432,19 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .badge.cl-badge-sold { background: #3d4453; color: #fff; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
 .badge.cl-badge-watch { white-space: nowrap; }
 .cl-card.cl-card-sold { opacity: 0.78; border-left: 3px solid #3d4453; }
-.cl-card.cl-card-sold .cl-card-money { color: #556275; }
+.cl-card.cl-card-sold .cl-card-money { color: var(--muted-on-tint); }
 .cs-sold-flag { font-size: 12px; }
 #reo-sold-fields { transition: opacity 0.15s; }
 /* R60 — property groups: current case as the card, previous cases minimised in a fold. */
 .cprop-prev { margin: 2px 0 12px; }
-.cprop-prev > summary { cursor: pointer; font-size: 12px; color: #66738a; padding: 2px 4px; user-select: none; width: fit-content; }
+.cprop-prev > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 2px 4px; user-select: none; width: fit-content; }
 .cprop-prev > summary:hover { color: #33415c; }
 .cl-prev-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .row-item.cl-mini { padding: 5px 10px; border: 1px solid #e3e7ee; border-bottom: 1px solid #e3e7ee; border-radius: 8px; background: #fafbfc; font-size: 13px; opacity: 0.85; gap: 8px; }
 .row-item.cl-mini:hover { opacity: 1; background: #f2f5f9; }
 .cl-mini-icon { font-size: 13px; filter: grayscale(0.4); }
 .row-item.cl-mini .t { font-weight: 600; color: #445066; cursor: pointer; font-size: 13px; }
-.cl-mini-loan { color: #66738a; font-weight: 400; }
+.cl-mini-loan { color: var(--muted); font-weight: 400; }
 .cl-mini-hint { color: #7a8699; font-size: 12px; white-space: nowrap; }
 .row-item.cl-mini .cl-prot-chip { font-size: 12px; opacity: 0.9; }
 /* R61 — site-wide hierarchy pass: banded sections + current-first, quieter repetition. */
@@ -2456,10 +2456,10 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 /* The unit beside the count chip ("rows · 6 items"). */
 .brief-sec-unit { margin-left: 5px; font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 12px; opacity: .8; }
 .brief-sec-why { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 12px; opacity: 0.75; }
-.brief-sec-hot  { background: #fdecea; color: #b3261e; border-left: 4px solid #d93025; }
-.brief-sec-warm { background: #fef3e0; color: #9a6200; border-left: 4px solid #f5a623; }
-.brief-sec-rest { background: #eef1f5; color: #556275; border-left: 4px solid #aab4c3; }
-.brief-fold > summary { cursor: pointer; font-size: 13px; color: #66738a; padding: 6px 10px; user-select: none; }
+.brief-sec-hot  { background: #fdecea; color: var(--red); border-left: 4px solid #d93025; }
+.brief-sec-warm { background: #fef3e0; color: var(--amber); border-left: 4px solid #f5a623; }
+.brief-sec-rest { background: #eef1f5; color: var(--muted-on-tint); border-left: 4px solid #aab4c3; }
+.brief-fold > summary { cursor: pointer; font-size: 13px; color: var(--muted); padding: 6px 10px; user-select: none; }
 .brief-fold > summary:hover { color: #33415c; }
 .brief-fold[open] > summary { color: #33415c; }
 /* A · quiet the snooze cluster until the row is engaged (the buttons stay live throughout) */
@@ -2468,9 +2468,9 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .brief-row:hover .task-snooze > summary, .brief-row:focus-within .task-snooze > summary, .brief-row .task-snooze[open] > summary { opacity: 1; }
 /* B · the client row's one current fact */
 .client-next { white-space: nowrap; }
-.client-next.cn-live { color: #1a5fb4; font-weight: 600; }
-.client-next.cn-watch { color: #1d7a3a; }
-.client-next.cn-overdue { color: #9a6200; font-weight: 600; }
+.client-next.cn-live { color: var(--navy); font-weight: 600; }
+.client-next.cn-watch { color: var(--green); }
+.client-next.cn-overdue { color: var(--amber); font-weight: 600; }
 /* C · retention: coloured group heads + year sub-heads */
 .ret-group-h { padding: 5px 10px; border-radius: 8px; }
 .ret-group-h.ret-g-ended { background: #fdecea; border-left: 4px solid #d93025; }
@@ -2481,8 +2481,8 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 /* R62 — the R61 leftovers: Emails current-first, fee-status weighting, Settings bands. */
 .row-item.qrow-cancelled { opacity: 0.55; }
 .row-item.qrow-cancelled:hover { opacity: 0.9; }
-.fee-st-paid { color: #1d7a3a; font-weight: 600; }
-.fee-st-requested { color: #9a6200; font-weight: 700; }
+.fee-st-paid { color: var(--green); font-weight: 600; }
+.fee-st-requested { color: var(--amber); font-weight: 700; }
 .fee-st-quiet { color: #aab4c3; }
 .settings-details > summary { background: #eef1f5; border-left: 4px solid #1b2a4a; border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: #33415c; cursor: pointer; user-select: none; }
 .settings-details { margin-bottom: 14px; }
@@ -3011,8 +3011,8 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
   font-weight: 700; box-shadow: inset 0 0 0 1px var(--navy);
 }
 .ret-outcome-atrisk {
-  /* Literal #b35309, not var(--orange-600, …) — the R73 trap: the DEFINED token fails contrast and the fallback would have passed. */
-  font-size: 12px; color: #b35309; font-weight: 600;
+  /* var(--amber), a DEFINED token that passes (R123). R73's trap was var(--orange-600, #b35309): the defined value failed and only the fallback passed. */
+  font-size: 12px; color: var(--amber); font-weight: 600;
   padding-left: 4px; border-left: 1px solid var(--border); margin-left: 2px;
 }
 .ret-outcome-atrisk strong { font-variant-numeric: tabular-nums; }
@@ -3734,7 +3734,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
 /* The outcome chips are ordinary strip chips now; the R72/R75 tile styling (bordered pill, amber fill) steps back to amber text on "No outcome". */
 #ret-segs > .ret-outcome-chip { border: 0; border-radius: 999px; padding-top: 7px; padding-bottom: 7px; }
 #ret-segs > .ret-outcome-chip:not(.active) { background: transparent; }
-#ret-segs > .ret-outcome-chip.hot:not(.active) { color: #b35309; }
+#ret-segs > .ret-outcome-chip.hot:not(.active) { color: var(--amber); }
 #ret-segs > .ret-outcome-chip.active { background: var(--white); color: var(--navy); }
 #ret-rates-sub { max-width: none; }
 #ret-rates-how > #ret-cold-goto { margin-right: 10px; }
