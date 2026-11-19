@@ -2816,15 +2816,29 @@ async function docAction(act, docId, caseId, c) {
   if (!docId) return;
   if (act === "delete") {
     if (!isAdminOrOwner()) return toast("Only an Owner or Administrator can delete a checklist row.");
-    // R74 · B3 — house overlay, same question, same words.
-    if (!(await confirmDestructive({
+    /* R122 · X3: something that can be put back is not asked about first — it is done, and the toast offers Undo.
+       The row is read before it goes so Undo can re-insert it whole (same id, same file pointer; no trigger removes
+       the uploaded file). Under the harness seam the R74 · B3 question is still asked. */
+    let snap = null;
+    if (ROW_ONE()) {
+      const { data } = await db.from("case_documents").select("*").eq("id", docId).single();
+      snap = data || null;
+    }
+    if (!snap && !(await confirmDestructive({
       title: "Delete this checklist row?",
       body: "Use <strong>Waive</strong> instead if you decided not to collect it — a waived item stays on the record, so nobody asks the client for it again. Deleting is for a row added by mistake.",
       okLabel: "Delete row", cancelLabel: "Keep it",
     }))) return;
     const { error } = await db.from("case_documents").delete().eq("id", docId);
     if (error) return dbFail("docAction", error);
-    toast("Checklist row deleted");
+    if (snap) toast("Checklist row deleted", { label: "Undo", onClick: async () => {
+      const { error: e2 } = await db.from("case_documents").insert(snap);
+      if (e2) return dbFail("docUndo", e2, "Could not put the row back: " + e2.message);
+      toast("Row put back");
+      const open = $("#case-form");   // repaint only if this same case is still the one on screen
+      if (open && open.dataset.caseId === String(caseId)) renderCaseDocs(caseId, c);
+    } });
+    else toast("Checklist row deleted");
     return renderCaseDocs(caseId, c);
   }
   if (act === "waive") {
@@ -15799,15 +15813,17 @@ $("#board-adviser").addEventListener("change", syncBoardScope);
   if (delBtn) delBtn.addEventListener("click", async () => {
     const name = sel.value;
     if (!name) { toast("Pick a saved view to delete"); return; }
-    // R74 · B3 — house overlay (a saved view is somebody's work, and it does not come back).
-    if (!(await confirmDestructive({
+    // R74 · B3 asked first because a saved view "does not come back". R122 · X3: now it does — Undo saves it again.
+    const was = ROW_ONE() ? (savedViews("pipeline") || []).find((v) => v && v.name === name) : null;
+    if (!was && !(await confirmDestructive({
       title: "Delete this saved view?",
       body: `<strong>${esc(name)}</strong> — the filters it holds are forgotten. The cases themselves are untouched.`,
       okLabel: "Delete view", cancelLabel: "Keep it",
     }))) return;
     deleteView("pipeline", name);
     refreshPipelineViews();
-    toast("View deleted");
+    if (was) toast(`View “${name}” deleted`, { label: "Undo", onClick: () => { saveView("pipeline", name, was.filters); refreshPipelineViews(); toast("View put back"); } });
+    else toast("View deleted");
   });
 })();
 $("#new-case-btn").addEventListener("click", () => openCase(null));
@@ -25377,15 +25393,32 @@ async function bulkAssignDataHealth(adviserId) {
   if (!ids.length || !adviserId) return;
   const mine = adviserId === authUid;
   const name = mine ? "you" : staffName(adviserId);
-  if (!(await askConfirm(`Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${mine ? "yourself" : name}?`))) return;
+  // R122 · X3: an assignment can be handed straight back, so it is done and offered as Undo rather than asked about.
+  let before = null;
+  if (ROW_ONE()) {
+    const { data, error } = await inChunks(ids, (sl) => db.from("cases").select("id,assigned_to").in("id", sl));
+    if (!error && data && data.length === ids.length) before = data;
+  }
+  if (!before && !(await askConfirm(`Assign ${ids.length} case${ids.length === 1 ? "" : "s"} to ${mine ? "yourself" : name}?`))) return;
   let ok = 0, err = 0;
+  const done = [];
   for (const id of ids) {
     const { error } = await db.from("cases").update({ assigned_to: adviserId }).eq("id", id);
-    if (error) err++; else ok++;
+    if (error) err++; else { ok++; done.push(id); }
   }
   let msg = `${ok} case${ok === 1 ? "" : "s"} assigned to ${name}`;
   if (err) msg += `, ${err} error${err === 1 ? "" : "s"}`;
-  toast(msg);
+  if (before && ok) toast(msg, { label: "Undo", onClick: async () => {
+    let back = 0, bad = 0;
+    for (const r of before.filter((x) => done.includes(x.id))) {
+      // Only where it is still as this left it: a case somebody has re-assigned since is theirs to keep.
+      const { data: u, error } = await db.from("cases").update({ assigned_to: r.assigned_to }).eq("id", r.id).eq("assigned_to", adviserId).select("id");
+      if (error) bad++; else if (u && u.length) back++;
+    }
+    toast(`${back} case${back === 1 ? "" : "s"} handed back` + (back < done.length ? ` — ${done.length - back} left as ${bad ? "they are (error)" : "since changed"}` : ""));
+    loadDataHealth();
+  } });
+  else toast(msg);
   dhSel.clear();
   loadDataHealth();
 }
@@ -27221,6 +27254,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r121";   // R89
+window.__nxTag_app = "r122";   // R89
 
 init();
