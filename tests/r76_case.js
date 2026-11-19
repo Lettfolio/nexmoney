@@ -427,7 +427,7 @@ const moveResult = (page) => page.evaluate(() => window.__r76mv);
     const CLAUSE = "This books into the past — recording something that already happened?";
     const yesterday = localYmd(new Date(Date.now() - 86400000));
     const tomorrow = localYmd(new Date(Date.now() + 86400000));
-    await page.evaluate((ymd) => window.openAppt(null, { starts_at: `${ymd}T10:00` }), yesterday);
+    await page.evaluate((ymd) => window.openAppt(null, { starts_at: `${ymd}T06:15` }), yesterday);   // 06:15: no seeded appointment is that early, so the overlap question (a native confirm in this mode) cannot fire whichever day the seed lands on
     await wait(page, 900);
     const note = await page.evaluate(() => ({ hidden: document.querySelector("#appt-past-note").classList.contains("hidden"), text: document.querySelector("#appt-past-note").textContent }));
     ok("F1a · the form shows the notice for a past date", !note.hidden && note.text === CLAUSE, JSON.stringify(note));
