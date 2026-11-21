@@ -187,6 +187,22 @@ function diaryTaskChipHtml(t, todayStr) {
   const click = t.case_id ? ` data-stop ${actAttr("openCase", t.case_id)}` : "";
   return `<div class="diary-task${overdue ? " overdue" : ""}${t.case_id ? "" : " no-case"}" title="${esc(tip)}"${click}><span class="dt-mark">☑</span><span class="dt-title">${esc(t.title || "(untitled task)")}</span></div>`;
 }
+/* R125 · B8: two or more tasks due on a day show as ONE count that opens to the chips; one task stays a chip.
+   Reverses R12b · W-18's always-open row on Daniel's yes (21 Nov): the row pushed the lanes down the page. */
+function diaryDueHtml(tasks, todayStr) {
+  const rows = tasks || [];
+  const chips = rows.map((t) => diaryTaskChipHtml(t, todayStr)).join("");
+  if (!ROW_ONE() || rows.length < 2) return chips;
+  const late = rows.filter((t) => t.due_date && t.due_date < todayStr).length;
+  const tip = rows.length + " tasks due this day" + (late ? " (" + late + " overdue)" : "") + ". Click to list them.";
+  return `<button type="button" class="diary-task diary-due${late ? " overdue" : ""}" aria-expanded="false" title="${esc(tip)}" data-stop ${actAttr("diaryDueToggle", "$this")}><span class="dt-mark">☑</span><span class="dt-title">${rows.length} tasks due</span></button><div class="diary-due-list" hidden>${chips}</div>`;
+}
+function diaryDueToggle(btn) {
+  const list = btn && btn.nextElementSibling;
+  if (!list) return;
+  list.hidden = !list.hidden;
+  btn.setAttribute("aria-expanded", String(!list.hidden));
+}
 /* R13 · M-31: THE DIARY'S HALF OF ABSENCE: the band, and the panel. The all-day band(s) for one date,
    honouring the page's person filter. Deliberately NOT an appointment: it carries no time… */
 function diaryAbsenceBandsHtml(ymd, who) {
@@ -516,7 +532,7 @@ function renderDiaryDayTasks(tasks, dayYmd, who) {
   el.innerHTML = bands
     + (rows.length
       ? `<span class="ddt-lbl" title="Tasks due on this day, from the cases. These have no time on them — they are jobs for the day, not slots in it.">Due this day</span>`
-        + rows.map((t) => diaryTaskChipHtml(t, todayStr)).join("")
+        + diaryDueHtml(rows, todayStr)
       : "");
 }
 
@@ -532,7 +548,7 @@ function diaryHourList() {
 function diaryHourLinesHtml() {
   return diaryHourList().map((h) => `<div class="diary-hour-line" style="top:${(h - DIARY_DAY_START_HOUR) * DIARY_DAY_PX_PER_HOUR}px;"></div>`).join("");
 }
-function diaryLaneBlocksHtml(appts, who, apptCtx) {
+function diaryLaneBlocksHtml(appts, who, apptCtx, week) {
   const ctx = apptCtx || { byId: {}, caseCount: {}, sharedProp: {} };
   const startHour = DIARY_DAY_START_HOUR, endHour = DIARY_DAY_END_HOUR;
   const pxPerHour = DIARY_DAY_PX_PER_HOUR;
@@ -583,7 +599,21 @@ function diaryLaneBlocksHtml(appts, who, apptCtx) {
     const hidden = [!showChip && chip ? propCtxCase(ctx, a.case_id) && propAddress(propCtxCase(ctx, a.case_id)) : null,
       !showClient && whoName ? whoName : null, !showStaff && staffLine ? staffLine : null,
       outcomeSet && !showOutcome && !compact ? APPT_OUTCOME_LABEL[a.outcome] : null].filter(Boolean);
-    const tip = clashTitle || (hidden.length ? ` title="${esc([a.title].concat(hidden).join(" · "))}"` : "");
+    /* R125 · B9: side by side in a narrow lane the time took the whole block and the title was cut to nothing.
+       There the title leads and the time follows (and is always in the tooltip). R6FIX-1's line budget is unchanged. */
+    const titleFirst = ROW_ONE() && cols > 1 && (!!week || cols > 2 || window.innerWidth <= 760);
+    const at = `<span class="at">${timeLabel(start)}–${timeLabel(end)}</span>`;
+    const tip = titleFirst ? ` title="${esc([timeLabel(start) + "–" + timeLabel(end), a.title].concat(isClash ? [clashWords] : hidden).join(" · "))}"`
+      : clashTitle || (hidden.length ? ` title="${esc([a.title].concat(hidden).join(" · "))}"` : "");
+    if (titleFirst) {
+      const cls = `appt-block title-first${compact ? " appt-block-compact" : ""}${isClash ? " clash" : ""}${outCls}`;
+      if (compact) return `<div class="${cls}" ${box}${tip}>${warn}<span class="ab-title">${esc(a.title)}</span>${at}${outcomeSet ? apptOutcomeChipHtml(a.outcome) : chip}</div>`;
+      return `<div class="${cls}" ${box}${tip}>${warn}<span class="ab-title">${esc(a.title)}</span> ${at}
+      ${showOutcome ? `<div>${apptOutcomeChipHtml(a.outcome)}</div>` : ""}
+      ${showChip ? `<div>${chip}</div>` : ""}
+      ${showClient ? clientLine : ""}
+      ${showStaff ? `<div class="u-muted">${esc(staffLine)}</div>` : ""}</div>`;
+    }
     if (compact) {
       return `<div class="appt-block appt-block-compact${isClash ? " clash" : ""}${outCls}" ${box}${tip}>${warn}<span class="at">${timeLabel(start)}–${timeLabel(end)}</span><span class="ab-title">${esc(a.title)}</span>${outcomeSet ? apptOutcomeChipHtml(a.outcome) : chip}</div>`;
     }
@@ -689,7 +719,7 @@ function renderDiaryWeek(weekStart, appts, who, apptCtx, tasksByDay) {
     return `<div class="dw-head${isToday ? " today" : ""}" data-date="${dstr}">
       <h3 class="diary-day-h">${day.toLocaleDateString("en-GB", { weekday: "short", day: "numeric" })}${isToday ? ' <span class="dw-today-tag">today</span>' : ""}</h3>
       ${diaryAbsenceBandsHtml(dstr, who)}
-      ${dayTasks.map((t) => diaryTaskChipHtml(t, todayStrYmd)).join("")}
+      ${diaryDueHtml(dayTasks, todayStrYmd)}
     </div>`;
   }).join("");
   const lanes = days.map((day) => {
@@ -698,7 +728,7 @@ function renderDiaryWeek(weekStart, appts, who, apptCtx, tasksByDay) {
     const dayAppts = (appts || []).filter((a) => new Date(a.starts_at).toDateString() === day.toDateString());
     return `<div class="dw-lane${isToday ? " today" : ""}" data-date="${dstr}" style="height:${totalHeight}px;" title="${esc("Click an empty slot to book an appointment at that time. " + DIARY_DRAG_HINT)}">`
       + diaryHourLinesHtml()
-      + diaryLaneBlocksHtml(dayAppts, who, apptCtx)
+      + diaryLaneBlocksHtml(dayAppts, who, apptCtx, true)
       + `</div>`;
   }).join("");
   host.innerHTML = `<div class="diary-week-grid">
@@ -1420,4 +1450,4 @@ window.openAppt = async function (id, presets = {}, openOpts = {}) {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_diary = "r124";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_diary = "r125";   // R89 — the CTO bumps all seven together at each gate

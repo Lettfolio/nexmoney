@@ -1085,7 +1085,7 @@ details.imp-conflict .s { color: var(--muted); font-size: 12px; }
 /* The one-line variant, for a day-view block too short to stack (a 15- or 30-minute appointment; see renderDiaryDay). */
 .appt-block-compact { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .appt-block-compact .at { flex: 0 0 auto; }
-.appt-block-compact .ab-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.appt-block-compact .ab-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; } .appt-block-compact.title-first .at { flex: 0 100 auto; min-width: 0; overflow: hidden; font-weight: 400; } .appt-block.title-first .ab-title { font-weight: 600; } .diary-due { font: inherit; font-size: 12px; text-align: left; width: 100%; border: 0; border-left: 3px solid var(--amber); min-height: 24px; } .diary-day-tasks .diary-due { width: auto; } .diary-due-list[hidden] { display: none; } .diary-day-tasks .diary-due-list { display: contents; } .diary-day-tasks .diary-due-list[hidden] { display: none; }
 .appt-block-compact .prop-chip { flex: 0 0 auto; max-width: 72%; align-items: center; }
 .appt-block-compact .prop-chip .pc-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .appt-block-compact .prop-chip .pc-dot { margin-top: 0; }
