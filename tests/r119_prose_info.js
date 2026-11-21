@@ -29,7 +29,7 @@ const words = (p) => p.evaluate(() => { const pg = document.querySelector(".page
   console.log("A · Operations");
   await go(p, "operations"); await go(seam, "operations");
   const intro = await line(p, "#emails-intro");
-  ok("A1 · Emails keeps its two arrival facts on show (R42's choice): no i there", intro.shown && !intro.i && (await line(p, "#em-morning-sub")).shown && (await line(p, "#sms-summary")).shown);
+  ok("A1 · Emails: the two status lines stay on show; the intro is inside the fold beneath them (R124)", !intro.shown && !intro.i && (await line(p, "#em-morning-sub")).shown && (await line(p, "#sms-summary")).shown && (await p.evaluate(() => document.getElementById("emails-intro").parentElement.id === "emails-explainer")));
   await go(p, "operations/import"); await go(seam, "operations/import");
   const rev = await line(p, "#rev-intro"), imp = await line(p, "#import-intro");
   ok("A2 · Import: both door explainers are behind an i, each on its own heading", rev && !rev.shown && rev.i && rev.i.exp === "false" && rev.i.inHeading && imp && !imp.shown && imp.i && rev.i.label === "About Revolution sync" && imp.i.label === "About Bring in data from anywhere", JSON.stringify([rev && rev.i, imp && imp.i]));

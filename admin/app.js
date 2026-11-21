@@ -4887,11 +4887,13 @@ function iconize(root) {
 /* R119 · X6: on Operations and Settings a sentence that only explains a panel goes behind an "i" on the panel's
    heading. Pressing it shows the sentence where it always was; hovering names it. Lines that report a state or carry a
    warning stay on show (TUCK_KEEP, data-keep, anything under ten words), as does anything with a control inside it.
-   #emails-intro stays too: R42 · F4 chose it as one of the two facts an operator needs on arriving at Emails. */
-const TUCK_KEEP = new Set(["emails-intro", "em-morning-sub", "sms-summary", "email-sending-sub", "set-doc-chase-pointer", "firm-export-sub", "second-owner-notice"]);
+   R124 (Daniel, 21 Nov): #emails-intro, which R42 · F4 kept on show, now goes inside the fold right under it. */
+const TUCK_KEEP = new Set(["em-morning-sub", "sms-summary", "email-sending-sub", "set-doc-chase-pointer", "firm-export-sub", "second-owner-notice"]);
 let tuckSeq = 0;
 function tuckProse(root) {
   if (!root || root.nodeType !== 1) return;
+  const intro = document.getElementById("emails-intro"), fold = document.getElementById("emails-explainer");
+  if (intro && fold && intro.parentElement !== fold) { const sm = fold.querySelector("summary"); fold.insertBefore(intro, sm ? sm.nextSibling : fold.firstChild); }
   const ps = root.matches("p.panel-sub") ? [root] : [...root.querySelectorAll("p.panel-sub")];
   ps.forEach((p) => {
     if (p.dataset.tucked || !p.closest("#page-operations, #page-settings")) return;
@@ -7897,7 +7899,7 @@ async function renderRateErcDrawer(isStale) {   // R83
   const rateSub = $("#rate-erc-sub");
   if (rateSub) {
     rateSub.textContent = `Rates ending within the reminder window, and cases where the ERC outlasts the rate. `
-      + (rateScope === "all" ? "" : `Showing ${rateScopeWord(rateScope)} — ${rateFeed.alertsFirmWide} alerts firm-wide.`)   // R102 · B7: the firm-wide view no longer says it is firm-wide   // R83 — counted once in rateBookSelect
+      + (rateScope === "all" ? "" : ROW_ONE() ? `${rateFeed.alertsFirmWide} alerts firm-wide.` : `Showing ${rateScopeWord(rateScope)} — ${rateFeed.alertsFirmWide} alerts firm-wide.`)   // R124: on Mine too the pressed toggle says whose; only the firm-wide count is kept   // R102 · B7: the firm-wide view no longer says it is firm-wide   // R83 — counted once in rateBookSelect
       /* R61 — the money-line basis, once for the drawer (the rows no longer repeat it). */
       + (showMoney() ? " Money lines read value at risk: the loan on the case, with the last fee as a proxy." : "");
   }
@@ -7952,7 +7954,7 @@ let retSearch = "";
   if (!slot) return;
   slot.outerHTML = listToolsHtml({
     id: "ret-tools",
-    search: { id: "ret-search", placeholder: "Search client…", ariaLabel: "Search the retention list by client name" },
+    search: { id: "ret-search", placeholder: "Filter by client…", ariaLabel: "Filter the retention list by client name" },
     scope: {
       value: "mine", options: ["mine", "all"], ids: { mine: "ret-scope-mine", all: "ret-scope-all" }, ariaLabel: "Whose retention book to show",
       titles: { mine: "The rates on cases assigned to you, and the clients with at least one case of yours.", all: "Every adviser's cases and clients — the whole firm." },
@@ -8444,7 +8446,7 @@ async function loadRetentionRates(scope) {
     const lead = outFiltered
       ? `Rates that ended in the last 12 months recorded as “${RATE_OUTCOME_LABEL[retOutcomeFilter] || retOutcomeFilter}”, on ${whose}.`
       : monthKey === "all"
-        ? `${scope === "all" ? "The" : `Showing ${whose}: the`} whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`   // R102 · B7 (Daniel): on All the pressed toggle says whose; the sentence does not repeat it
+        ? `${scope === "all" || ROW_ONE() ? "The" : `Showing ${whose}: the`} whole ${reminderMonths}-month window, every rate already ended, and the ERC-only cases.`   // R102 · B7 (Daniel): on All the pressed toggle says whose; the sentence does not repeat it
         : `${retMonthWindowCopy(monthKey, todayIdx)}${scope === "all" ? "" : ` Showing ${whose}.`}`;
     sub.innerHTML = esc(lead)
       + (tally.money && tally.counts && tally.counts.none ? ` <span class="ret-outcome-atrisk" id="ret-outcome-atrisk" title="${esc(`The loan on each of the ${tally.atRiskRows} case${tally.atRiskRows === 1 ? "" : "s"} with no outcome recorded, added up.` + (tally.atRiskUnpriced ? ` ${tally.atRiskUnpriced} of them carry no loan amount and contribute nothing to this total.` : "") + " It is the borrowing this firm no longer knows the fate of, not a fee forecast.")}"><strong>${fmtM(tally.atRisk)}</strong> at risk</span>` : "");
@@ -8575,7 +8577,7 @@ async function loadRetentionPipelinePanel(scope) {
   const rows = (data || []).filter((c) => !mine || c.assigned_to === ME.id);
   const st = retentionPipelineStats(rows);
   const stats = $("#ret-pipeline-stats");
-  if (stats) stats.textContent = retentionStatsLine(st) + (scope === "all" ? "" : ` Showing ${rateScopeWord(scope)}.`);
+  if (stats) stats.textContent = retentionStatsLine(st) + (scope === "all" || ROW_ONE() ? "" : ` Showing ${rateScopeWord(scope)}.`);   // R124: not on Mine either
   const how = $("#ret-pipeline-how");
   if (how) how.innerHTML = howFold({ id: "ret-pipeline-how-fold", title: "Where these come from", html: `<p id="ret-pipeline-basis">${esc(RETENTION_PIPELINE_HOW)} Open, won and lost are counted over ${esc(rateScopeWord(scope))}.</p>` });
   $("#ret-pipeline-list").innerHTML = st.open.length
@@ -9068,7 +9070,8 @@ async function loadProtection() {
   const protCtx = await loadPropContext((opps || []).map((c) => c.id), { clientIds: (opps || []).map((c) => c.client_id) });
   /* R82 · A6 — say whose list this is, the way the Fees tab says what its own list is narrowed to.
      A count with no scope on it is the thing that made this panel readable as the firm's book. */
-  const protTabCaption = mine   // R102 · B7: said only when the list is narrowed — on All the toggle is the statement
+  const protTabCaption = mine && !ROW_ONE()   // R124 (Daniel, 21 Nov): dropped on Mine too — the pressed toggle is the statement
+  // R102 · B7: said only when the list is narrowed — on All the toggle is the statement
     ? `<div class="panel-sub u-m-0-0-8" id="protection-scope-note">Showing <strong>your cases only</strong> — My Day's Mine/All toggle above decides this.</div>` : "";
   $("#protection-list").innerHTML = protTabCaption + ((opps || []).length ? opps.map((c) => `
     <div class="row-item">
@@ -15851,7 +15854,7 @@ let protSearch = "";
   if (!slot) return;
   slot.outerHTML = listToolsHtml({
     id: "prot-tools",
-    search: { id: "prot-search", placeholder: "Search client…", ariaLabel: "Search protection rows by client name" },
+    search: { id: "prot-search", placeholder: "Filter by client…", ariaLabel: "Filter protection rows by client name" },
     scope: {
       value: "mine", options: ["mine", "unassigned", "all"], ariaLabel: "Whose protection cases to show",
       ids: { mine: "prot-scope-mine", unassigned: "prot-scope-unassigned", all: "prot-scope-all" },
@@ -20232,7 +20235,7 @@ function syncClientBulk(list) {
   slot.outerHTML = listToolsHtml({
     id: "client-tools",
     // R66 · H4 — the box says what it looks at (name, email, phone AND the cases' postcode and lender).
-    search: { id: "client-search", placeholder: "Search name, email, phone, postcode or lender…", ariaLabel: "Search clients by name, email, phone, postcode or lender" },
+    search: { id: "client-search", placeholder: "Filter by name, email, phone, postcode or lender…", ariaLabel: "Filter clients by name, email, phone, postcode or lender" },
     scope: { id: "cl-scope", value: "all", options: ["mine", "all"], ariaLabel: "Whose clients",
       titles: { mine: "Clients with at least one case assigned to you — remembered for next time", all: "Every client on the book — remembered for next time" } },
     sort: { id: "cl-sort", value: clientSort, ariaLabel: "Sort the client list",
@@ -27254,6 +27257,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r123";   // R89
+window.__nxTag_app = "r124";   // R89
 
 init();
