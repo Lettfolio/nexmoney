@@ -321,7 +321,7 @@
                #board-tools by app.js at load; #board-search is moved into it (its listeners come with it).
                #board-adviser stays as a HIDDEN compat select: it still holds the value loadPipeline reads. -->
           <div id="board-tools"></div>
-          <input type="search" id="board-search" class="search" placeholder="Search cases…" aria-label="Search cases">
+          <input type="search" id="board-search" class="search" placeholder="Filter cases…" aria-label="Filter the cases on this page">
           <select id="board-adviser" hidden aria-label="Filter by adviser"></select>
           <!-- R31-B — SAVED FILTER VIEWS (per-browser, localStorage). -->
           <select id="board-views" aria-label="Saved views"><option value="">Saved views…</option></select>
@@ -1407,7 +1407,7 @@
         <button class="btn btn-primary" id="new-vault-btn">+ New entry</button>
       </div>
       <p class="panel-sub" id="vault-intro">Company password safe. All staff see every entry unless it is restricted; passwords stay hidden until you reveal them.</p>
-      <input type="search" id="vault-search" class="search" aria-label="Search the vault" placeholder="Search the vault — name, owner, username, anything…">
+      <input type="search" id="vault-search" class="search" aria-label="Filter the vault" placeholder="Filter the vault — name, owner, username, anything…">
       <div id="vault-segment" class="pipe-segment" role="group" aria-label="Vault category"></div>
       <div id="vault-list"></div>
     </section>
