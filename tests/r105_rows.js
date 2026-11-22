@@ -62,6 +62,7 @@ const rowsOf = (p, sel) => p.evaluate((sel) => [...document.querySelectorAll(sel
 
   console.log("B · Retention");
   await p.click('[data-page="retention"]'); await p.waitForTimeout(1800);
+  await p.click("#ret-scope-all"); await p.waitForTimeout(1500);   // R126: the owner opens on Mine everywhere; these checks read the firm-wide list
   const ret = await rowsOf(p, "#page-retention .kit-row.ret-row");
   ok("B0 · fixture · Retention has rows", ret.length > 5, String(ret.length));
   ok("B1 · every row leads with Log call", ret.every((r) => /Log call/.test(r.shown[0] || "")), JSON.stringify(ret.map((r) => r.shown[0]).slice(0, 4)));

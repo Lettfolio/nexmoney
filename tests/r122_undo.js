@@ -20,6 +20,7 @@ const q = (p, table, sel, col, val) => p.evaluate(async ([t, s, c, v]) => (await
 (async () => {
   const browser = await chromium.launch();
   const p = await boot(browser, "?as=p4&scope=default");
+  await p.evaluate(() => document.querySelector("#brief-scope-all").click()); await p.waitForTimeout(700);   // R126: the owner now opens every page on Mine; these checks read the firm-wide lists
 
   console.log("A · a checklist row");
   const doc = await p.evaluate(async () => { const { data } = await window.__mockDb.from("case_documents").select("*"); const d = data.find((x) => x.status === "requested") || data[0]; return d; });
