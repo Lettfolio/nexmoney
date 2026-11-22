@@ -12,6 +12,8 @@ async function boot(browser, qs) {
   await p.addInitScript(() => { window.__NEX_SKIP_TOUR = true; });
   await p.goto(BASE + qs);
   await p.waitForFunction(() => document.querySelector("#briefing-list .brief-row, #briefing-list .empty"), null, { timeout: 20000 });
+  // R126: the owner now opens every page on Mine; these checks read the firm-wide board, so he presses All first.
+  if (/as=p4/.test(qs) && /scope=default/.test(qs)) { await p.evaluate(() => document.querySelector("#brief-scope-all").click()); await p.waitForTimeout(600); }
   await p.evaluate(() => window.nav("pipeline"));
   await p.waitForFunction(() => document.querySelectorAll("#board .card").length > 5, null, { timeout: 20000 });
   await p.waitForTimeout(700);

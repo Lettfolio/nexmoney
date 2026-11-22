@@ -4090,6 +4090,7 @@ async function loadTeam(session) {
   // R34 · W2 — the options exist now, so this is the one place the stored/role default can be
   // applied (the select was just rebuilt from scratch; any prior selection is already gone).
   applyStoredStaffFilter("#board-adviser", BOARD_ADVISER_KEY);
+  firmScopeApply(firmScope());   // R126 · N6 — every page opens on the one stored Mine/All
   // R33 — "All advisers", matching #board-adviser above and #client-adviser. The VALUE is still
   // "all"; only the word changed. Three filters that mean the same thing said it three ways.
   $("#diary-staff").innerHTML = ['<option value="all">All advisers</option>']
@@ -6433,9 +6434,9 @@ function setRateScope(s) {
   repaintRateErcDrawer();   // R83 — the drawer only, from rows already in hand
 }
 if ($("#rate-scope-mine")) {
-  $("#rate-scope-mine").addEventListener("click", (e) => { e.stopPropagation(); setRateScope("mine"); });
+  $("#rate-scope-mine").addEventListener("click", (e) => { e.stopPropagation(); firmScopeNote("mine"); setRateScope("mine"); });
   $("#rate-scope-unassigned").addEventListener("click", (e) => { e.stopPropagation(); setRateScope("unassigned"); });
-  $("#rate-scope-all").addEventListener("click", (e) => { e.stopPropagation(); setRateScope("all"); });
+  $("#rate-scope-all").addEventListener("click", (e) => { e.stopPropagation(); firmScopeNote("all"); setRateScope("all"); });
 }
 /* The word the panel uses for whichever scope is in force, so a count and its caption cannot
    describe different sets. */
@@ -7963,8 +7964,8 @@ let retSearch = "";
   });
 })();
 if ($("#ret-scope-mine")) {
-  $("#ret-scope-mine").addEventListener("click", () => retSetScope("mine"));
-  $("#ret-scope-all").addEventListener("click", () => retSetScope("all"));
+  $("#ret-scope-mine").addEventListener("click", () => { firmScopeNote("mine"); retSetScope("mine"); });
+  $("#ret-scope-all").addEventListener("click", () => { firmScopeNote("all"); retSetScope("all"); });
 }
 if ($("#ret-search")) {
   $("#ret-search").addEventListener("input", debounce(() => { retSearch = $("#ret-search").value || ""; loadRetentionRates(retScopeResolved()); }, 250));
@@ -10089,6 +10090,38 @@ function syncOutlookVisibility() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && more.open) more.open = false; });
   syncOutlookVisibility();
 })();
+/* R126 · N6 (Daniel's yes, 21 Nov 2026): ONE Mine/All for the whole back office. A press on any page's Mine or All
+   is stored per user and every other page opens on it; a page's own extras (Unassigned, one named adviser) stay
+   that page's. Reverses the per-page defaults (R12b · W-7 "nothing is remembered", R64 · M9, R102 · T3's split). */
+const FIRM_SCOPE_KEY = "nx_scope_v1";
+function firmScope() {
+  const s = lsGet(userKey(FIRM_SCOPE_KEY));
+  if (s === "mine" || s === "all") return s;
+  return ME && (isOwner() || !isAdminOrOwner()) ? "mine" : "all";
+}
+// State and buttons only — every page reloads when it is next opened (nav), so nothing is fetched here.
+function firmScopeApply(s) {
+  if (!ROW_ONE() || !ME || !ME.id) return;
+  briefingScope = s;
+  [["#brief-scope-mine", "mine"], ["#brief-scope-all", "all"]].forEach(([q, k]) => { const b = $(q); if (b) { b.classList.toggle("scope-active", s === k); b.setAttribute("aria-pressed", String(s === k)); } });
+  protScope = s; syncProtScopeButtons();
+  rateScope = s; syncRateScopeButtons();
+  retScope = s; lsSet(RET_SCOPE_KEY, s); syncRetScopeButtons();
+  const want = s === "mine" ? ME.id : "all";
+  const bs = $("#board-adviser");
+  if (bs && (bs.value === "all" || bs.value === ME.id) && [...bs.options].some((o) => o.value === want)) { bs.value = want; persistStaffFilter("#board-adviser", BOARD_ADVISER_KEY); syncBoardScope(); }
+  if (!clientAdviser || clientAdviser === "all" || clientAdviser === ME.id) {
+    clientAdviser = want; lsSet(userKey(CLIENT_ADVISER_KEY), want);
+    const cs = $("#client-adviser"); if (cs && [...cs.options].some((o) => o.value === want)) cs.value = want;
+    syncClientScope();
+  }
+}
+// A person's own press of Mine or All, from any page.
+function firmScopeNote(s) {
+  if (!ROW_ONE() || !ME || !ME.id || (s !== "mine" && s !== "all")) return;
+  lsSet(userKey(FIRM_SCOPE_KEY), s);
+  firmScopeApply(s);
+}
 function setBriefScope(s) {
   briefingScope = s;
   $("#brief-scope-mine").classList.toggle("scope-active", s === "mine");
@@ -10103,8 +10136,8 @@ function setBriefScope(s) {
   syncWtScopeButtons();
   renderWatchtower();
 }
-$("#brief-scope-mine").addEventListener("click", () => setBriefScope("mine"));
-$("#brief-scope-all").addEventListener("click", () => setBriefScope("all"));
+$("#brief-scope-mine").addEventListener("click", () => { firmScopeNote("mine"); setBriefScope("mine"); });
+$("#brief-scope-all").addEventListener("click", () => { firmScopeNote("all"); setBriefScope("all"); });
 
 /* Watchtower R7 — the round-7 rules and the screen each one is worked on. Keyed by watch_alerts.rule, so a
    rule the database doesn't emit simply never matches and nothing appears. */
@@ -15788,6 +15821,7 @@ function syncBoardScope() {
     if (b.id === "board-scope-other") { pickBoardAdviser("all"); return; }
     if (!b.dataset.scope) return;
     pickBoardAdviser(b.dataset.scope === "mine" ? (ME && ME.id) || "all" : b.dataset.scope);
+    firmScopeNote(b.dataset.scope);   // R126 — after the pick, so the board's own select already agrees
   });
 })();
 $("#board-adviser").addEventListener("change", syncBoardScope);
@@ -16934,9 +16968,9 @@ function syncProtScopeButtons() {
     b.setAttribute("aria-pressed", String(protScope === k));
   });
 }
-$("#prot-scope-mine").addEventListener("click", () => setProtScope("mine"));
+$("#prot-scope-mine").addEventListener("click", () => { firmScopeNote("mine"); setProtScope("mine"); });
 $("#prot-scope-unassigned").addEventListener("click", () => setProtScope("unassigned"));
-$("#prot-scope-all").addEventListener("click", () => setProtScope("all"));
+$("#prot-scope-all").addEventListener("click", () => { firmScopeNote("all"); setProtScope("all"); });
 // R88 · C — the hidden compat select (the chips are the control); same filter either way.
 $("#prot-filter").addEventListener("change", () => setProtFilter($("#prot-filter").value));
 // R36-A · L6 — same 250ms debounce as #board-search, so a fast typist gets one render, not eight.
@@ -20251,6 +20285,7 @@ function syncClientBulk(list) {
     const want = b.dataset.scope === "mine" && ME && ME.id ? ME.id : "all";
     if (want === clientAdviser) return;
     pickClientAdviser(want);
+    firmScopeNote(b.dataset.scope);   // R126
   });
   const segSlot = $("#client-segment-slot");
   if (segSlot) segSlot.addEventListener("click", (e) => {
@@ -27257,6 +27292,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r125";   // R89
+window.__nxTag_app = "r126";   // R89
 
 init();

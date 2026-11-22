@@ -26,6 +26,7 @@ const state = (p) => p.evaluate(() => { const m = document.getElementById("modal
 (async () => {
   const browser = await chromium.launch();
   const p = await boot(browser, "?as=p4&scope=default");
+  await p.evaluate(() => document.querySelector("#brief-scope-all").click()); await p.waitForTimeout(700);   // R126: the owner now opens every page on Mine; these checks read the firm-wide lists
   await p.click('[data-page="pipeline"]'); await p.waitForTimeout(1800);
   const card = await p.evaluate(() => { const c = document.querySelector("#board .card"); return { id: c.dataset.id || c.dataset.case || "", name: (c.querySelector(".cn-name") || c).textContent.trim() }; });
   await p.click("#board .card"); await p.waitForTimeout(1500);
@@ -76,6 +77,7 @@ const state = (p) => p.evaluate(() => { const m = document.getElementById("modal
 
   console.log("D · phone and the seam");
   const ph = await boot(browser, "?as=p4&scope=default", { width: 390, height: 844 });
+  await ph.evaluate(() => document.querySelector("#brief-scope-all").click()); await ph.waitForTimeout(700);   // R126: the owner now opens every page on Mine; these checks read the firm-wide lists
   await ph.evaluate(() => window.openCase(document.querySelector("#briefing-list .brief-row[data-case]").dataset.case)); await ph.waitForTimeout(1500);
   const ps = await state(ph);
   ok("D1 · on a phone the record is one column with the tabs under the summary, and nothing spills sideways", ps.record && ps.left === 0 && ps.tabs.length === 4 && (await ph.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)), JSON.stringify({ left: ps.left, w: ps.w }));
