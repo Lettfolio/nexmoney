@@ -3230,7 +3230,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .dash-card { height: auto !important; }
   main { padding: 16px 12px 48px; margin: 0; width: 100%; max-width: 100%; }
   .page-head { flex-direction: column; align-items: stretch; gap: 10px; }
-  .page-head > div { flex-wrap: wrap; }
+  .page-head > div { flex-wrap: wrap; } #page-clients > .page-head { flex-direction: row; align-items: center; } #page-clients > .page-head #new-client-btn { width: auto; }   /* R129: title and New client share a line on a phone */
   .kpi-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   /* T1-19 — the #report-kpis id rule above outranks .kpi-row, so restate it inside the breakpoint. */
   #report-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -3376,7 +3376,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .ret-row-tel .contact-link { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; font-size: 0; }
   .ret-row-tel .contact-link::after { content: "Call"; font-size: 13px; font-weight: 600; }
   .ret-row-tel + .row-sms-link { margin-left: 0; }
-  #briefing-list .ret-row-tel { display: inline-flex; margin-top: 6px; }
+  #briefing-list .ret-row-tel { display: inline-flex; margin-top: 6px; } .row-contact-moved, #briefing-list .row-contact-moved { display: inline-flex; align-items: center; gap: 4px; font-size: 0; margin: 0; white-space: nowrap; } .row-contact-moved .ret-row-tel, .row-contact-moved .row-sms-link, #briefing-list .row-contact-moved .ret-row-tel { position: relative; margin: 0; padding: 0; box-sizing: border-box; width: 44px; min-width: 44px; justify-content: center; font-size: 0; gap: 0; } #briefing-list .brief-row:has(> .row-contact-moved) { column-gap: 6px; } .row-contact-moved .ret-row-tel .contact-link { position: absolute; inset: -1px; min-width: 0; } .row-contact-moved .ret-row-tel .contact-link::after { content: none; } .row-contact-moved svg { width: 16px; height: 16px; }
 
   /* --- the rest of the 44px pass -------------------------------------------------------- */
   /* Task snooze chips (+1d / +3d / +1wk) measured 42×24. */
@@ -3686,8 +3686,8 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   /* A row's checkbox stays on the name's line: the phone's `.row-item > .row-main { flex: 1 1 100% }` would push it onto a line of its own. */
   .kit-row > .bulk-cb + .row-main { flex-basis: calc(100% - 44px); }
   /* R88 · A — Today's alert / radar sub-lines wrap, and their verbs and the Checks drawer are 44px. */
-  .brief-side { flex-wrap: wrap; }
-  .brief-side-t { white-space: normal; }
+  .brief-side { flex-wrap: nowrap; }   /* R129: the text wraps beside its button; the button no longer drops to a line of its own */
+  .brief-side-t { white-space: normal; flex: 1 1 0; }
   .brief-side-acts > .btn, .checks-tools .btn, .checks-drawer > summary { min-height: 44px; }
   /* R88 · C — Protection's select-all (#prot-bulk-all) is in the kit checkbox rule above: an older id rule (24px) would win on specificity. */
 }

@@ -4936,6 +4936,21 @@ function tuckReports() {
 }
 /* R128 · D: a filter row that scrolls sideways fades out at the right edge while more is hidden there — the only
    hint used to be a cut-off word. Wrapping instead would put up to four lines of chips above every phone list. */
+/* R129 · A (Daniel's "proceed", 22 Nov 2026): on a phone a row's Call and Text sat on a line of their own above
+   the row's buttons. Where the row has a button line they join it as two icon buttons — one action line a row. */
+function phoneRows() {
+  if (window.innerWidth > 760) return;
+  document.querySelectorAll(".kit-row:not([data-pr]), #briefing-list .brief-row:not(.brief-subrow):not([data-pr])").forEach((row) => {
+    row.dataset.pr = "1";
+    const c = [...row.querySelectorAll(".row-contact, .brief-phone")].find((e) => e.closest(".row-item") === row && !e.closest(".brief-more"));
+    if (!c || !c.querySelector(".contact-link")) return;
+    const line = row.querySelector(":scope > .row-acts");
+    if (line) line.prepend(c);
+    else { const first = row.querySelector(":scope > button, :scope > details.row-more"); if (!first) return; row.insertBefore(c, first); }
+    c.classList.add("row-contact-moved");
+    const call = c.querySelector(".ret-row-tel .contact-link"); if (call && !call.getAttribute("aria-label")) call.setAttribute("aria-label", "Call " + call.textContent.trim());
+  });
+}
 let stripHintQueued = false;
 function stripHints() {
   if (stripHintQueued) return;
@@ -4952,11 +4967,11 @@ if (ROW_ONE()) {
   document.addEventListener("scroll", (e) => { if (e.target instanceof Element && e.target.matches(".seg-strip, .kpi-row, .ops-chips")) stripHints(); }, true);
   window.addEventListener("resize", stripHints);
   const start = () => {
-    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints();
+    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows();
     new MutationObserver((ms) => { ms.forEach((m) => {
       if (m.type === "characterData") iconize(m.target);
       else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) { iconize(n); tuckProse(n); } });
-    }); tuckReports(); stripHints(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }); tuckReports(); stripHints(); phoneRows(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
 }
@@ -27329,6 +27344,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r128";   // R89
+window.__nxTag_app = "r129";   // R89
 
 init();
