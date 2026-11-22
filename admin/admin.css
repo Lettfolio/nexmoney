@@ -2391,7 +2391,7 @@ details.vault-more > .vault-more-menu { position: absolute; right: 0; top: calc(
 .cl-card .row-main { min-width: 0; }
 .cl-card .cl-card-money { font-size: 18px; font-weight: 700; color: #0f2a4a; margin: 2px 0; }
 .cl-card .cl-card-rate { font-size: 13px; font-weight: 500; color: #64748b; }
-.cl-card .badge, .cl-card .chip { align-self: flex-start; }
+.cl-card .badge, .cl-card .chip { align-self: flex-start; } .tl-title .chip { width: 22px !important; height: 22px !important; font-size: 12px !important; }   /* R127: the author initials were 8.5px; the size is inline (r90 fixture), so it is overridden here */
 .row-item.cl-gap-card { background: #fff8ed; border-color: #f0d9ae; }
 .cl-gap-card .t { color: #8a5a00; }
 .cprop-group .cl-book { margin-top: 6px; }
@@ -3647,7 +3647,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   main .btn, main .ops-chip, main .seg-btn, main .stage-tab, main .dash-tab, main .tl-chip, main .set-switch,
   main select:not(.set-switch-native), main input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
   .modal .btn, .modal select, .modal input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-  .card-stage-move, .snooze-date { min-height: 44px; }
+  .card-stage-move, .snooze-date { min-height: 44px; } .col-fold, .flags-more, .info-i, .brief-more > summary, .vault-fold > summary, .em-fold > summary, #cs-btl-add-rent, #dh-stuck-link, #page-reports td > .linkish { position: relative; } .card .flags .flags-more { overflow: visible; } .col-fold::after, .flags-more::after, .info-i::after, .brief-more > summary::after, .vault-fold > summary::after, .em-fold > summary::after, #cs-btl-add-rent::after, #dh-stuck-link::after, #page-reports td > .linkish::after { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); z-index: 1; }
   /* Email · phone on a list row: the text stays 15px, the hit area is 44px. Not the 📞 / 💬 Text
      pills (.ret-row-tel, .row-sms-link), which are already 44px pills of their own above. */
   .contact-link:not(.row-sms-link):not(.ret-row-tel *) { display: inline-flex; align-items: center; padding: 14px 6px; margin: -14px -6px; }
@@ -3669,7 +3669,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .kit-row .row-acts { flex: 1 1 100%; }
   .list-tools > .search, .list-tools > .list-sort, .list-tools .seg-btn, .seg-strip > .seg-btn, .row-more > summary,
   .bulk-bar > .btn, .row-more-body > .btn, .kit-row .row-acts > .btn { min-height: 44px; }
-  .kit-row .row-chip { padding-top: 14px; padding-bottom: 14px; margin-top: -12px; margin-bottom: -12px; }
+  .kit-row .row-chips { flex-wrap: wrap; min-width: 0; } .kit-row .row-chip { position: relative; } .kit-row .row-chip::after { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); z-index: 1; }   /* R127: the 44px is a hit area, not a painted pill — the pill sat over the name */
   /* R88 · fixer (10 D6) — the kit checkbox is 44×44 (was 24 wide). A native checkbox scales its glyph to
      the smaller side, so it is drawn instead: a 22px box centred in the 44px hit area, negative margins
      keep the row and the name exactly where they were. */
