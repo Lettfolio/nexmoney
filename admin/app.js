@@ -4903,23 +4903,60 @@ function tuckProse(root) {
     const prev = p.previousElementSibling;
     const head = prev && (prev.matches("h2, h3, h4") ? prev : prev.querySelector("h2, h3, h4"));
     if (!head || head.querySelector(".info-i")) return;
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "info-i"; b.textContent = "i";
-    b.setAttribute("aria-label", `About ${head.textContent.replace(/\s+/g, " ").trim()}`); b.setAttribute("aria-expanded", "false");
-    if (!p.id) p.id = "tuck-" + ++tuckSeq;
-    b.setAttribute("aria-controls", p.id);
-    b.addEventListener("click", () => { const open = p.hidden; p.hidden = !open; b.setAttribute("aria-expanded", String(open)); });
-    b.addEventListener("mouseenter", () => { b.title = p.textContent.replace(/\s+/g, " ").trim(); });
-    head.appendChild(b); p.hidden = true; p.dataset.tucked = "1";
+    tuckUnder(p, head);
+  });
+}
+// One explanation, hidden behind an "i" on its heading; a click shows it in place, hover reads it as a tooltip.
+function tuckUnder(p, head) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "info-i"; b.textContent = "i";
+  b.setAttribute("aria-label", `About ${head.textContent.replace(/\s+/g, " ").trim()}`); b.setAttribute("aria-expanded", "false");
+  if (!p.id) p.id = "tuck-" + ++tuckSeq;
+  b.setAttribute("aria-controls", p.id);
+  b.addEventListener("click", () => { const open = p.hidden; p.hidden = !open; b.setAttribute("aria-expanded", String(open)); });
+  b.addEventListener("mouseenter", () => { b.title = p.textContent.replace(/\s+/g, " ").trim(); });
+  head.appendChild(b); p.hidden = true; p.dataset.tucked = "1";
+}
+/* R128 · B (Daniel's "proceed", 22 Nov 2026): Reports' first table sat below the fold under five lines of
+   explanation. The lines are still there, behind an "i": the hero's basis, the Proc/Broker/Sols glossary and the
+   scoreboard's scope sentence; the "Also scoped to the month…" divider is dropped. Words unchanged (r74, r87). */
+function tuckReports() {
+  const hero = document.getElementById("report-hero");
+  if (hero) {
+    const basis = hero.querySelector(".rep-hero-basis:not(.rep-hero-trend)"), lbl = hero.querySelector(".rep-hero-lbl");
+    if (basis && lbl && !basis.dataset.tucked && hero.querySelector(".rep-hero-pct")) tuckUnder(basis, lbl);
+  }
+  const leg = document.getElementById("month-legend"), mt = document.getElementById("month-report-title");
+  // The month title is rewritten (textContent) on every render, which drops its button — so it is put back each time.
+  if (leg && mt && !leg.classList.contains("hidden") && !mt.querySelector(".info-i")) tuckUnder(leg, mt);
+  const sc = document.getElementById("report-scoreboard-scope"), sh = document.querySelector("#report-scoreboard-panel > h3");
+  if (sc && sh && !sc.dataset.tucked && sc.textContent.trim()) tuckUnder(sc, sh);
+  const note = document.getElementById("report-month-note");
+  if (note && !note.hidden) note.hidden = true;
+}
+/* R128 · D: a filter row that scrolls sideways fades out at the right edge while more is hidden there — the only
+   hint used to be a cut-off word. Wrapping instead would put up to four lines of chips above every phone list. */
+let stripHintQueued = false;
+function stripHints() {
+  if (stripHintQueued) return;
+  stripHintQueued = true;
+  requestAnimationFrame(() => {
+    stripHintQueued = false;
+    document.querySelectorAll(".seg-strip, .kpi-row, .ops-chips").forEach((e) => {
+      const more = e.clientWidth > 0 && e.scrollWidth - e.clientWidth - e.scrollLeft > 8;
+      if (e.classList.contains("more-right") !== more) e.classList.toggle("more-right", more);
+    });
   });
 }
 if (ROW_ONE()) {
+  document.addEventListener("scroll", (e) => { if (e.target instanceof Element && e.target.matches(".seg-strip, .kpi-row, .ops-chips")) stripHints(); }, true);
+  window.addEventListener("resize", stripHints);
   const start = () => {
-    iconize(document.body); tuckProse(document.body);
-    new MutationObserver((ms) => ms.forEach((m) => {
+    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints();
+    new MutationObserver((ms) => { ms.forEach((m) => {
       if (m.type === "characterData") iconize(m.target);
       else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) { iconize(n); tuckProse(n); } });
-    })).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }); tuckReports(); stripHints(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
 }
@@ -27292,6 +27329,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r127";   // R89
+window.__nxTag_app = "r128";   // R89
 
 init();
