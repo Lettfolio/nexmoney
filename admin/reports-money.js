@@ -251,8 +251,9 @@ function adviserRetentionConversion(cases, adviserId) {
 }
 /* R68 · M7: the target BAR itself, lifted out of renderMonthReport unchanged so the adviser's own bar on My
    numbers is the same object as the firm's, not a lookalike. */
-function feeBarHtml(pct, target, ariaWhat) {
-  const color = pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)";
+function feeBarHtml(pct, target, ariaWhat, pace) {
+  // R127: the month hero passes its own pace colour (R112 · O4) so the bar and the words above it never disagree.
+  const color = pace || (pct >= 100 ? "var(--green)" : pct >= 60 ? "var(--amber)" : "var(--red)");
   const over = pct > 100;
   const scale = over ? Math.ceil(pct * 1.12) : 100;
   const fillPct = Math.max(0, Math.min(100, (pct / scale) * 100));
@@ -425,6 +426,7 @@ function renderMonthReport(all, mv) {
   /* R74 · A4a (panel D#12): THE HERO ROW, AT THE TOP OF THE PAGE. Every figure here is one the code above has
      already computed for the panel below (cur.doneTotal, and the earned/target pair the bar uses), read from the
      same helpers rather than re-derived, so the hero and the Monthly business panel can never disagree. … */
+  let heroPace = "";   // R127: the hero's pace colour, handed to the bar below so the two never disagree
   const heroEl = $("#report-hero");
   if (heroEl) {
     const heroTarget = money ? Number(settings.monthly_fee_target || 0) : 0;
@@ -441,6 +443,7 @@ function renderMonthReport(all, mv) {
       const gone = mv === monthNow ? Math.round((nowD.getDate() / daysIn) * 100) : mv < monthNow ? 100 : 0;
       const onPace = heroPct != null && (heroPct >= 100 || (mv === monthNow && heroPct >= gone));
       const pctColour = heroPct == null ? "" : onPace ? "var(--green)" : mv < monthNow ? "var(--red)" : mv === monthNow ? "var(--amber)" : "var(--muted)";
+      heroPace = /green|amber|red/.test(pctColour) ? pctColour : "";
       const paceWord = heroPct == null || mv !== monthNow || heroPct >= 100 ? "" : onPace ? " · on pace" : " · behind pace";
       const paceTitle = paceWord ? `${gone}% of ${monthLabel(mv)} has gone; ${heroPct}% of the target is earned.` : "";
       heroEl.innerHTML = `<span class="rep-hero-num" title="${esc(fmtM(heroEarned.total))}">${fmtM(heroEarned.total)} earned</span>`
@@ -471,7 +474,7 @@ function renderMonthReport(all, mv) {
         <div class="panel-sub target-headline u-m-12-0-4">Fees earned vs target — ${fmtM(earned.total)} of ${fmtM(target)} (${pct}%)</div>
         
         
-        ${feeBarHtml(pct, target, "monthly fee target")}
+        ${feeBarHtml(pct, target, "monthly fee target", heroPace)}
         <div class="panel-sub target-secondary u-m-6-0-0">Also — total fees collected ${fmtM(banked)} of ${fmtM(target)} (${cashPct}%) <span class="money-basis">${esc(BASIS_TARGET)}${cash.futureN ? ` — excludes future-dated payments (${cash.futureN})` : ""}</span></div>`;
     } else {
       targetEl.innerHTML = "";
@@ -5127,4 +5130,4 @@ async function r44ConfirmTicked() {
 
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
-window.__nxTag_reportsmoney = "r126";   // R89
+window.__nxTag_reportsmoney = "r127";   // R89

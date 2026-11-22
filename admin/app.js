@@ -16284,10 +16284,10 @@ function renderClawbackWindow(pre) {
       <td>${r.assigned_to ? esc(staffName(r.assigned_to)) : '<span class="cs-muted">— unassigned —</span>'}</td>
       <td class="clawback-open"><button class="btn btn-sm" ${actAttr("openCase", r.id)}>Open</button></td>
     </tr>`;
-  $("#prot-clawback-list").innerHTML = (inWindow.length ? `<table class="imp-table" id="prot-clawback-table">
+  $("#prot-clawback-list").innerHTML = (inWindow.length ? `<div class="table-scroll"><table class="imp-table" id="prot-clawback-table">
       <tr><th>Client</th><th>Policy started</th><th>Months elapsed</th><th>Months left in window</th>${money ? "<th>Commission</th>" : ""}<th>Adviser</th><th></th></tr>
       ${inWindow.map(rowHtml).join("")}
-    </table>` : emptyState({ headline: `No policy started in the last ${CLAWBACK_MONTHS} months`, sub: rows.length ? "Nothing is inside a clawback window." : "" }))
+    </table></div>` : emptyState({ headline: `No policy started in the last ${CLAWBACK_MONTHS} months`, sub: rows.length ? "Nothing is inside a clawback window." : "" }))
     + (noDate.length ? `<div class="dq-notice" id="prot-clawback-nodate-list">
       <strong>No start date — window cannot be watched:</strong>
       ${noDate.map((r) => `<button type="button" class="btn btn-sm" ${actAttr("openCase", r.id)}>${esc(nameOf(r))}</button>`).join(" ")}
@@ -27292,6 +27292,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r126";   // R89
+window.__nxTag_app = "r127";   // R89
 
 init();
