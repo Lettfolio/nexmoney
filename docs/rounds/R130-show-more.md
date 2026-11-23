@@ -9,7 +9,7 @@ Clients, Protection and Retention show their first 20 rows and a button — "Sho
 - The count goes back to 20 when the page changes.
 - A group heading with no visible rows under it is hidden with them.
 
-Fixture: Clients 4.8 screens → 2.2 at 1366×768.
+Fixture: Clients 4.8 screens → 2.3 at 1366×768 (Protection 3.7 → 2.9).
 
 Not covered: Data health (its length is many panels, not one list) and the open case's Details tab.
 
