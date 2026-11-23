@@ -4951,6 +4951,33 @@ function phoneRows() {
     const call = c.querySelector(".ret-row-tel .contact-link"); if (call && !call.getAttribute("aria-label")) call.setAttribute("aria-label", "Call " + call.textContent.trim());
   });
 }
+/* R130 · C (Daniel's "proceed", 22 Nov 2026): a long list shows its first 20 rows and a "Show 20 more" button —
+   Clients drew 50 rows (4.8 screens) at once. Drawn rows are only hidden, never removed, so search, sort and the
+   bulk bar work on the same list as before; and if any hidden row is ticked (Select all) the whole list is shown,
+   so nothing is ever selected out of sight. The count resets when the page changes. */
+const LIST_FIRST = 20, LIST_SLACK = 5;
+const LIST_CAPS = [["clients", "#page-clients .client-row"], ["protection", "#prot-list > .kit-row"], ["retention", "#ret-rates-list > .kit-row"]];
+const listShown = new Map();
+let listPageWas = "";
+function capLists() {
+  const page = (document.querySelector(".page:not(.hidden)") || {}).id || "";
+  if (page !== listPageWas) { listPageWas = page; listShown.clear(); }
+  LIST_CAPS.forEach(([key, sel]) => {
+    const first = document.querySelector(sel); if (!first) return;
+    const box = first.parentElement, rows = [...box.children].filter((e) => e.matches(".kit-row"));
+    let btn = box.querySelector(":scope > .list-more");
+    let show = listShown.get(key) || LIST_FIRST;
+    if (rows.length <= show + LIST_SLACK || rows.slice(show).some((r) => { const cb = r.querySelector(".bulk-cb"); return cb && cb.checked; })) show = rows.length;
+    const cut = show < rows.length ? rows[show] : null;
+    let past = false;
+    [...box.children].forEach((e) => { if (e === btn) return; if (e === cut) past = true; if (e.hidden !== past && (past || e.dataset.capped)) { e.hidden = past; if (past) e.dataset.capped = "1"; else delete e.dataset.capped; } });
+    if (!cut) { if (btn) btn.remove(); return; }
+    const left = rows.length - show, label = `Show ${Math.min(LIST_FIRST, left)} more (${left} not shown)`;
+    if (!btn) { btn = document.createElement("button"); btn.type = "button"; btn.className = "btn btn-sm list-more"; btn.addEventListener("click", () => { listShown.set(key, (listShown.get(key) || LIST_FIRST) + LIST_FIRST); capLists(); }); }
+    if (btn.textContent !== label) btn.textContent = label;
+    if (box.lastElementChild !== btn) box.appendChild(btn);
+  });
+}
 let stripHintQueued = false;
 function stripHints() {
   if (stripHintQueued) return;
@@ -4966,12 +4993,14 @@ function stripHints() {
 if (ROW_ONE()) {
   document.addEventListener("scroll", (e) => { if (e.target instanceof Element && e.target.matches(".seg-strip, .kpi-row, .ops-chips")) stripHints(); }, true);
   window.addEventListener("resize", stripHints);
+  // Select all ticks row boxes in place (no redraw), so the cap is re-read after any tick.
+  document.addEventListener("change", (e) => { if (e.target instanceof Element && e.target.matches("input[type=checkbox]")) setTimeout(capLists, 0); });
   const start = () => {
-    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows();
+    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows(); capLists();
     new MutationObserver((ms) => { ms.forEach((m) => {
       if (m.type === "characterData") iconize(m.target);
       else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) { iconize(n); tuckProse(n); } });
-    }); tuckReports(); stripHints(); phoneRows(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }); tuckReports(); stripHints(); phoneRows(); capLists(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
 }
@@ -27344,6 +27373,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r129";   // R89
+window.__nxTag_app = "r130";   // R89
 
 init();
