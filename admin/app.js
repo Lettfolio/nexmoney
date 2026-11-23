@@ -4946,7 +4946,13 @@ function phoneRows() {
     if (!c || !c.querySelector(".contact-link")) return;
     const line = row.querySelector(":scope > .row-acts");
     if (line) line.prepend(c);
-    else { const first = row.querySelector(":scope > button, :scope > details.row-more"); if (!first) return; row.insertBefore(c, first); }
+    else {
+      const first = row.querySelector(":scope > button, :scope > details.row-more"), main = row.querySelector(":scope > .row-main");
+      if (first) row.insertBefore(c, first);
+      // R131: a row with no button line (Clients) carries the two icons in a column down its right edge instead.
+      else if (main && row.matches(".kit-row")) { main.after(c); c.classList.add("row-contact-side"); row.classList.add("has-contact-side"); }
+      else return;
+    }
     c.classList.add("row-contact-moved");
     const call = c.querySelector(".ret-row-tel .contact-link"); if (call && !call.getAttribute("aria-label")) call.setAttribute("aria-label", "Call " + call.textContent.trim());
   });
@@ -27373,6 +27379,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r130";   // R89
+window.__nxTag_app = "r131";   // R89
 
 init();

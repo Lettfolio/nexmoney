@@ -3376,7 +3376,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   .ret-row-tel .contact-link { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; font-size: 0; }
   .ret-row-tel .contact-link::after { content: "Call"; font-size: 13px; font-weight: 600; }
   .ret-row-tel + .row-sms-link { margin-left: 0; }
-  #briefing-list .ret-row-tel { display: inline-flex; margin-top: 6px; } .row-contact-moved, #briefing-list .row-contact-moved { display: inline-flex; align-items: center; gap: 4px; font-size: 0; margin: 0; white-space: nowrap; } .row-contact-moved .ret-row-tel, .row-contact-moved .row-sms-link, #briefing-list .row-contact-moved .ret-row-tel { position: relative; margin: 0; padding: 0; box-sizing: border-box; width: 44px; min-width: 44px; justify-content: center; font-size: 0; gap: 0; } #briefing-list .brief-row:has(> .row-contact-moved) { column-gap: 6px; } .row-contact-moved .ret-row-tel .contact-link { position: absolute; inset: -1px; min-width: 0; } .row-contact-moved .ret-row-tel .contact-link::after { content: none; } .row-contact-moved svg { width: 16px; height: 16px; }
+  #briefing-list .ret-row-tel { display: inline-flex; margin-top: 6px; } .row-contact-moved, #briefing-list .row-contact-moved { display: inline-flex; align-items: center; gap: 4px; font-size: 0; margin: 0; white-space: nowrap; } .row-contact-moved .ret-row-tel, .row-contact-moved .row-sms-link, #briefing-list .row-contact-moved .ret-row-tel { position: relative; margin: 0; padding: 0; box-sizing: border-box; width: 44px; min-width: 44px; justify-content: center; font-size: 0; gap: 0; } #briefing-list .brief-row:has(> .row-contact-moved) { column-gap: 6px; } .row-contact-moved .ret-row-tel .contact-link { position: absolute; inset: -1px; min-width: 0; } .row-contact-moved .ret-row-tel .contact-link::after { content: none; } .row-contact-moved svg { width: 16px; height: 16px; } .kit-row.has-contact-side { flex-wrap: nowrap; align-items: center; } .kit-row.has-contact-side > .row-main { flex: 1 1 0; min-width: 0; } .row-contact-side.row-contact-moved { flex: 0 0 auto; flex-direction: column; gap: 6px; }
 
   /* --- the rest of the 44px pass -------------------------------------------------------- */
   /* Task snooze chips (+1d / +3d / +1wk) measured 42×24. */
@@ -3663,7 +3663,7 @@ details.hdr-more > .hdr-more-menu > .hidden { display: none; }
   /* R88 list kit — phone layout, and every control the kit renders is 44px wherever the list is mounted. */
   .seg-strip { display: flex; width: 100%; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; border-radius: 12px; }
   .seg-strip > .seg-btn { flex: 0 0 auto; } .more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }
-  .list-tools .search { flex: 1 1 100%; max-width: 100%; }
+  .list-tools .search { flex: 1 1 100%; max-width: 100%; } #page-clients .list-tools { flex-wrap: nowrap; gap: 6px; } #page-clients .list-tools .search { flex: 1 1 0; min-width: 96px; } #page-clients .list-tools > .list-sort { flex: 0 1 104px; min-width: 0; width: 104px; text-overflow: ellipsis; }   /* R131: search, Mine/All and sort on one line */
   .kit-row .row-fact { display: block; white-space: normal; }
   .kit-row .row-fact > .row-fact-t { overflow: visible; }
   .kit-row .row-acts { flex: 1 1 100%; }
