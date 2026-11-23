@@ -4946,10 +4946,34 @@ function phoneRows() {
     if (!c || !c.querySelector(".contact-link")) return;
     const line = row.querySelector(":scope > .row-acts");
     if (line) line.prepend(c);
-    else { const first = row.querySelector(":scope > button, :scope > details.row-more"); if (!first) return; row.insertBefore(c, first); }
+    else {
+      const first = row.querySelector(":scope > button, :scope > details.row-more"), main = row.querySelector(":scope > .row-main");
+      if (first) row.insertBefore(c, first);
+      // R131: a row with no button line (Clients) carries the two icons in a column down its right edge instead.
+      else if (main && row.matches(".kit-row")) { main.after(c); c.classList.add("row-contact-side"); row.classList.add("has-contact-side"); }
+      else return;
+    }
     c.classList.add("row-contact-moved");
     const call = c.querySelector(".ret-row-tel .contact-link"); if (call && !call.getAttribute("aria-label")) call.setAttribute("aria-label", "Call " + call.textContent.trim());
   });
+}
+/* R131 (Daniel's "proceed", 23 Nov 2026): on a phone the open case's header filled two-thirds of the first screen
+   before the tabs. Next task, next appointment and last note fold behind one button; they stay open when the next
+   task is overdue, and once opened they stay open for the session. He did not name the lines — this is the
+   smallest cut, and he was told he can overrule it. */
+function phoneCase() {
+  if (window.innerWidth > 760) return;
+  const lines = document.querySelector("#modal.record .cs-lines:not([data-fold])"); if (!lines) return;
+  lines.dataset.fold = "1";
+  if (lines.querySelector(".cs-danger-txt")) return;   // an overdue task is never folded away, and gets no button
+  let open = false;
+  try { open = sessionStorage.getItem("nx_cs_lines") === "1"; } catch (_) { /* private mode: closed */ }
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "cs-fold"; b.textContent = "Next task · appointment · last note";
+  if (!lines.id) lines.id = "cs-lines";
+  b.setAttribute("aria-controls", lines.id); b.setAttribute("aria-expanded", String(open));
+  b.addEventListener("click", () => { const now = lines.hidden; lines.hidden = !now; b.setAttribute("aria-expanded", String(now)); try { sessionStorage.setItem("nx_cs_lines", now ? "1" : "0"); } catch (_) { /* not kept */ } });
+  lines.before(b); lines.hidden = !open;
 }
 /* R130 · C (Daniel's "proceed", 22 Nov 2026): a long list shows its first 20 rows and a "Show 20 more" button —
    Clients drew 50 rows (4.8 screens) at once. Drawn rows are only hidden, never removed, so search, sort and the
@@ -4996,11 +5020,11 @@ if (ROW_ONE()) {
   // Select all ticks row boxes in place (no redraw), so the cap is re-read after any tick.
   document.addEventListener("change", (e) => { if (e.target instanceof Element && e.target.matches("input[type=checkbox]")) setTimeout(capLists, 0); });
   const start = () => {
-    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows(); capLists();
+    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows(); phoneCase(); capLists();
     new MutationObserver((ms) => { ms.forEach((m) => {
       if (m.type === "characterData") iconize(m.target);
       else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) { iconize(n); tuckProse(n); } });
-    }); tuckReports(); stripHints(); phoneRows(); capLists(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }); tuckReports(); stripHints(); phoneRows(); phoneCase(); capLists(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
 }
@@ -27373,6 +27397,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r130";   // R89
+window.__nxTag_app = "r131";   // R89
 
 init();

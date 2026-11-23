@@ -1,0 +1,48 @@
+/* R131 — the rest of the phone work: Clients' search, Mine/All and sort on one line; Clients rows carry Call and Text
+   down their right edge; an open case's next task / appointment / last note fold behind one button. Real mode, ≤760px. */
+const { chromium } = require("playwright");
+let pass = 0, fail = 0;
+const ok = (n, c, d) => { if (c) { pass++; console.log("  ✓ " + n); } else { fail++; console.log("  ✗ " + n + (d ? " — " + d : "")); } };
+const open = async (b, q, vp, touch) => { const ctx = await b.newContext({ viewport: vp, hasTouch: !!touch, isMobile: !!touch }); const p = await ctx.newPage(); p.errs = []; p.on("pageerror", (e) => p.errs.push(String(e)));
+  await p.addInitScript(() => { window.__NEX_SKIP_TOUR = true; }); await p.goto("http://localhost:8099/admin/mock.html?as=p4" + q);
+  await p.waitForFunction(() => document.querySelector("#briefing-list .brief-row, #briefing-list .empty")); await p.waitForTimeout(700);
+  await p.evaluate(() => document.querySelector("#brief-scope-all").click()); await p.waitForTimeout(800); return p; };
+const go = async (p, pg) => { await p.evaluate((x) => window.nav(x), pg); await p.waitForTimeout(1800); };
+const openCase = async (p, overdue) => { await p.evaluate(() => window.closeModal && window.closeModal()); await go(p, "pipeline");
+  const n = await p.evaluate(() => document.querySelectorAll("#board .card").length);
+  for (let i = 0; i < n; i++) { await p.evaluate((j) => document.querySelectorAll("#board .card")[j].click(), i); await p.waitForTimeout(1600);
+    const st = await p.evaluate(() => { const l = document.querySelector("#modal.record .cs-lines"); return l ? !!l.querySelector(".cs-danger-txt") : null; });
+    if (st === overdue) return true; await p.evaluate(() => window.closeModal && window.closeModal()); await p.waitForTimeout(400); }
+  return false; };
+const cs = (p) => p.evaluate(() => { const m = document.querySelector("#modal"), l = m.querySelector(".cs-lines"), b = m.querySelector(".cs-fold"), tabs = m.querySelector("[role=tablist], .rec-tabs"); return { btn: !!b, exp: b && b.getAttribute("aria-expanded"), ctl: b && b.getAttribute("aria-controls") === l.id, h: b && Math.round(b.getBoundingClientRect().height), lines: l.checkVisibility(), tabs: Math.round(tabs.getBoundingClientRect().top) }; });
+(async () => { const b = await chromium.launch();
+  let p = await open(b, "&scope=default", { width: 390, height: 844 }, true);
+  console.log("§A — Clients on a phone");
+  await go(p, "clients");
+  const t = await p.evaluate(() => { const k = [...document.querySelectorAll("#client-tools > *")].filter((e) => e.checkVisibility()).map((e) => e.getBoundingClientRect()); const mid = k.map((r) => r.top + r.height / 2); return { n: k.length, spread: Math.round(Math.max(...mid) - Math.min(...mid)), right: Math.round(Math.max(...k.map((r) => r.right))), minH: Math.round(Math.min(...k.map((r) => r.height))), searchW: Math.round(document.querySelector("#client-search").getBoundingClientRect().width) }; });
+  ok("A1 · search, Mine/All and sort share one line, inside the screen, each ≥ 44px tall", t.n === 3 && t.spread <= 6 && t.right <= 390 && t.minH >= 44, JSON.stringify(t));
+  ok("A2 · the search box is still wide enough to type in (≥ 96px)", t.searchW >= 96, String(t.searchW));
+  await p.fill("#client-search", "brodie"); await p.waitForTimeout(900);
+  ok("A3 · searching still works", await p.evaluate(() => { const r = [...document.querySelectorAll("#page-clients .client-row")]; return r.length >= 1 && r.length < 10 && /Brodie/.test(r[0].textContent); }));
+  await p.fill("#client-search", ""); await p.waitForTimeout(900);
+  const r = await p.evaluate(() => [...document.querySelectorAll("#page-clients .client-row")].filter((e) => e.checkVisibility() && e.querySelector(".contact-link")).slice(0, 8).map((row) => { const c = row.querySelector(":scope > .row-contact-side"), main = row.querySelector(":scope > .row-main"); if (!c) return { side: false }; const cr = c.getBoundingClientRect(), mr = main.getBoundingClientRect(), a = c.querySelector(".ret-row-tel .contact-link").getBoundingClientRect(), s = c.querySelector(".row-sms-link"); const sr = s ? s.getBoundingClientRect() : a;
+    return { side: true, beside: cr.left >= mr.right - 1 && cr.top < mr.bottom && cr.bottom > mr.top, in: cr.right <= innerWidth, big: a.width >= 44 && a.height >= 44 && sr.width >= 44 && sr.height >= 44, stacked: !s || sr.top >= a.bottom - 1, tel: /^tel:\+?\d/.test(c.querySelector(".ret-row-tel .contact-link").getAttribute("href") || ""), h: Math.round(row.getBoundingClientRect().height), mainW: Math.round(mr.width) }; }));
+  ok("A4 · Call and Text sit in a column down the row's right edge, 44px each, still dial", r.length > 0 && r.every((x) => x.side && x.beside && x.in && x.big && x.stacked && x.tel), JSON.stringify(r[0]));
+  ok("A5 · no Clients row is taller than 160px (was up to 193) and the text keeps ≥ 200px", Math.max(...r.map((x) => x.h)) <= 160 && Math.min(...r.map((x) => x.mainW)) >= 200, JSON.stringify(r.map((x) => x.h + "/" + x.mainW)));
+  ok("A6 · the page does not travel sideways", await p.evaluate(() => { document.scrollingElement.scrollLeft = 300; const v = document.scrollingElement.scrollLeft; document.scrollingElement.scrollLeft = 0; return v === 0; }));
+  console.log("§B — the open case on a phone");
+  ok("B0 · a case with no overdue task is in the fixture", await openCase(p, false));
+  let c = await cs(p); ok("B1 · next task / appointment / last note are folded behind one 44px button", c.btn && c.exp === "false" && c.ctl && c.h >= 44 && !c.lines, JSON.stringify(c));
+  ok("B2 · the tabs start in the top two-thirds of the screen (≤ 560px)", c.tabs <= 560, String(c.tabs));
+  await p.click("#modal .cs-fold"); await p.waitForTimeout(200); c = await cs(p); ok("B3 · a tap shows the three lines and says so", c.lines && c.exp === "true", JSON.stringify(c));
+  ok("B4 · another such case opens with them still showing", (await openCase(p, false)) && (await cs(p)).lines);
+  await p.click("#modal .cs-fold"); await p.waitForTimeout(200);
+  ok("B5 · a case with an overdue task shows the lines, with no fold button", (await openCase(p, true)) && (await p.evaluate(() => { const m = document.querySelector("#modal"); return m.querySelector(".cs-lines").checkVisibility() && !m.querySelector(".cs-fold"); })));
+  ok("B6 · no page errors", p.errs.length === 0, p.errs.join(" | ")); await p.context().close();
+  console.log("§C — untouched elsewhere");
+  p = await open(b, "&scope=default", { width: 1366, height: 800 }); await go(p, "clients");
+  const d1 = await p.evaluate(() => document.querySelectorAll(".row-contact-side, .has-contact-side").length); await openCase(p, false);
+  ok("C1 · desktop: no side column, no fold", d1 === 0 && await p.evaluate(() => !document.querySelector(".cs-fold") && document.querySelector("#modal .cs-lines").checkVisibility())); await p.context().close();
+  p = await open(b, "", { width: 390, height: 844 }, true); await go(p, "clients");
+  ok("C2 · seam on a phone: no side column", await p.evaluate(() => document.querySelectorAll(".row-contact-side, .cs-fold").length === 0));
+  await b.close(); console.log(`\nr131_phone_rest: ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); })();
