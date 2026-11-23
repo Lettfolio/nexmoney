@@ -1499,7 +1499,7 @@ select.combo-native { display: none !important; }
   padding: 8px 12px; margin-bottom: 12px;
   background: var(--blue-bg); border: 1px solid #cfe0f4; border-radius: 8px;
 }
-.bulk-bar[hidden] { display: none; }
+.bulk-bar[hidden] { display: none; } .kit-row[hidden], [data-capped][hidden] { display: none !important; } .list-more { display: block; margin: 12px auto 4px; min-height: 40px; }
 .bulk-bar-count { font-size: 13px; color: var(--dark); }
 .bulk-bar-count strong { font-variant-numeric: tabular-nums; }
 .bulk-bar-select {
