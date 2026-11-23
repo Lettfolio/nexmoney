@@ -4957,24 +4957,6 @@ function phoneRows() {
     const call = c.querySelector(".ret-row-tel .contact-link"); if (call && !call.getAttribute("aria-label")) call.setAttribute("aria-label", "Call " + call.textContent.trim());
   });
 }
-/* R131 (Daniel's "proceed", 23 Nov 2026): on a phone the open case's header filled two-thirds of the first screen
-   before the tabs. Next task, next appointment and last note fold behind one button; they stay open when the next
-   task is overdue, and once opened they stay open for the session. He did not name the lines — this is the
-   smallest cut, and he was told he can overrule it. */
-function phoneCase() {
-  if (window.innerWidth > 760) return;
-  const lines = document.querySelector("#modal.record .cs-lines:not([data-fold])"); if (!lines) return;
-  lines.dataset.fold = "1";
-  if (lines.querySelector(".cs-danger-txt")) return;   // an overdue task is never folded away, and gets no button
-  let open = false;
-  try { open = sessionStorage.getItem("nx_cs_lines") === "1"; } catch (_) { /* private mode: closed */ }
-  const b = document.createElement("button");
-  b.type = "button"; b.className = "cs-fold"; b.textContent = "Next task · appointment · last note";
-  if (!lines.id) lines.id = "cs-lines";
-  b.setAttribute("aria-controls", lines.id); b.setAttribute("aria-expanded", String(open));
-  b.addEventListener("click", () => { const now = lines.hidden; lines.hidden = !now; b.setAttribute("aria-expanded", String(now)); try { sessionStorage.setItem("nx_cs_lines", now ? "1" : "0"); } catch (_) { /* not kept */ } });
-  lines.before(b); lines.hidden = !open;
-}
 /* R130 · C (Daniel's "proceed", 22 Nov 2026): a long list shows its first 20 rows and a "Show 20 more" button —
    Clients drew 50 rows (4.8 screens) at once. Drawn rows are only hidden, never removed, so search, sort and the
    bulk bar work on the same list as before; and if any hidden row is ticked (Select all) the whole list is shown,
@@ -5020,11 +5002,11 @@ if (ROW_ONE()) {
   // Select all ticks row boxes in place (no redraw), so the cap is re-read after any tick.
   document.addEventListener("change", (e) => { if (e.target instanceof Element && e.target.matches("input[type=checkbox]")) setTimeout(capLists, 0); });
   const start = () => {
-    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows(); phoneCase(); capLists();
+    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows(); capLists();
     new MutationObserver((ms) => { ms.forEach((m) => {
       if (m.type === "characterData") iconize(m.target);
       else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) { iconize(n); tuckProse(n); } });
-    }); tuckReports(); stripHints(); phoneRows(); phoneCase(); capLists(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }); tuckReports(); stripHints(); phoneRows(); capLists(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
 }
