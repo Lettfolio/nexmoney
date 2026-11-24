@@ -4957,6 +4957,25 @@ function phoneRows() {
     const call = c.querySelector(".ret-row-tel .contact-link"); if (call && !call.getAttribute("aria-label")) call.setAttribute("aria-label", "Call " + call.textContent.trim());
   });
 }
+/* R132 (Daniel chose "Both", 24 Nov 2026): on a phone the open case's summary card hides the adviser / loan / LTV
+   strip and the EMPTY objective prompt, so the tabs start higher. One round button in the card's corner shows them
+   again and adds no line of its own (R131's fold button was as tall as what it hid). The objective can only be
+   edited from this card, so the same button brings its prompt back. A written objective is never hidden. */
+function phoneCase() {
+  if (window.innerWidth > 760) return;
+  const card = document.querySelector("#modal.record .case-summary:not([data-fold])"); if (!card) return;
+  card.dataset.fold = "1";
+  const obj = card.querySelector("#cs-objective"), stats = card.querySelector("#cs-stats-key");
+  const hide = [stats, obj && obj.querySelector(".cs-obj-text.cs-muted") ? obj : null].filter(Boolean);
+  if (!hide.length) return;
+  let open = false;
+  try { open = sessionStorage.getItem("nx_cs_more") === "1"; } catch (_) { /* private mode: closed */ }
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "cs-more"; b.textContent = "⋯";
+  const set = (on) => { hide.forEach((e) => { e.dataset.more = "1"; e.hidden = !on; }); b.setAttribute("aria-expanded", String(on)); b.setAttribute("aria-label", (on ? "Hide" : "Show") + " adviser, loan, LTV and objective"); b.title = b.getAttribute("aria-label"); };
+  b.addEventListener("click", (e) => { e.stopPropagation(); const on = b.getAttribute("aria-expanded") !== "true"; set(on); try { sessionStorage.setItem("nx_cs_more", on ? "1" : "0"); } catch (_) { /* not kept */ } });
+  card.classList.add("has-more"); card.appendChild(b); set(open);
+}
 /* R130 · C (Daniel's "proceed", 22 Nov 2026): a long list shows its first 20 rows and a "Show 20 more" button —
    Clients drew 50 rows (4.8 screens) at once. Drawn rows are only hidden, never removed, so search, sort and the
    bulk bar work on the same list as before; and if any hidden row is ticked (Select all) the whole list is shown,
@@ -5002,11 +5021,11 @@ if (ROW_ONE()) {
   // Select all ticks row boxes in place (no redraw), so the cap is re-read after any tick.
   document.addEventListener("change", (e) => { if (e.target instanceof Element && e.target.matches("input[type=checkbox]")) setTimeout(capLists, 0); });
   const start = () => {
-    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows(); capLists();
+    iconize(document.body); tuckProse(document.body); tuckReports(); stripHints(); phoneRows(); phoneCase(); capLists();
     new MutationObserver((ms) => { ms.forEach((m) => {
       if (m.type === "characterData") iconize(m.target);
       else m.addedNodes.forEach((n) => { if (!(n.nodeType === 1 && n.matches("svg.ic"))) { iconize(n); tuckProse(n); } });
-    }); tuckReports(); stripHints(); phoneRows(); capLists(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }); tuckReports(); stripHints(); phoneRows(); phoneCase(); capLists(); }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
 }
@@ -27379,6 +27398,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r131";   // R89
+window.__nxTag_app = "r132";   // R89
 
 init();
