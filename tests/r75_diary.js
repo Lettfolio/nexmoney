@@ -354,10 +354,14 @@ const apptRow = (page, id) => page.evaluate(async (i) => {
     const laneBox = await page.evaluate((d) => {
       const lane = document.querySelector(`#diary-week-view .dw-lane[data-date="${d}"]`);
       const r = lane.getBoundingClientRect();
-      return { x: r.left + r.width / 2, top: r.top };
+      /* R132: the seed's appointments move with the calendar, and on 24 Nov 2026 one sat on 13:00 of this lane, so
+         the click opened it instead of a new booking (red on main too). Click the first whole hour, 13:00 first,
+         that has no block under it. The axis starts at 08:00, 60px an hour. */
+      const x = r.left + r.width / 2;
+      const hour = [13, 12, 14, 11, 15, 10, 16].find((h) => { const el = document.elementFromPoint(x, r.top + (h - 8) * 60 + 4); return !!el && !el.closest(".appt-block"); });
+      return { x, top: r.top, hour };
     }, cellDate);
-    // 13:00 is five hours below the 08:00 axis start, at 60px an hour.
-    await page.mouse.click(laneBox.x, laneBox.top + 300);
+    await page.mouse.click(laneBox.x, laneBox.top + (laneBox.hour - 8) * 60 + 4);
     await page.waitForTimeout(900);
     const b3 = await page.evaluate(() => ({
       h3: (document.querySelector("#modal h3") || {}).textContent || "",
@@ -367,7 +371,7 @@ const apptRow = (page, id) => page.evaluate(async (i) => {
     }));
     eq("B3 · clicking a week lane opens New appointment", b3.h3, "New appointment");
     eq("B3b · …prefilled with that lane's date", b3.date, cellDate);
-    ok("B3c · …and the half hour that was clicked (~13:00)", /^1[23]:(00|30)$/.test(b3.time), b3.time);
+    ok("B3c · …and the hour that was clicked", b3.time === String(laneBox.hour).padStart(2, "0") + ":00", b3.time + " vs " + laneBox.hour + ":00");
     /* R72 · B1 (H4) — the whose-diary rule. Nothing in the new prefill paths passes a staff_id, so
        openAppt's own default decides: the diary filter when it names a person, else the booker.
        Kim is filtered to "All advisers" here, so it is Kim. */
