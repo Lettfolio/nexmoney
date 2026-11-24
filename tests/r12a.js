@@ -891,7 +891,11 @@ async function mkClientCase(page, opts) {
       // month keeps the cell one the diary reliably renders without spilling past its 3-tile cap.
       const dstr = await page.evaluate(() => {
         const d = new Date();
-        let dom = Math.min(27, d.getDate() + 10);
+        /* R133: `Math.min(27, today + 10)` landed ON today (27th) or on the day beside it (26th, 28th) late in
+           the month — and the seed moves a displaced appointment onto today ± 1 and keeps its own set on today.
+           Ten days the other way in the second half of the month keeps the day odd, in this month and ≥ 9 days
+           from today. Found by running the suite as if on each of ten future days. */
+        let dom = d.getDate() <= 15 ? d.getDate() + 10 : d.getDate() - 10;
         if (dom % 2 === 0) dom += 1;
         d.setDate(dom);
         return localDateStr(d);
