@@ -1297,7 +1297,7 @@ details.snooze-menu > .snooze-menu-items {
 .playbook-done { align-self: center; }
 
 /* ---------- Case modal: summary header + collapsible details (BUILD 2a) ---------- */
-.case-summary { background: var(--light); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+.case-summary { background: var(--light); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; } .case-summary.has-more { position: relative; } .case-summary.has-more > :first-child { padding-right: 44px; } .cs-more { position: absolute; top: 8px; right: 8px; width: 36px; height: 36px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--white); color: var(--dark); font: inherit; font-size: 16px; line-height: 1; } .cs-more::after { content: ""; position: absolute; inset: -4px; } .case-summary [data-more][hidden] { display: none !important; }
 .cs-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .cs-name { font-size: 18px; font-weight: 700; color: var(--dark); letter-spacing: -0.01em; }
 /* The case identity line: property · type · lender · stage, directly under the client name. */
