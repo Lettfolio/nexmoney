@@ -781,7 +781,10 @@ async function readRows(page, table, filters) {
       // on an even day. An odd day is never seeded, and staying in the current month keeps
       // the cell one the diary reliably renders. Clamp to <=27 so it never rolls over.
       const day = new Date();
-      let _dom = Math.min(27, day.getDate() + 9);
+      /* R133: clamping to 27 put this ON today (27th) or beside it (26th, 28th) late in the month, where the seed
+         keeps today's own appointments and parks a displaced one. Nine days the other way in the second half of
+         the month stays odd, in this month and ≥ 8 days from today. */
+      let _dom = day.getDate() <= 15 ? day.getDate() + 9 : day.getDate() - 9;
       if (_dom % 2 === 0) _dom += 1;
       day.setDate(_dom); day.setHours(9, 0, 0, 0);
       const dayYmd = day.toISOString().slice(0, 10);
