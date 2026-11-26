@@ -125,14 +125,17 @@ async function ensureServer() {
     JS_CLASS_HASH === `'sha256-${crypto.createHash("sha256").update(JS_CLASS).digest("base64")}'`);
   ok("A8c · STRICT: neither script-src carries 'unsafe-inline' or 'unsafe-hashes'",
     !/unsafe-inline|unsafe-hashes/.test((SITE["script-src"] || []).concat(ADMIN["script-src"] || []).join(" ")), JSON.stringify([SITE["script-src"], ADMIN["script-src"]]));
-  // R97 · C-2: the jsDelivr entry is the one supabase-js FILE, not the whole @supabase/ prefix.
-  const SUPA_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js";
-  ok("A8d · admin script-src is exactly 'self' + the exact supabase-js file + the SheetJS path",
-    JSON.stringify(ADMIN["script-src"]) === JSON.stringify(["'self'", SUPA_JS, "https://cdn.sheetjs.com/xlsx-0.20.2/"]), JSON.stringify(ADMIN["script-src"]));
+  // R136: supabase-js is served from this site (admin/vendor), so script-src no longer names jsDelivr at all.
+  // The file is the same bytes the R97 · C-2 SRI hash pinned, and the tag still carries that hash.
+  const SUPA_JS = "/admin/vendor/supabase-js-2.110.7.js", SUPA_SRI = "sha384-hazsLVND17GNLVdtV19te6qbFT2YuLgl8SamcF+QR5eIOC+W4dGKrUNMxU1jH1zD";
+  ok("A8d · admin script-src is exactly 'self' + the SheetJS path",
+    JSON.stringify(ADMIN["script-src"]) === JSON.stringify(["'self'", "https://cdn.sheetjs.com/xlsx-0.20.2/"]), JSON.stringify(ADMIN["script-src"]));
+  ok("A8d2 · the served supabase-js file is byte-for-byte the pinned 2.110.7 build",
+    "sha384-" + crypto.createHash("sha384").update(fs.readFileSync(path.join(REPO, "admin/vendor/supabase-js-2.110.7.js"))).digest("base64") === SUPA_SRI);
   for (const f of ["admin/index.html", "admin/introducer.html"]) {
-    const tags = [...read(f).matchAll(/<script\b[^>]*\bsrc="https:\/\/cdn\.jsdelivr\.net\/[^"]+"[^>]*>/g)].map((m) => m[0]);
-    ok(`A8e · ${f}: its one jsDelivr tag is that exact URL and carries SRI`,
-      tags.length === 1 && tags[0].includes(`src="${SUPA_JS}"`) && /\bintegrity="sha384-[^"]+"/.test(tags[0]) && /crossorigin="anonymous"/.test(tags[0]), JSON.stringify(tags));
+    const tags = [...read(f).matchAll(/<script\b[^>]*\bsrc="[^"]*supabase[^"]*"[^>]*>/g)].map((m) => m[0]);
+    ok(`A8e · ${f}: its one supabase-js tag is the self-hosted file and carries SRI; no script from another host`,
+      tags.length === 1 && tags[0].includes(`src="${SUPA_JS}"`) && tags[0].includes(`integrity="${SUPA_SRI}"`) && !/<script\b[^>]*\bsrc="https?:/.test(read(f)), JSON.stringify(tags));
   }
   // R97 · HF1: the CDN SheetJS load is pinned by Subresource Integrity (production), and the CSP still names its path.
   {
@@ -156,8 +159,8 @@ async function ensureServer() {
   const adminJs = ["boot", "core", "reports-money", "diary", "import", "vault", "site", "app", "introducer"].map((f) => `admin/${f}.js`);   // R95: + boot.js and introducer.js (its inline script moved out)
   const adminScripts = adminHtml.flatMap((f) => extScripts(read(f)))
     .concat(adminJs.flatMap((f) => [...read(f).matchAll(/\.src\s*=\s*"(https:\/\/[^"]+)"/g)].map((m) => m[1])));
-  ok("A10 · admin: every external script (supabase-js tag, SheetJS lazy loader) is in script-src",
-    adminScripts.length >= 3 && adminScripts.every((u) => allowed(ADMIN, "script-src", u)), JSON.stringify(adminScripts.filter((u) => !allowed(ADMIN, "script-src", u)).concat([`n=${adminScripts.length}`])));
+  ok("A10 · admin: the one external script left (the SheetJS lazy loader; supabase-js is self-hosted since R136) is in script-src",
+    adminScripts.length === 1 && adminScripts.every((u) => allowed(ADMIN, "script-src", u)), JSON.stringify(adminScripts.filter((u) => !allowed(ADMIN, "script-src", u)).concat([`n=${adminScripts.length}`])));
   const adminStyles = adminHtml.flatMap((f) => extStyles(read(f)));
   ok("A11 · admin: every external stylesheet is in style-src", adminStyles.every((u) => allowed(ADMIN, "style-src", u)), JSON.stringify(adminStyles));
   const favs = adminJs.flatMap((f) => [...read(f).matchAll(/src="(https:\/\/[^"$]+)/g)].map((m) => m[1]));
@@ -171,16 +174,18 @@ async function ensureServer() {
   const siteScripts = siteFiles.flatMap((f) => extScripts(read(f)));
   ok("A15 · site: no page loads a third-party script", siteScripts.length === 0, JSON.stringify(siteScripts));
   const siteStyles = siteFiles.flatMap((f) => extStyles(read(f)));
-  ok("A16 · site: every external stylesheet (Google Fonts) is in style-src", siteStyles.length > 0 && siteStyles.every((u) => allowed(SITE, "style-src", u)), JSON.stringify(siteStyles.filter((u) => !allowed(SITE, "style-src", u))));
+  ok("A16 · site: no page loads a stylesheet from another host (R136: Google Fonts went)", siteStyles.length === 0, JSON.stringify(siteStyles));
   const sitePageJs = fs.existsSync(path.join(REPO, "js")) ? fs.readdirSync(path.join(REPO, "js")).filter((f) => f.endsWith(".js")).map((f) => `js/${f}`) : [];
   const siteFns = siteFiles.concat(sitePageJs).flatMap((f) => [...read(f).matchAll(/https:\/\/[a-z0-9]+\.supabase\.co\/functions\/v1[^"' ]*/g)].map((m) => m[0]));
   ok("A17 · site: every edge-function URL (new-lead, fact-find, docs/feedback FN_BASE) is in connect-src",
     siteFns.length >= 4 && siteFns.every((u) => allowed(SITE, "connect-src", u)), JSON.stringify(siteFns));
   ok("A18 · site: guide cover / Markdown images (any https:// URL an author types) are in img-src",
-    allowed(SITE, "img-src", "https://images.example.com/cover.jpg") && allowed(SITE, "font-src", "https://fonts.gstatic.com/s/inter/v1/x.woff2"));
-  ok("A18b · admin: Google Fonts woff2 + the preconnect hosts in admin/index.html are in font-src / style-src (sandbox never fetches fonts, so this is static)",
-    allowed(ADMIN, "font-src", "https://fonts.gstatic.com/s/inter/v1/x.woff2") && allowed(ADMIN, "style-src", "https://fonts.googleapis.com/css2?family=Inter")
-    && (read("admin/index.html").match(/rel="preconnect" href="(https:[^"]+)"/g) || []).every((m) => { const u = m.match(/href="([^"]+)"/)[1]; return allowed(ADMIN, "font-src", u + "/x") || allowed(ADMIN, "style-src", u + "/x"); }));
+    allowed(SITE, "img-src", "https://images.example.com/cover.jpg"));
+  // R136: fonts are served from this site. Both policies allow fonts and styles from 'self' only, and no page names Google Fonts.
+  ok("A18b · site + admin: font-src is 'self' alone, style-src names no other host, and no served page links Google Fonts",
+    [SITE, ADMIN].every((P) => JSON.stringify(P["font-src"]) === JSON.stringify(["'self'"]) && !(P["style-src"] || []).some((x) => /^https?:/.test(x)))
+    && siteFiles.concat(["admin/index.html", "admin/introducer.html", "style.css", "admin/admin.css"]).every((f) => !/fonts\.googleapis\.com|fonts\.gstatic\.com/.test(read(f)))
+    && ["inter-latin", "inter-latin-ext", "sora-latin", "sora-latin-ext"].every((n) => fs.existsSync(path.join(REPO, "assets/fonts/" + n + ".woff2"))));
 
   const evalish = /\beval\s*\(|new\s+Function\s*\(|set(Timeout|Interval)\s*\(\s*["'`]/;
   const evalHits = adminJs.concat(["admin/sw.js", "enhance.js"]).filter((f) => evalish.test(read(f).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
