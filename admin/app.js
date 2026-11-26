@@ -3693,12 +3693,13 @@ async function enterApp(session) {
     aal = r && r.data ? r.data : null;
   } catch (e) { aal = null; }   // an auth outage: the server still gates; fall through to session_ok()
   if (hasFactor && (!aal || aal.currentLevel !== "aal2")) return showMfaChallenge(session);
-  await resolveMyRole(session);
+  /* R134: the two gate calls do not depend on each other, so they go out together (live, 26 Nov: 550 ms then
+     158 ms in series). The decision below reads them in the same order as before. */
+  const [, ok] = await Promise.all([resolveMyRole(session), sessionOkLive()]);
   if (!STAFF_ROLES.includes(MY_ROLE)) return showApp(session);   // not staff at all → showApp's own gate signs them out with the honest toast
   /* R86 · V4: THE SERVER DECIDES. session_ok() (db/r86/01) is the one expression every RLS helper and RPC
      guard evaluates; asking it is asking whether this session will read anything. true → in… */
-  const ok = await sessionOkLive();
-  if (ok === true || ok === null) return showApp(session);
+  if (ok === true || ok === null) return showApp(session, true);
   if (hasFactor) return showMfaChallenge(session);
   return showMfaEnrol(session, { required: true });
 }
@@ -3974,10 +3975,11 @@ async function resolveMyRole(session) {
   } catch (e) { /* leave MY_ROLE at "none" */ }
   return MY_ROLE;
 }
-async function showApp(session) {
+async function showApp(session, roleFresh) {
   // Gate FIRST: only back-office staff may use the admin SPA (mirrors introducer.html). Done before revealing
   // the shell or reading settings/team so a non-staff account never sees the admin UI or triggers those…
-  await resolveMyRole(session);
+  /* R134: enterApp has just asked my_role() for this session and passes roleFresh; every other caller asks here. */
+  if (roleFresh !== true) await resolveMyRole(session);
   if (!STAFF_ROLES.includes(MY_ROLE)) {
     await db.auth.signOut();
     showLogin();
@@ -4001,8 +4003,15 @@ async function showApp(session) {
   updateSidenavScrollHint();
   // BUILD 6d — restore this user's pipeline segment/view prefs now that their id is known.
   restoreUserPrefs(session.user.id);
-  await loadSettings();
-  await loadTeam(session);
+  /* R134 — START-UP READS GO OUT TOGETHER. Live on 26 Nov these ran one after another (settings, profiles ×2,
+     rota, sign-in record: 630 ms) and the book only began after them. None needs another's answer, so all are
+     requested now and consumed below in the old order; the book is warmed for the first page (bookLoad shares
+     its in-flight read and never throws). Still after the role gate above. */
+  const settingsRead = loadSettings();
+  const teamReads = loadTeamReads();
+  if (ROW_ONE()) bookLoad();
+  await settingsRead;
+  await loadTeam(session, teamReads);
   await routeFromHash(); // BUILD 7a — honour deep links (#reports, #case/<id>, …); no hash → dashboard
 }
 /* =========================================================================
@@ -4045,14 +4054,28 @@ function persistStaffFilter(sel, key) {
   if (!el) return;
   lsSet(userKey(key), el.value || "all");   // R82 · A4
 }
-async function loadTeam(session) {
+/* R134: the four reads loadTeam consumes, requested at once. A query builder only sends when it is awaited, so
+   each is started here; a transport failure on the main read is held as a value and thrown where loadTeam awaits
+   it, as it always was. */
+function loadTeamReads() {
+  return {
+    team: Promise.resolve(db.from("profiles").select("id,full_name,email,role").order("full_name")).then((r) => ({ r }), (e) => ({ e })),
+    contact: loadProfileContactFields(),
+    absences: loadAbsences().catch(() => []),
+    activity: loadStaffActivity(),
+  };
+}
+async function loadTeam(session, reads) {
+  reads = reads || loadTeamReads();
   // T1-1: 'admin' is a first-class back-office role, so it must appear in TEAM or ME resolves to null and
   // every "Mine" scope silently matches nothing.
-  const { data: team } = await db.from("profiles").select("id,full_name,email,role").order("full_name");
+  const got = await reads.team;
+  if (got.e) throw got.e;
+  const { data: team } = got.r;
   PROFILES = team || [];
   // B4 UI (R5-8) — phone/email_signoff are fetched in their OWN small query so a failure there costs only the
   // sign-off UI, never this fetch that every adviser dropdown on the page depends on.
-  const contact = await loadProfileContactFields();
+  const contact = await reads.contact;
   PROFILES.forEach((p) => { const c = contact.map[p.id]; if (c) { p.phone = c.phone; p.email_signoff = c.email_signoff; } });
   TEAM = PROFILES.filter((p) => STAFF_ROLES.includes(p.role));
   ME = TEAM.find((p) => p.id === session.user.id) || null;
@@ -4104,10 +4127,10 @@ async function loadTeam(session) {
   if (diaryDefault != null) diaryStaffVal = diaryDefault;
   /* R13 · M-31: the rota, once, right after the team it is about. Awaited rather than fired and forgotten:
      the very first paint of My Day carries lead-routing selects… */
-  await loadAbsences();
+  await reads.absences;
   /* R82 · A3: and the sign-in record, in the same place and for the same reason the rota is read here: the
      first paint of My Day carries lead-routing selects… */
-  await loadStaffActivity();
+  await reads.activity;
 }
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -11288,8 +11311,10 @@ async function loadUnactioned() {
     /* R63 · H1c: the title and created_at come along now: "has an open task" is no longer the whole test. A
        case whose ONLY open task is a step from an EARLIER stage has no next action for the stage it is… */
     readAll(db.from("case_tasks").select("title,case_id,done_at,created_at").is("done_at", null).order("id")),
-    db.from("case_notes").select("case_id,created_at").gte("created_at", activitySinceIso),
-    softRows(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso)),
+    /* R134: paged. Unpaged, this stopped at PostgREST's 1,000 rows without saying so (41 rows on 26 Nov, so not
+       yet live) and every case past the cut would have read as untouched. Events likewise. */
+    readAll(db.from("case_notes").select("case_id,created_at").gte("created_at", activitySinceIso).order("id")),
+    readAll(db.from("case_events").select("case_id,created_at").gte("created_at", activitySinceIso).order("id")).then((r) => (r && r.data) || [], () => []),
   ]);
   if (seq !== unactionedLoadSeq) return;   // R83 — a newer radar load owns the panel
   if (casesRes.error) return radarFail(casesRes.error.message);
@@ -11942,13 +11967,57 @@ function missingColumnName(err) {
 const bookDropCol = (sel, col) => sel.split(",").filter((c) => c !== col).join(",");
 /* One table's read — full (no filter) or incremental (`updated_at >= since`) — with the single
    42703 retry. Returns readAll's shape plus `capHit`. */
+/* R134 — A FULL BOOK READ ASKS FOR ITS PAGES TOGETHER. readAll walks 1,000 rows at a time and learns the table
+   has ended from a short page, so 2,019 cases were three requests in a row (live, 26 Nov: 561 + 307 + 135 ms).
+   The row count of the last full read is kept in this browser (a number, nothing else); the next full read asks
+   for that many pages at once, plus the one that proves the end. Pages come back in id order, so they are joined
+   in order; a page that is short ends the table and anything after it is dropped; if the last one is full the
+   table grew, and the walk carries on one page at a time exactly as readAll does. A row inserted or removed
+   between two pages can shift a row across the join in either scheme, so rows are kept once per id. With no
+   stored count (first visit, another browser, the mock) this is one readAll, as before. */
+const BOOK_ROWS_KEY = "nx_book_rows_";
+async function bookReadPages(table, mk) {
+  const cap = OWNER_ROW_CAP;
+  const known = Math.max(0, Number(lsGet(BOOK_ROWS_KEY + table)) || 0);
+  const ahead = Math.min(Math.ceil(cap / READ_PAGE), Math.floor(known / READ_PAGE) + 1);
+  if (ahead < 2) {
+    const walked = await readAll(mk(), { cap });
+    if (!walked.error) lsSet(BOOK_ROWS_KEY + table, String((walked.data || []).length));
+    return walked;
+  }
+  const page = (from) => {
+    const want = Math.min(READ_PAGE, cap - from);
+    return Promise.resolve(mk().range(from, from + want - 1))
+      .then((r) => ({ want, res: r }), (e) => ({ want, res: { error: { message: String((e && e.message) || e), code: "READALL" } } }));
+  };
+  const rows = [], seen = new Set();
+  const take = (got) => got.forEach((r) => { const k = r && r.id; if (k == null || !seen.has(k)) { if (k != null) seen.add(k); rows.push(r); } });
+  const first = await Promise.all(Array.from({ length: ahead }, (_, i) => page(i * READ_PAGE)));
+  let ended = false, from = 0;
+  for (const p of first) {
+    if (!p.res || p.res.error) return { data: rows, error: (p.res && p.res.error) || { message: "read failed" }, count: null };
+    const got = Array.isArray(p.res.data) ? p.res.data : [];
+    take(got); from += p.want;
+    if (got.length < p.want) { ended = true; break; }
+  }
+  while (!ended && from < cap) {
+    const p = await page(from);
+    if (!p.res || p.res.error) return { data: rows, error: (p.res && p.res.error) || { message: "read failed" }, count: null };
+    const got = Array.isArray(p.res.data) ? p.res.data : [];
+    take(got); from += p.want;
+    if (got.length < p.want) ended = true;
+  }
+  lsSet(BOOK_ROWS_KEY + table, String(rows.length));
+  return { data: rows, error: null, count: null };
+}
 async function bookReadTable(table, since) {
-  const build = () => {
+  const query = () => {
     const sel = table === "cases" ? bookCaseSelect : bookClientSelect;
     let q = db.from(table).select(sel);
     if (since) q = q.gte("updated_at", since);
-    return readAll(q.order("id"), { cap: OWNER_ROW_CAP });
+    return q.order("id");
   };
+  const build = () => (since ? readAll(query(), { cap: OWNER_ROW_CAP }) : bookReadPages(table, query));
   let res = await build();
   if (res.error && isMissingColumnError(res.error)) {
     const col = missingColumnName(res.error);
@@ -27398,6 +27467,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r132";   // R89
+window.__nxTag_app = "r134";   // R89
 
 init();
