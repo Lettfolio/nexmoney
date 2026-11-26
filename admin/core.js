@@ -106,7 +106,14 @@ try {
    RULE (HARNESS.md "R78 · A"): every NEW db-failure toast goes through dbFail.
    Returns undefined, like toast, so `return dbFail(...)` keeps call-site shape.
    ========================================================================== */
+/* R138 — "HAS THIS BROWSER WRITTEN ANYTHING SINCE?" One counter, bumped at the doors every write passes: the
+   db.from(...).insert/update/upsert/delete and db.rpc wraps in app.js, and fnFetch below for the edge functions.
+   Today reads it to decide whether a return visit inside a minute may keep what is already on screen. */
+let dbWriteSeq = 0;
+const READ_ONLY_RPC = /^(get_|has_|find_|my_role$|session_ok$)/;
+function fnFetch(url, opts) { dbWriteSeq++; return fetch(url, opts); }
 function dbFail(where, error, msg) {
+  try { todayFresh = null; } catch (_) { /* app.js not evaluated yet */ }   // R138: a failed read is not a page worth keeping
   const m = error && typeof error === "object" ? error.message : error;
   try { logClientError("caught", m == null ? "(no message)" : String(m), { where: where || "", stack: error && error.stack, quiet: true }); } catch (_) { /* logging must never block the toast */ }
   return toast(msg != null ? msg : "Error: " + m);
@@ -371,4 +378,4 @@ async function readAll(q, opts) {
 /* R81 · A3 — deploy handshake stamp. Every round that edits ANY of index.html / core.js /
    reports-money.js / app.js bumps the tag IN ALL FOUR PLACES (see nxCheckBuildTags in app.js). */
 // @ts-ignore -- R94 · B4: window.__nxTag_* is the build-tag handshake; Window has no typing for it.
-window.__nxTag_core = "r136";   // R89
+window.__nxTag_core = "r138";   // R89

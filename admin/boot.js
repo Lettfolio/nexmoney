@@ -4,7 +4,7 @@
    It declares no globals other scripts read at definition time; NX_BUILD_TAG is read by app.js's boot.
    R81 · A3 — NX_BUILD_TAG is the deploy handshake: each admin script stamps its own window.__nxTag_*, and app.js
    compares all eight (this one + the seven __nxTag_*). EVERY round that edits ANY back-office script bumps all eight. */
-window.NX_BUILD_TAG = "r136";
+window.NX_BUILD_TAG = "r138";
 
 /* R116: iOS zooms the page when a field with text under 16px takes focus, and leaves it zoomed and sliding
    sideways. maximum-scale=1 stops that zoom on iOS only; pinch-zoom still works there, and other phones keep

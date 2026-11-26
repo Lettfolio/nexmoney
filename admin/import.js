@@ -218,7 +218,7 @@ $("#analyse-btn").addEventListener("click", async () => {
   $("#import-status").textContent = "AI is sorting the data — up to a minute for big files…";
   try {
     const { data: { session } } = await db.auth.getSession();
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/ai-import`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/ai-import`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
@@ -2329,4 +2329,4 @@ window.__rev = {
 
 /* R90 · F: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_import = "r136";   // R89 — the CTO bumps all seven together at each gate
+window.__nxTag_import = "r138";   // R89 — the CTO bumps all seven together at each gate

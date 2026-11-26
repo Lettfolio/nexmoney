@@ -14,6 +14,11 @@ try {
     const _dbFrom = db.from.bind(db);
     db.from = function (table) {
       const b = _dbFrom(table);
+      /* R138: every write on every table bumps the write counter (core.js) — Today's one-minute rule reads it. */
+      ["insert", "upsert", "update", "delete"].forEach((mth) => {
+        const orig = b[mth];
+        if (typeof orig === "function") b[mth] = function (...args) { dbWriteSeq++; return orig.apply(this, args); };
+      });
       // R83 — clients too: the board embeds clients(first_name,last_name,email) for the card name
       // and the dupe hint, so a client edit left both stale for the rest of the session.
       if (table === "cases" || table === "case_events" || table === "clients") {
@@ -40,6 +45,7 @@ try {
     const _dbRpc = db.rpc.bind(db);
     db.rpc = function (name, ...rest) {
       try { if (BOOK_WRITER_RPCS.includes(name)) bustBookCache(); } catch (_) { /* not evaluated yet */ }
+      if (!READ_ONLY_RPC.test(String(name))) dbWriteSeq++;   // R138: anything not known to be read-only counts as a write
       return _dbRpc(name, ...rest);
     };
   }
@@ -3976,6 +3982,7 @@ async function resolveMyRole(session) {
   return MY_ROLE;
 }
 async function showApp(session, roleFresh) {
+  todayFresh = null;   // R138: a sign-in always loads Today
   // Gate FIRST: only back-office staff may use the admin SPA (mirrors introducer.html). Done before revealing
   // the shell or reading settings/team so a non-staff account never sees the admin UI or triggers those…
   /* R134: enterApp has just asked my_role() for this session and passes roleFresh; every other caller asks here. */
@@ -5157,6 +5164,12 @@ function nav(page, push = true, tab) {
   if (tabbed) { activatePageTab(page, pageTabActive[page], { silent: true, refresh: true }); return; }
   // B9 (R5-31) — the diary page can be showing either the month grid or the Day view; route to whichever
   // loader matches the persisted toggle so navigating back into #diary doesn't silently flip it back to…
+  if (page === "dashboard" && todayIsFresh()) {   // R138 — see todayIsFresh
+    /* Nothing is redrawn, so the page-shown helpers that normally ride the redraw's mutations run once by hand:
+       the strip fades are measured on a visible page, and the list caps reset when the visible page changes. */
+    requestAnimationFrame(() => { tuckReports(); stripHints(); phoneRows(); phoneCase(); capLists(); });
+    return;
+  }
   ({ dashboard: loadDashboard, pipeline: loadPipeline, protection: loadProtectionPage, diary: () => loadDiaryForMode(), clients: () => loadClients($("#client-search").value, { force: true }), retention: loadRetentionPage, vault: loadVault }[page])();   // R89 · F — import/reports/money/data/emails load through PAGE_TAB_LOADERS; R89 · C — settings too (PAGE_TAB_LOADERS.settings)
 }
 
@@ -6176,7 +6189,7 @@ async function sendDigestNow() {
   if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
   try {
     const { data: { session } } = await db.auth.getSession();
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/owner-digest`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/owner-digest`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ force: true }),
@@ -7860,8 +7873,23 @@ async function renderRetentionRows(open, cap) {
     </div>`).join("");
 }
 
+/* R138 — A RETURN TO TODAY INSIDE A MINUTE KEEPS WHAT IS ON SCREEN (Daniel, 26 Nov 2026: yes to the 60-second
+   refresh, knowing R55 had decided against caching Today). Going back to Today cost 14 reads every time, even
+   seconds after the last. Now nav("dashboard") skips the reload when ALL of these hold: Today was loaded less
+   than 60 s ago; this browser has written nothing since (dbWriteSeq — every insert/update/delete, every RPC not
+   known to be read-only, every edge-function call); no read has failed since; and the list is on the page. So
+   your own change always shows at once — R55's worry — and a colleague's shows within a minute, the rule the
+   book already keeps (BOOK_STALE_MS). Anything that calls loadDashboard() itself still reloads. Real mode only. */
+const TODAY_FRESH_MS = 60000;
+let todayFresh = null;   // { at, seq } of the last load, or null
+function todayStamp() { todayFresh = { at: Date.now(), seq: dbWriteSeq }; }
+function todayIsFresh() {
+  return ROW_ONE() && !!todayFresh && Date.now() - todayFresh.at < TODAY_FRESH_MS && todayFresh.seq === dbWriteSeq
+    && !!document.querySelector("#briefing-list > :not(.skel)");
+}
 async function loadDashboard() {
   const seq = ++dashLoadSeq;   // R78 · A5 — stale-response guard: checked after every await below
+  todayStamp();
   /* R34 · W3 — restore every drawer the user has an opinion about BEFORE anything that could call
      autoDrawer (the loaders below, and the error branch's loaders too). */
   applyStoredDrawers();
@@ -7946,6 +7974,7 @@ async function loadDashboard() {
   (async () => {
     if (wtAutoRunDue()) {
       try { await db.rpc("run_watchtower"); wtStampRun(); } catch (e) { /* degraded: show the last known alerts */ }
+      if (seq === dashLoadSeq && todayFresh) todayFresh.seq = dbWriteSeq;   // R138: this load's own sweep is not "a write since"
       loadWatchtower();                // R85 · A5 — the sweep just moved the book; count afresh
     } else {
       loadWatchtower(dashCountsP);     // R85 · A5 — no sweep ⇒ the shared RPC's total is current
@@ -10181,7 +10210,7 @@ async function syncOutlook(silent) {
   if (!silent && btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
   try {
     const { data: { session } } = await db.auth.getSession();
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/outlook-sync`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/outlook-sync`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: "{}",
@@ -19424,7 +19453,7 @@ async function handleOfferUpload(caseId) {
   const { data: { session } } = await db.auth.getSession();
   let offer;
   try {
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/parse-offer`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/parse-offer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ pdf_base64: b64 }),
@@ -23172,7 +23201,7 @@ window.retryAllFailedSms = () => queueVerbs("sms").retryAll();
 async function runSms(silent) {
   const { data: { session } } = await db.auth.getSession();
   try {
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-sms`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/send-sms`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: "{}",
@@ -23215,7 +23244,7 @@ async function runAutomation(silent, opts) {
   if (queueIds && !queueIds.length) return { sent: 0, failed: 0, scoped: true, skipped: true };
   const { data: { session } } = await db.auth.getSession();
   try {
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/process-emails`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/process-emails`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify(queueIds ? { queue_ids: queueIds } : {}),
@@ -26394,7 +26423,7 @@ async function applyRole(id, next, sel, note) {
 async function inviteUser(payload) {
   const { data: { session } } = await db.auth.getSession();
   try {
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/invite-user`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/invite-user`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -26503,7 +26532,7 @@ async function sendChat() {
   $("#chat-send").disabled = true;
   try {
     const { data: { session } } = await db.auth.getSession();
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/assistant`, {
+    const r = await fnFetch(`${SUPABASE_URL}/functions/v1/assistant`, {
       method: "POST",
       headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ messages: chatHistory }),
@@ -27467,6 +27496,6 @@ const PALETTE_VERBS = [
 
 /* R81 · A3: deploy handshake stamp. Every round that edits ANY of index.html / core.js / reports-money.js /
    diary.js / import.js / vault.js / app.js bumps the tag IN ALL SEVEN PLACES. */
-window.__nxTag_app = "r136";   // R89
+window.__nxTag_app = "r138";   // R89
 
 init();

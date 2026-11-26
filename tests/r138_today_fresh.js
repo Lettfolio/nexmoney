@@ -1,0 +1,56 @@
+/* R138 — going back to Today inside a minute keeps what is on screen, unless this browser has written something,
+   a read has failed, or the minute is up. Real mode only. */
+const { chromium } = require("playwright");
+let pass = 0, fail = 0;
+const ok = (n, c, d) => { if (c) { pass++; console.log("  ✓ " + n); } else { fail++; console.log("  ✗ " + n + (d ? " — " + d : "")); } };
+const init = () => { window.__NEX_SKIP_TOUR = true; window.__reads = 0; let real;
+  const wrap = (c) => { const from = c.from.bind(c), rpc = c.rpc.bind(c); c.from = (t) => { window.__reads++; return from(t); }; c.rpc = (n, a) => { window.__reads++; return rpc(n, a); }; return c; };
+  Object.defineProperty(window, "supabase", { configurable: true, get() { return real; }, set(v) { if (v && v.createClient && !v.__w) { const cc = v.createClient.bind(v); v.createClient = function () { return wrap(cc.apply(null, arguments)); }; v.__w = 1; } real = v; } }); };
+const boot = async (b, q, clock) => { const ctx = await b.newContext({ viewport: { width: 1366, height: 768 } }); const p = await ctx.newPage(); p.errs = []; p.on("pageerror", (e) => p.errs.push(String(e)));
+  if (clock) await p.clock.install();
+  await p.addInitScript(init); await p.goto("http://localhost:8099/admin/mock.html?as=p4" + q);
+  await p.waitForFunction(() => document.querySelector("#briefing-list .brief-row, #briefing-list .empty"), null, { timeout: 30000 }); await settle(p, clock); return p; };
+const settle = async (p, clock) => { if (clock) { for (let i = 0; i < 6; i++) { await p.clock.runFor(250); await p.evaluate(() => new Promise((r) => r())); } } else await p.waitForTimeout(1500); };
+/* leave for Clients, come back, count the calls the return itself made */
+const roundTrip = async (p, clock, between) => { await p.evaluate(() => window.nav("clients")); await settle(p, clock); if (between) await between(); await p.evaluate(() => { window.__reads = 0; window.nav("dashboard"); }); await settle(p, clock);
+  return p.evaluate(() => ({ reads: window.__reads, rows: document.querySelectorAll("#briefing-list .brief-row").length, shown: !document.querySelector("#page-dashboard").classList.contains("hidden"), active: (document.querySelector("#topnav button.active") || {}).dataset.page, title: document.title, hash: location.hash })); };
+(async () => { const b = await chromium.launch();
+  console.log("§A — real mode, owner");
+  let p = await boot(b, "&scope=default", true);
+  const rows0 = await p.evaluate(() => document.querySelectorAll("#briefing-list .brief-row").length);
+  let r = await roundTrip(p, true);
+  ok("A1 · back to Today inside a minute: no reads at all", r.reads === 0, JSON.stringify(r));
+  ok("A2 · the page is Today, with the same rows, the nav and the title in step", r.shown && r.rows === rows0 && rows0 > 0 && r.active === "dashboard" && /^Today/.test(r.title) && r.hash === "#today", JSON.stringify(r));
+  r = await roundTrip(p, true, () => p.evaluate(() => window.db.rpc("get_dashboard_counts")));
+  ok("A3 · a read-only RPC in between does not count as a write", r.reads === 0, JSON.stringify(r));
+  r = await roundTrip(p, true, () => p.evaluate(async () => { const t = (await window.db.from("case_tasks").select("id,title").limit(1)).data[0]; await window.db.from("case_tasks").update({ title: t.title + " " }).eq("id", t.id); }));
+  ok("A4 · after a write from this browser the return reloads", r.reads >= 5 && r.rows > 0, JSON.stringify(r));
+  r = await roundTrip(p, true);
+  ok("A5 · …and that reload is good for the next return", r.reads === 0, JSON.stringify(r));
+  r = await roundTrip(p, true, () => p.evaluate(() => window.db.rpc("queue_automated_emails")));
+  ok("A6 · an RPC not known to be read-only counts as a write", r.reads >= 5, JSON.stringify(r));
+  r = await roundTrip(p, true, () => p.evaluate(() => { const f = window.fetch; window.fetch = () => Promise.resolve(new Response("{}")); return window.fnFetch("x").then(() => { window.fetch = f; }); }));
+  ok("A7 · an edge-function call counts as a write", r.reads >= 5, JSON.stringify(r));
+  r = await roundTrip(p, true, () => p.evaluate(() => window.dbFail("r138", { message: "probe" }, "probe")));
+  ok("A8 · a failed read since the load means reload", r.reads >= 5, JSON.stringify(r));
+  await roundTrip(p, true);
+  r = await roundTrip(p, true, () => p.clock.fastForward(61000));
+  ok("A9 · after 61 seconds the return reloads", r.reads >= 5, JSON.stringify(r));
+  await p.evaluate(() => { window.__reads = 0; return window.loadDashboard(); }); await settle(p, true);
+  ok("A10 · loadDashboard() called directly always loads", await p.evaluate(() => window.__reads >= 5));
+  await p.evaluate(() => { window.__reads = 0; document.querySelector("#brief-scope-all").click(); }); await settle(p, true);
+  const all = await p.evaluate(() => ({ reads: window.__reads, on: document.querySelector("#brief-scope-all").classList.contains("scope-active") }));
+  ok("A11 · Mine / All on Today still re-reads at once", all.reads >= 1 && all.on, JSON.stringify(all));
+  ok("A12 · no page errors", p.errs.filter((e) => !/probe/.test(e)).length === 0, p.errs.join("|"));
+  await p.context().close();
+
+  console.log("§B — sign-in and the harness seam");
+  p = await boot(b, "&scope=default", false);
+  ok("B1 · a fresh sign-in loaded Today (rows on the page)", await p.evaluate(() => document.querySelectorAll("#briefing-list .brief-row").length > 0));
+  await p.context().close();
+  p = await boot(b, "", false);
+  r = await roundTrip(p, false);
+  ok("B2 · seam mode: every return reloads, as before", r.reads >= 5, JSON.stringify(r));
+  await p.context().close();
+  await b.close(); console.log("\nR138: " + pass + " passed, " + fail + " failed"); process.exit(fail ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(1); });
