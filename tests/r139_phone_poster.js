@@ -1,0 +1,27 @@
+/* R139 — on a phone the home page shows the hero still and never downloads the video; a desktop is unchanged. */
+const { chromium } = require("playwright");
+let pass = 0, fail = 0;
+const ok = (n, c, d) => { if (c) { pass++; console.log("  ✓ " + n); } else { fail++; console.log("  ✗ " + n + (d ? " — " + d : "")); } };
+const load = async (b, vp, touch) => { const ctx = await b.newContext({ viewport: vp, isMobile: !!touch, hasTouch: !!touch }); const p = await ctx.newPage(); p.reqs = []; p.errs = [];
+  p.on("request", (r) => p.reqs.push(r.url())); p.on("pageerror", (e) => p.errs.push(String(e)));
+  await p.goto("http://localhost:8099/index.html", { waitUntil: "load" }); await p.waitForTimeout(2500);
+  const s = await p.evaluate(() => { const v = document.querySelector(".hero-media video"), m = document.querySelector(".hero-media"), t = document.querySelector("#heroVideoToggle"), h = document.querySelector(".hero h1");
+    const hr = document.querySelector(".hero").getBoundingClientRect();
+    return { video: getComputedStyle(v).display, src: v.currentSrc, bg: getComputedStyle(m).backgroundImage, mediaH: Math.round(m.getBoundingClientRect().height), heroH: Math.round(hr.height), toggle: getComputedStyle(t).display, h1: !!h && h.getBoundingClientRect().height > 0, over: document.documentElement.scrollWidth - innerWidth }; });
+  s.mp4 = p.reqs.filter((u) => /hero-loop\.mp4/.test(u)).length; s.poster = p.reqs.filter((u) => /hero-poster\.jpg/.test(u)).length; s.errs = p.errs; await ctx.close(); return s; };
+(async () => { const b = await chromium.launch();
+  console.log("§A — phone 390×844");
+  let s = await load(b, { width: 390, height: 844 }, true);
+  ok("A1 · the video file is never requested", s.mp4 === 0, JSON.stringify(s));
+  ok("A2 · the still is shown behind the hero, full height", s.video === "none" && /hero-poster\.jpg/.test(s.bg) && s.poster >= 1 && s.mediaH >= s.heroH - 2 && s.heroH > 300, JSON.stringify(s));
+  ok("A3 · no pause button for a video that is not there", s.toggle === "none", s.toggle);
+  ok("A4 · the headline is there, nothing overflows sideways, no page errors", s.h1 && s.over <= 0 && s.errs.length === 0, JSON.stringify([s.over, s.errs]));
+  console.log("§B — the 768 / 769 edge");
+  s = await load(b, { width: 768, height: 900 }, true); ok("B1 · 768px wide: still, no video request", s.mp4 === 0 && s.video === "none", JSON.stringify(s));
+  s = await load(b, { width: 769, height: 900 }, false); ok("B2 · 769px wide: the video, requested and shown", s.mp4 >= 1 && s.video !== "none" && /hero-loop\.mp4/.test(s.src), JSON.stringify(s));
+  console.log("§C — desktop 1366×768 unchanged");
+  s = await load(b, { width: 1366, height: 768 }, false);
+  ok("C1 · the video is requested and playing in place, with its pause button", s.mp4 >= 1 && s.video !== "none" && s.toggle !== "none" && /hero-loop\.mp4/.test(s.src), JSON.stringify(s));
+  ok("C2 · no page errors", s.errs.length === 0, s.errs.join("|"));
+  await b.close(); console.log("\nR139: " + pass + " passed, " + fail + " failed"); process.exit(fail ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(1); });

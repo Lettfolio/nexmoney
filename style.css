@@ -1642,6 +1642,15 @@ p a:not(.btn), .faq-answer a, .form-consent a {
   .hero-video-toggle { display: none; }
 }
 
+/* R139 (Daniel, 26 Nov 2026): phones get the still, not the film. The 447 KB loop was 88% of the home page's
+   weight; index.html's <source media="(min-width: 769px)"> means a phone never asks for it, and this shows the
+   same poster the video opens on, as the reduced-motion rule above does. No video, so no pause button. */
+@media (max-width: 768px) {
+  .hero-media video { display: none; }
+  .hero-media { background: url('assets/hero-poster.jpg') center / cover no-repeat; }
+  .hero-video-toggle { display: none; }
+}
+
 /* Footer column headings promoted h4 -> h3 (calculators/faq/testimonials heading-hierarchy fix) — mirror of .footer-col h4 */
 .footer-col h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--white); margin-bottom: 20px; }
 
