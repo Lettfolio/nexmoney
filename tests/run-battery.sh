@@ -5,12 +5,34 @@
 set -u
 SHARD="${1:?usage: run-battery.sh <shard> <of>}"
 OF="${2:?usage: run-battery.sh <shard> <of>}"
-REPO=/root/nx
+REPO="${BATTERY_REPO:-/root/nx}"   # R135: overridable so the shard list can be printed from another checkout
 PORT=8099
 LOGDIR="${BATTERY_LOGDIR:-/tmp/battery-$SHARD-of-$OF}"
 mkdir -p "$LOGDIR"
 : > "$LOGDIR/battery.log"
 cd "$REPO" || { echo "no $REPO"; exit 2; }
+
+# R135: which suites this shard runs. Every tests/*.js goes to exactly one shard. With tests/battery-weights.tsv
+# (suite <tab> seconds, from a CI run) the suites are dealt longest-first to whichever shard is lightest so far,
+# so the shards finish together; a suite the file does not know counts as 50 s. Without the file: every
+# <of>-th suite, as before. `BATTERY_LIST=1` prints the list and stops.
+shard_suites() {
+  if [ -f tests/battery-weights.tsv ]; then
+    ls tests/*.js | LC_ALL=C sort | awk -v shard="$SHARD" -v of="$OF" '
+      FNR == NR { w[$1] = $2 + 0; next }
+      { n = $0; sub(/^tests\//, "", n); sub(/\.js$/, "", n); name[++k] = n; wt[k] = (n in w) ? w[n] : 50 }
+      END {
+        for (a = 1; a <= k; a++) ord[a] = a
+        for (a = 2; a <= k; a++) { v = ord[a]; for (b = a - 1; b >= 1 && wt[ord[b]] < wt[v]; b--) ord[b + 1] = ord[b]; ord[b + 1] = v }
+        for (a = 1; a <= k; a++) { best = 1; for (c = 2; c <= of; c++) if (load[c] + 0 < load[best] + 0) best = c
+          load[best] += wt[ord[a]]; if (best == shard) print "tests/" name[ord[a]] ".js" }
+      }' tests/battery-weights.tsv - | LC_ALL=C sort
+  else
+    ls tests/*.js | LC_ALL=C sort | awk -v shard="$SHARD" -v of="$OF" '(NR - shard) % of == 0 && NR >= shard'
+  fi
+}
+if [ -n "${BATTERY_LIST:-}" ]; then shard_suites; exit 0; fi
+
 
 # smoke.js regenerates admin/mock.html — every shard needs it.
 if ! node smoke.js > "$LOGDIR/smoke.out" 2>&1; then
@@ -42,10 +64,7 @@ fi
 trap '[ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null' EXIT
 
 FAILED=()
-i=0
-for f in $(ls tests/*.js | LC_ALL=C sort); do
-  i=$((i + 1))
-  [ $(( (i - SHARD) % OF )) -eq 0 ] && [ "$i" -ge "$SHARD" ] || continue
+for f in $(shard_suites); do
   n=$(basename "$f" .js)
   s=$(date +%s)
   if timeout 900 node "$f" > "$LOGDIR/$n.out" 2>&1; then rc=0; else rc=$?; fi

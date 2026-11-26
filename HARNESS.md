@@ -170,10 +170,10 @@ node tests/r90_queues.js
 
 **R91 · 1.** `.github/workflows/battery.yml` runs on every push to main, every PR and by hand (workflow_dispatch);
 a newer push to the same ref cancels the running one. Job `build-check` (`npm ci`, `node build.js --hash`,
-`node db/check-schema-drift.js`, ~30 s) gates four `battery` shards (`fail-fast: false`, 60 min each) in
+`node db/check-schema-drift.js`, ~30 s) gates eight `suites` shards (R135; `fail-fast: false`, dealt by duration from `tests/battery-weights.tsv`; four `battery (n)` jobs then report their combined result under the names the ruleset requires) in
 `mcr.microsoft.com/playwright:v1.56.0-noble` as root, the checkout symlinked to `/root/nx` because every suite
-hard-codes `REPO=/root/nx` / `PORT=8099`. Each shard is `bash tests/run-battery.sh <n> 4`: smoke.js, then a
-server on 8099 BEFORE any suite, then every 4th `tests/*.js` (C-sorted) under `timeout 900`, one line per suite
+hard-codes `REPO=/root/nx` / `PORT=8099`. Each shard is `bash tests/run-battery.sh <n> 8`: smoke.js, then a
+server on 8099 BEFORE any suite, then its share of `tests/*.js` under `timeout 900`, one line per suite
 (`name rc=N Ns :: <last passed/failed line>`), the failing suites' last 40 lines at the end, non-zero if any rc≠0.
 Run a slice locally the same way: `bash tests/run-battery.sh 1 40` (≈3 suites). **LOGS:** the job output has the
 summary lines; on a red shard every suite's `*.out` is the artifact `battery-logs-shard-<n>` (Actions run page →
