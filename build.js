@@ -419,4 +419,30 @@ function contentFailed(what) {
   catch (e) { return contentFailed(`content render failed — ${why(e)}`); }
   writeFiles(result.files);
   console.log(`content (${content.source}): ${result.overridden} page override(s), ${result.posts} guide(s)`);
-})().catch((e) => contentFailed(`content step failed — ${why(e)}`));
+})().catch((e) => contentFailed(`content step failed — ${why(e)}`)).then(stampAssets);
+
+/* R137 — STYLE.CSS AND ENHANCE.JS ARE NAMED BY THEIR CONTENT. Both are cached for a day (vercel.json), and the
+   pages that link them are not cached at all. R136 took a <link> out of every page and put its replacement in
+   style.css: for a day, anyone holding yesterday's style.css had neither. Every served page now links
+   style.css?v=<first 8 of its sha256> (and enhance.js likewise), so a page and the sheet it was built with always
+   travel together, and an unchanged file keeps its name and its cache. Runs last, over everything in dist/ —
+   the copied pages, the content overrides and the guides. The back office is not touched (its files revalidate). */
+function stampAssets() {
+  const tag = {};
+  for (const f of ["style.css", "enhance.js"]) tag[f] = sha(fs.readFileSync(path.join(OUT, f))).slice(0, 8);
+  let pages = 0, links = 0;
+  const visit = (dir) => {
+    for (const name of fs.readdirSync(dir)) {
+      const abs = path.join(dir, name);
+      if (fs.statSync(abs).isDirectory()) { if (!(dir === OUT && name === "admin")) visit(abs); continue; }
+      if (!name.endsWith(".html")) continue;
+      const html = fs.readFileSync(abs, "utf8");
+      let n = 0;
+      const out = html.replace(/\b(href|src)="(\/?)(style\.css|enhance\.js)"/g, (m, attr, slash, file) => { n++; return `${attr}="${slash}${file}?v=${tag[file]}"`; });
+      if (n) { fs.writeFileSync(abs, out); pages++; links += n; }
+    }
+  };
+  visit(OUT);
+  console.log(`build: ${links} style.css / enhance.js link(s) on ${pages} page(s) named by content (${tag["style.css"]}, ${tag["enhance.js"]})`);
+}
+
