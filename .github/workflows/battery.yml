@@ -89,6 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
+      fail-fast: false   # R136: without this the first to fail cancelled the other three (still blocking, but it read as "cancelled")
       matrix:
         shard: [1, 2, 3, 4]
     steps:
