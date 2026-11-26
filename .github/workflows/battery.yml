@@ -36,17 +36,19 @@ jobs:
       - run: node build.js --hash
       - run: node db/check-schema-drift.js
 
-  battery:
+  # R135: eight shards, dealt by measured duration (tests/battery-weights.tsv) so they finish together —
+  # about 18 minutes where four took 41.
+  suites:
     needs: build-check
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     container:
       image: mcr.microsoft.com/playwright:v1.56.0-noble
       options: --user root
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       BATTERY_LOGDIR: /tmp/battery-logs
@@ -62,11 +64,37 @@ jobs:
           ln -sfn "$GITHUB_WORKSPACE" /root/nx
       - run: npm ci
       - run: npm i --no-save playwright@1.56.0
-      - name: Battery shard ${{ matrix.shard }} of 4
-        run: bash tests/run-battery.sh ${{ matrix.shard }} 4
+      - name: Battery shard ${{ matrix.shard }} of 8
+        run: bash tests/run-battery.sh ${{ matrix.shard }} 8
       - name: Upload suite logs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: battery-logs-shard-${{ matrix.shard }}
           path: /tmp/battery-logs/*.out
+      - name: Upload suite timings (for re-dealing the shards)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: battery-timings-shard-${{ matrix.shard }}
+          path: /tmp/battery-logs/battery.log
+          if-no-files-found: ignore
+
+  # R135: the ruleset on main requires checks named "battery (1)" … "battery (4)". These four report the
+  # result of ALL eight shards under those names, so the rule keeps protecting main with no change to it.
+  # (One required check would do; changing the ruleset is the owner's call.)
+  battery:
+    needs: suites
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: All eight shards passed
+        env:
+          SUITES_RESULT: ${{ needs.suites.result }}
+        run: |
+          echo "suites: $SUITES_RESULT"
+          [ "$SUITES_RESULT" = "success" ]
