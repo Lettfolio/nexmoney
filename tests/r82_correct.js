@@ -957,22 +957,24 @@ const setPromos = (page, on) => page.evaluate(async (v) => {
     /* =====================================================================
        §J · A9 — the font stops blocking the render (correctness, not timing)
        ===================================================================== */
-    console.log("\n— §J · A9 · Google Fonts is non-blocking, and the fallback stack is real");
+    console.log("\n— §J · A9 · the font is non-blocking, and the fallback stack is real");
     {
       const html = fs.readFileSync(path.join(REPO, "admin/index.html"), "utf8");
       const css = fs.readFileSync(path.join(REPO, "admin/admin.css"), "utf8");
-      ok("J1a · the Google Fonts stylesheet no longer blocks the render",
-        /fonts\.googleapis\.com\/css2[^>]*rel="stylesheet" media="print" data-swap="1"/.test(html) && /l\.media = "all"/.test(fs.readFileSync(path.join(REPO, "admin/boot.js"), "utf8")), "media=print + boot.js swap (R95)");
-      ok("J1b · …and a JS-off browser still gets the face", /<noscript><link href="https:\/\/fonts\.googleapis\.com/.test(html), "noscript fallback");
-      ok("J1c · the URL still carries &display=swap, so text paints in the fallback rather than hiding",
-        /fonts\.googleapis\.com\/css2\?family=Inter[^"]*&display=swap/.test(html), "display=swap");
+      /* R136: the face is served from this site by admin.css (was a Google Fonts sheet, swapped in by boot.js). What J1
+         protected is unchanged: the font must not block the render and text must paint in the fallback meanwhile. */
+      ok("J1a · no font stylesheet from another host; Inter is an @font-face in admin.css served from /assets/fonts",
+        !/fonts\.googleapis\.com|fonts\.gstatic\.com/.test(html + css) && /@font-face \{ font-family: 'Inter';[^}]*src: url\(\/assets\/fonts\/inter-latin\.woff2\) format\('woff2'\)/.test(css), "self-hosted (R136)");
+      ok("J1b · …so a JS-off browser gets the face too (nothing to swap)", !/data-swap/.test(html) && !/data-swap/.test(fs.readFileSync(path.join(REPO, "admin/boot.js"), "utf8")) && fs.existsSync(path.join(REPO, "assets/fonts/inter-latin.woff2")), "no swap, file present");
+      ok("J1c · every face carries font-display: swap, so text paints in the fallback rather than hiding",
+        (css.match(/@font-face \{[^}]*\}/g) || []).length >= 2 && (css.match(/@font-face \{[^}]*\}/g) || []).every((f) => /font-display: swap;/.test(f)), "font-display: swap");
       ok("J1d · the fallback stack is a real one, not a bare sans-serif",
         /--font:\s*"Inter",\s*-apple-system,\s*"Segoe UI",\s*system-ui,\s*Roboto,\s*Arial,\s*sans-serif/.test(css), "admin.css --font");
       /* mock.html is GENERATED from index.html and smoke.js throws on any drift but the one script
          tag — so the harness must be carrying the change too, or the two have forked. */
       const mock = fs.readFileSync(path.join(REPO, "admin/mock.html"), "utf8");
       ok("J1e · mock.html carries it too (it is regenerated from index.html)",
-        /media="print" data-swap="1"/.test(mock), "mock.html");
+        !/fonts\.googleapis\.com|data-swap/.test(mock) && /rel="preload" as="font" type="font\/woff2" href="\/assets\/fonts\/inter-latin\.woff2" crossorigin/.test(mock), "mock.html");
 
       const page = await boot(browser, "p1");
       const painted = await page.evaluate(() => ({

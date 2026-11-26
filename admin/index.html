@@ -11,8 +11,6 @@
 <link rel="icon" href="../favicon.svg">
 <link rel="manifest" href="/admin/manifest.webmanifest">
 <meta name="theme-color" content="#0b1f35">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- R82 · A9 — THE FREE 290ms. This stylesheet was RENDER-BLOCKING: nothing painted until Google
      Fonts answered, measured A/B at 596ms vs 306ms to first paint, on every one of the 505+ page
      loads the battery drives and on every real sign-in. media="print" makes the browser fetch it
@@ -24,8 +22,7 @@
      while it is fetched. The preconnects above stay — they make the non-blocking fetch faster.
      <noscript> keeps the old blocking behaviour for a browser with JS off, which cannot run the
      swap and would otherwise never get the face at all. -->
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" data-swap="1">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
+<link rel="preload" as="font" type="font/woff2" href="/assets/fonts/inter-latin.woff2" crossorigin>
 <link rel="stylesheet" href="/admin/admin.css">
 <!-- R31-A · a11y — skip link styling. Lives here (not admin.css) so the whole
      main-nav accessibility pass ships in index.html + app.js only. Off-screen
@@ -1470,7 +1467,7 @@
 
 <!-- R95 · C — boot.js FIRST: the build tag, the Inter media swap and the SW registration (no inline script, CSP). -->
 <script src="/admin/boot.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.7/dist/umd/supabase.js" integrity="sha384-hazsLVND17GNLVdtV19te6qbFT2YuLgl8SamcF+QR5eIOC+W4dGKrUNMxU1jH1zD" crossorigin="anonymous"></script>
+<script src="/admin/vendor/supabase-js-2.110.7.js" integrity="sha384-hazsLVND17GNLVdtV19te6qbFT2YuLgl8SamcF+QR5eIOC+W4dGKrUNMxU1jH1zD"></script>
 <!-- R55 · F7 — SheetJS (~1MB) is only needed by the Import / reconciliation / offer-export flows,
      so it no longer blocks every boot: app.js lazy-loads it on first use (ensureXlsx()). -->
 <!-- R78 · A7 — core.js FIRST: pure leaf utilities ($, esc, toast, fmt*, localDateStr, readAll,
